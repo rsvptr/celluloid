@@ -1,0 +1,247 @@
+// Celluloid — Prisma 7 schema
+// Runtime connection comes from the @prisma/adapter-pg driver adapter (src/lib/prisma.ts).
+// Migration/CLI connection comes from prisma.config.ts (DIRECT_URL).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Auth (Better Auth core models)
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String   @id
+  name          String
+  email         String   @unique
+  emailVerified Boolean  @default(false)
+  image         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Per-user Anthropic API key, encrypted at rest (AES-256-GCM). Never plaintext.
+  anthropicKeyEnc String?
+
+  // Preferred Claude model for AI recommendations (null → server default).
+  recommendModel String?
+
+  twoFactorEnabled Boolean? @default(false)
+
+  sessions   Session[]
+  accounts   Account[]
+  twofactors TwoFactor[]
+
+  // App relations
+  titles     Title[]
+  tags       Tag[]
+  shareLists ShareList[]
+
+  @@map("user")
+}
+
+// A public, read-only snapshot/view of a user's library or a selection of it.
+// Reached via an unguessable slug at /s/[slug] (no auth).
+model ShareList {
+  id           String   @id @default(cuid())
+  slug         String   @unique
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String?
+  titleIds     String[] @default([]) // empty = whole library; else explicit selection
+  includeNotes Boolean  @default(false)
+  // Whole-library shares hide not-yet-watched WATCHLIST titles unless this is set.
+  includeWatchlist Boolean @default(false)
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+}
+
+model TwoFactor {
+  id          String  @id
+  secret      String
+  backupCodes String
+  userId      String
+  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  verified    Boolean @default(true)
+
+  @@index([secret])
+  @@index([userId])
+  @@map("twoFactor")
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("verification")
+}
+
+// ---------------------------------------------------------------------------
+// Library domain
+// ---------------------------------------------------------------------------
+
+enum MediaType {
+  MOVIE
+  TV
+}
+
+enum WatchStatus {
+  WATCHLIST // want to watch (legacy "Unwatched")
+  WATCHING // in progress (legacy "Partially Watched")
+  WATCHED // completed
+  ON_HOLD
+  DROPPED
+}
+
+model Title {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Metadata (TMDB-enriched where available)
+  tmdbId       Int?
+  mediaType    MediaType
+  name         String
+  originalName String?
+  overview     String?   @db.Text
+  releaseDate  DateTime? @db.Date
+  posterPath   String?
+  backdropPath String?
+  language     String? // ISO 639-1 original language
+  tmdbRating   Float? // TMDB vote_average (0-10)
+  runtime      Int? // minutes (movies)
+  genres       String[]  @default([])
+
+  // Personal tracking
+  status    WatchStatus @default(WATCHLIST)
+  rating    Float? // user rating 0.5-10 (half-star increments)
+  notes     String?     @db.Text
+  watchedAt DateTime? // when finished (movie) / overall
+  favorite  Boolean     @default(false)
+
+  // TV structure summary
+  totalSeasons    Int?
+  totalEpisodes   Int?
+  watchedEpisodes Int  @default(0) // denormalized for fast progress display
+
+  // Provenance
+  source String? // "Movies" | "TV Shows" | "Malayalam" | "tmdb" | "manual"
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  seasons Season[]
+  tags    TitleTag[]
+
+  @@unique([userId, mediaType, tmdbId])
+  @@index([userId])
+  @@index([userId, status])
+  @@index([userId, mediaType])
+}
+
+model Season {
+  id      String @id @default(cuid())
+  titleId String
+  title   Title  @relation(fields: [titleId], references: [id], onDelete: Cascade)
+
+  tmdbId       Int?
+  seasonNumber Int
+  name         String?
+  overview     String?   @db.Text
+  airDate      DateTime? @db.Date
+  posterPath   String?
+  episodeCount Int?
+
+  episodes Episode[]
+
+  @@unique([titleId, seasonNumber])
+  @@index([titleId])
+}
+
+model Episode {
+  id       String @id @default(cuid())
+  seasonId String
+  season   Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+
+  tmdbId        Int?
+  episodeNumber Int
+  name          String?
+  overview      String?   @db.Text
+  airDate       DateTime? @db.Date
+  runtime       Int?
+  stillPath     String?
+
+  watched   Boolean   @default(false)
+  watchedAt DateTime?
+
+  @@unique([seasonId, episodeNumber])
+  @@index([seasonId])
+}
+
+model Tag {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name  String
+  color String?
+
+  createdAt DateTime @default(now())
+
+  titles TitleTag[]
+
+  @@unique([userId, name])
+  @@index([userId])
+}
+
+model TitleTag {
+  titleId String
+  tagId   String
+  title   Title  @relation(fields: [titleId], references: [id], onDelete: Cascade)
+  tag     Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([titleId, tagId])
+  @@index([tagId])
+}
