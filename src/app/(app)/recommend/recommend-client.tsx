@@ -10,7 +10,7 @@ import { Shimmer } from "@/components/skeleton";
 import { Poster } from "@/components/poster";
 import { addFromTmdb } from "@/lib/actions";
 import { setRecommendModel } from "@/lib/settings-actions";
-import { REC_MODELS } from "@/lib/models";
+import { REC_ERAS, REC_MODELS } from "@/lib/models";
 import { languageName } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -35,17 +35,24 @@ export function RecommendClient({
   hasKey,
   model: initialModel,
   tags,
+  languages,
+  genres,
   hasWatchDates,
 }: {
   hasKey: boolean;
   model: string;
   tags: string[];
+  languages: string[];
+  genres: string[];
   hasWatchDates: boolean;
 }) {
   const [countStr, setCountStr] = useState("12");
   const count = Math.min(30, Math.max(1, parseInt(countStr || "12", 10) || 12));
   const [type, setType] = useState<"all" | "movie" | "tv">("all");
   const [focus, setFocus] = useState("");
+  const [language, setLanguage] = useState("");
+  const [genre, setGenre] = useState("");
+  const [era, setEra] = useState("");
   const [model, setModel] = useState(initialModel);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,6 +64,49 @@ export function RecommendClient({
   const [recentCount, setRecentCount] = useState(20);
   const [pickedIds, setPickedIds] = useState<Set<string>>(new Set());
   const pickEmpty = basisMode === "pick" && pickedIds.size === 0;
+
+  // Remember the dial settings for this browsing session so returning to the
+  // page keeps your language/genre/era/type choices. Values are validated
+  // against what's actually offered; junk or stale entries fall back silently.
+  // (Hydrate-from-storage in an effect is the established pattern here; the
+  // library toolbar does the same.)
+  /* eslint-disable react-hooks/set-state-in-effect */
+  const skipFirstWrite = useRef(true);
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem("celluloid:recprefs");
+      if (!raw) return;
+      const s = JSON.parse(raw);
+      if (typeof s.count === "string" && /^\d{1,2}$/.test(s.count)) setCountStr(s.count);
+      if (s.type === "movie" || s.type === "tv" || s.type === "all") setType(s.type);
+      if (typeof s.language === "string" && languages.includes(s.language))
+        setLanguage(s.language);
+      if (typeof s.genre === "string" && genres.includes(s.genre)) setGenre(s.genre);
+      if (typeof s.era === "string" && REC_ERAS.some((e) => e.id === s.era))
+        setEra(s.era);
+      if (s.basisMode === "recent" && hasWatchDates) setBasisMode("recent");
+      if ([10, 20, 50].includes(s.recentCount)) setRecentCount(s.recentCount);
+    } catch {
+      // ignore malformed/unavailable storage
+    }
+    // Mount-only by design; props are stable for the life of this page view.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (skipFirstWrite.current) {
+      skipFirstWrite.current = false;
+      return;
+    }
+    try {
+      sessionStorage.setItem(
+        "celluloid:recprefs",
+        JSON.stringify({ count: countStr, type, language, genre, era, basisMode, recentCount }),
+      );
+    } catch {
+      // storage may be unavailable; persistence is best-effort
+    }
+  }, [countStr, type, language, genre, era, basisMode, recentCount]);
 
   function togglePicked(id: string) {
     setPickedIds((prev) => {
@@ -93,6 +143,9 @@ export function RecommendClient({
           type: useType,
           focus: useFocus.trim() || undefined,
           model,
+          language: language || undefined,
+          genre: genre || undefined,
+          era: era || undefined,
           basis:
             basisMode === "recent"
               ? { mode: "recent", recentCount }
@@ -276,6 +329,43 @@ export function RecommendClient({
               <option value="all">Movies & TV</option>
               <option value="movie">Movies only</option>
               <option value="tv">TV only</option>
+            </Select>
+          </label>
+          {languages.length > 0 && (
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-faint">Language</span>
+              <Select value={language} onChange={(e) => setLanguage(e.target.value)}>
+                <option value="">Any language</option>
+                {languages.map((l) => (
+                  <option key={l} value={l}>
+                    {languageName(l)}
+                  </option>
+                ))}
+              </Select>
+            </label>
+          )}
+          {genres.length > 0 && (
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-faint">Genre</span>
+              <Select value={genre} onChange={(e) => setGenre(e.target.value)}>
+                <option value="">Any genre</option>
+                {genres.map((g) => (
+                  <option key={g} value={g}>
+                    {g}
+                  </option>
+                ))}
+              </Select>
+            </label>
+          )}
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-faint">Era</span>
+            <Select value={era} onChange={(e) => setEra(e.target.value)}>
+              <option value="">Any era</option>
+              {REC_ERAS.map((er) => (
+                <option key={er.id} value={er.id}>
+                  {er.label}
+                </option>
+              ))}
             </Select>
           </label>
           <label className="flex flex-col gap-1">

@@ -6,7 +6,14 @@ import { tasteSummary } from "@/lib/export/format";
 import { searchByType } from "@/lib/tmdb";
 import { norm, yearOf, pickBest, nameYearKey } from "@/lib/tmdb-match";
 import { anthropicClient, resolveAnthropicKey } from "@/lib/anthropic";
-import { DEFAULT_REC_MODEL, isRecModel, MODEL_CAPS } from "@/lib/models";
+import {
+  DEFAULT_REC_MODEL,
+  eraById,
+  isRecModel,
+  MODEL_CAPS,
+  type RecEraId,
+} from "@/lib/models";
+import { languageName } from "@/lib/format";
 
 export interface Recommendation {
   title: string;
@@ -38,6 +45,12 @@ export interface RecommendOptions {
   basis?: RecommendBasis;
   /** Titles already shown this session, so a "show different" run skips them. */
   exclude?: string[];
+  /** Prefer suggestions originally in this language (ISO code). */
+  language?: string;
+  /** Prefer suggestions in this genre. */
+  genre?: string;
+  /** Prefer suggestions from this era (validated RecEraId). */
+  era?: RecEraId;
 }
 
 export interface RecommendResult {
@@ -74,6 +87,9 @@ function buildPrompt(
   type: "all" | "movie" | "tv",
   focus?: string,
   exclude?: string[],
+  language?: string,
+  genre?: string,
+  era?: RecEraId,
 ): string {
   const typeClause =
     type === "movie"
@@ -88,7 +104,18 @@ function buildPrompt(
     exclude && exclude.length
       ? ` I have already been shown these, so do NOT suggest any of them again: ${exclude.slice(0, 80).join(", ")}.`
       : "";
-  return `${summary}\n\nBased on what I've rated highly and the patterns above, recommend ${count} titles I have NOT seen and that are NOT already on my watchlist.${focusClause}${excludeClause} ${typeClause} Strongly prefer titles that match what I rated highly; avoid obvious blockbusters unless they genuinely fit. Give each a specific one-sentence reason tied to my taste, plus a confidence level. Use the year of original release. Order from most to least confident.`;
+  const prefClause =
+    [
+      language ? `originally in ${languageName(language)}` : "",
+      genre ? `in the ${genre} genre` : "",
+      era ? eraById(era).clause : "",
+    ]
+      .filter(Boolean)
+      .join(" and ");
+  const preferClause = prefClause
+    ? ` Every suggestion must be ${prefClause}; do not include anything that doesn't fit.`
+    : "";
+  return `${summary}\n\nBased on what I've rated highly and the patterns above, recommend ${count} titles I have NOT seen and that are NOT already on my watchlist.${focusClause}${preferClause}${excludeClause} ${typeClause} Strongly prefer titles that match what I rated highly; avoid obvious blockbusters unless they genuinely fit. Give each a specific one-sentence reason tied to my taste, plus a confidence level. Use the year of original release. Order from most to least confident.`;
 }
 
 /** Defensive shape check for a model-produced recommendation. */
@@ -184,14 +211,20 @@ export async function generateRecommendations(
   // Over-ask generously so type/in-library/dedup/exclude attrition (which grows
   // as "Show different" accumulates) still leaves ~count usable results. Type-
   // constrained runs lose more: the model often returns a mix that the post-filter
-  // halves, so ask harder when a single type is requested.
-  const askCount = Math.min(50, type === "all" ? count * 2 : count * 3 + 10);
+  // halves, so ask harder when a single type is requested. A language/genre
+  // preference narrows the pool further, so add a little more headroom.
+  const hasPref = !!(opts.language || opts.genre || opts.era);
+  const baseAsk = type === "all" ? count * 2 : count * 3 + 10;
+  const askCount = Math.min(50, hasPref ? baseAsk + 10 : baseAsk);
   const prompt = buildPrompt(
     tasteSummary(basisRows, { watchlist: fullWatchlist, abandoned: fullAbandoned }),
     askCount,
     type,
     opts.focus,
     opts.exclude,
+    opts.language,
+    opts.genre,
+    opts.era,
   );
 
   let recs: Recommendation[];
@@ -293,10 +326,24 @@ export async function generateRecommendations(
   // Surface the model's strongest picks first and, crucially, sort BEFORE the
   // slice so attrition can't drop a high-confidence rec while keeping a low one.
   const confRank = { high: 0, medium: 1, low: 2 } as const;
-  return {
-    recommendations: enriched
-      .filter((r): r is Recommendation => r !== null)
-      .sort((a, b) => (confRank[a.confidence] ?? 3) - (confRank[b.confidence] ?? 3))
-      .slice(0, count),
-  };
+  let ranked = enriched
+    .filter((r): r is Recommendation => r !== null)
+    .sort((a, b) => (confRank[a.confidence] ?? 3) - (confRank[b.confidence] ?? 3));
+
+  // If a language or era was requested, float confirmed matches (by the TMDB-
+  // resolved language/year) to the top. This is a soft rank, not a hard filter:
+  // it never drops a suggestion that couldn't be confirmed, so results don't
+  // collapse to empty when enrichment can't verify a field.
+  if (opts.language || opts.era) {
+    const range = opts.era ? eraById(opts.era).range : null;
+    const prefScore = (r: Recommendation) =>
+      (opts.language && r.language === opts.language ? 2 : 0) +
+      (range && r.year != null && r.year >= range[0] && r.year <= range[1] ? 1 : 0);
+    ranked = ranked
+      .map((r, i) => ({ r, i, s: prefScore(r) }))
+      .sort((a, b) => b.s - a.s || a.i - b.i) // stable: index breaks ties
+      .map((x) => x.r);
+  }
+
+  return { recommendations: ranked.slice(0, count) };
 }
