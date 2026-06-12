@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   CheckSquare,
+  Dices,
+  Download,
   Heart,
   LayoutGrid,
   List,
@@ -56,6 +58,7 @@ export function Library({
   languages: string[];
   tags: string[];
 }) {
+  const router = useRouter();
   const [query, setQuery] = useState("");
   const [type, setType] = useState<TypeFilter>("all");
   const [status, setStatus] = useState<WatchStatus | "all">("all");
@@ -84,19 +87,38 @@ export function Library({
       const raw = sessionStorage.getItem("celluloid:libview");
       if (!raw) return;
       const s = JSON.parse(raw);
-      if (typeof s.query === "string") setQuery(s.query);
-      if (s.type) setType(s.type);
-      if (s.status) setStatus(s.status);
-      if (s.language) setLanguage(s.language);
-      if (s.tag) setTag(s.tag);
-      if (s.genre) setGenre(s.genre);
-      if (s.rating) setRating(s.rating);
-      if (s.sort) setSort(s.sort);
+      // Validate every restored value against what's actually selectable now.
+      // A stale value (say, a tag deleted since) would otherwise filter the list
+      // invisibly while the select renders its first option.
+      const oneOf = <T,>(v: unknown, allowed: readonly T[]): v is T =>
+        allowed.includes(v as T);
+      if (typeof s.query === "string") setQuery(s.query.slice(0, 200));
+      if (oneOf(s.type, ["all", "MOVIE", "TV"] as const)) setType(s.type);
+      if (
+        oneOf(s.status, [
+          "all",
+          "WATCHLIST",
+          "WATCHING",
+          "WATCHED",
+          "ON_HOLD",
+          "DROPPED",
+        ] as const)
+      )
+        setStatus(s.status);
+      if (s.language === "all" || languages.includes(s.language)) setLanguage(s.language);
+      if (s.tag === "all" || tags.includes(s.tag)) setTag(s.tag);
+      if (s.genre === "all" || items.some((it) => it.genres.includes(s.genre)))
+        setGenre(s.genre);
+      if (oneOf(s.rating, ["all", "unrated", "9", "8", "7", "6", "5"] as const))
+        setRating(s.rating);
+      if (SORTS.some((x) => x.key === s.sort)) setSort(s.sort);
       if (s.view === "grid" || s.view === "list") setView(s.view);
       if (typeof s.onlyUnmatched === "boolean") setOnlyUnmatched(s.onlyUnmatched);
     } catch {
       // ignore malformed/unavailable storage
     }
+    // Mount-only by design; props are stable for the life of this page view.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => {
     // Skip the mount write so it can't clobber saved state before the hydrate
@@ -236,6 +258,34 @@ export function Library({
     setShareOpen(true);
   }
 
+  // Pick something random to watch from the current view, preferring titles
+  // still on the watchlist (the point is "what should I watch next").
+  function surprise() {
+    const pool = filtered.filter((it) => it.status === "WATCHLIST");
+    const from = pool.length > 0 ? pool : filtered;
+    if (from.length === 0) {
+      toast.error("Nothing to pick from with these filters.");
+      return;
+    }
+    const pick = from[Math.floor(Math.random() * from.length)];
+    toast.success(`Tonight: ${pick.name}`);
+    router.push(`/title/${pick.id}`);
+  }
+
+  // Deep link to /export with the current filters pre-applied (query and the
+  // needs-match toggle have no export equivalent; sort doesn't affect content).
+  const exportHref = useMemo(() => {
+    const p = new URLSearchParams();
+    if (type !== "all") p.set("type", type === "MOVIE" ? "movie" : "tv");
+    if (status !== "all") p.set("status", status);
+    if (tag !== "all") p.set("tag", tag);
+    if (genre !== "all") p.set("genre", genre);
+    if (language !== "all") p.set("lang", language);
+    if (rating !== "all" && rating !== "unrated") p.set("min", rating);
+    const qs = p.toString();
+    return qs ? `/export?${qs}` : "/export";
+  }, [type, status, tag, genre, language, rating]);
+
   return (
     <div className="flex flex-col gap-5 pb-24">
       {/* Toolbar */}
@@ -245,6 +295,8 @@ export function Library({
           <div className="flex items-center gap-2">
             <button
               onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}
+              aria-label="Select titles"
+              title="Select titles"
               className={cn(
                 "focus-ring flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm ring-1 transition-colors",
                 selectMode
@@ -252,16 +304,30 @@ export function Library({
                   : "text-muted ring-line hover:text-foreground",
               )}
             >
-              <CheckSquare size={15} /> Select
+              <CheckSquare size={15} />
+              <span className="hidden sm:inline">Select</span>
             </button>
             {!selectMode && items.length > 0 && (
-              <button
-                onClick={() => openShare([])}
-                title="Share your library"
-                className="focus-ring flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground"
-              >
-                <Share2 size={15} /> Share
-              </button>
+              <>
+                <button
+                  onClick={surprise}
+                  title="Pick something random to watch (prefers your watchlist)"
+                  aria-label="Surprise me"
+                  className="focus-ring flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground"
+                >
+                  <Dices size={15} />
+                  <span className="hidden sm:inline">Surprise</span>
+                </button>
+                <button
+                  onClick={() => openShare([])}
+                  title="Share your library"
+                  aria-label="Share your library"
+                  className="focus-ring flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground"
+                >
+                  <Share2 size={15} />
+                  <span className="hidden sm:inline">Share</span>
+                </button>
+              </>
             )}
             <div className="flex items-center gap-1 rounded-lg bg-surface-2 p-0.5 ring-1 ring-line">
               <ViewToggle active={view === "grid"} onClick={() => setView("grid")}>
@@ -386,6 +452,15 @@ export function Library({
             >
               <X size={14} /> Clear
             </button>
+          )}
+          {hasFilters && (
+            <Link
+              href={exportHref}
+              title="Open Export with these filters applied"
+              className="focus-ring flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm text-muted hover:text-foreground"
+            >
+              <Download size={14} /> Export these
+            </Link>
           )}
           </div>
         </div>

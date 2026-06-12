@@ -2,7 +2,6 @@
 
 import { type KeyboardEvent, useState } from "react";
 import { Star } from "lucide-react";
-import { cn } from "@/lib/utils";
 
 /**
  * 0.5-step star rating on a 1-10 scale. Each star has two hit zones (left = the

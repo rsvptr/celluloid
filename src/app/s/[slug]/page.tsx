@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getSharePayload } from "@/lib/data";
 import { Wordmark } from "@/components/brand";
@@ -19,8 +18,15 @@ export async function generateMetadata({
       ? `${payload.name} · ${payload.ownerName}`
       : `${payload.ownerName}'s list`
     : "Shared list";
+  const description = payload
+    ? `A read-only list of ${payload.items.length} ${
+        payload.items.length === 1 ? "title" : "titles"
+      } shared from ${payload.ownerName}'s Celluloid library.`
+    : "A shared list from a Celluloid library.";
   return {
     title,
+    description,
+    openGraph: { title, description, type: "website" },
     robots: { index: false, follow: false },
   };
 }
