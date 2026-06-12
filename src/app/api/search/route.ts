@@ -24,7 +24,9 @@ export async function GET(request: Request) {
   const rl = rateLimit(`search:${session.user.id}`, 60, 60_000);
   if (!rl.ok) return tooManyRequests(rl.retryAfter);
 
-  const q = new URL(request.url).searchParams.get("q")?.trim() ?? "";
+  // Bound the query: nothing legitimate is longer, and it keeps the outbound
+  // TMDB request URL sane.
+  const q = (new URL(request.url).searchParams.get("q")?.trim() ?? "").slice(0, 100);
   if (!q) return NextResponse.json({ results: [] });
 
   try {

@@ -18,6 +18,16 @@ export async function POST(request: Request) {
   const rl = rateLimit(`import:${session.user.id}`, 5, 60_000);
   if (!rl.ok) return tooManyRequests(rl.retryAfter);
 
+  // Reject oversized uploads from the declared length BEFORE buffering the body
+  // into memory (the file.size check below only runs after a full parse).
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_BYTES + 64 * 1024) {
+    return Response.json(
+      { error: "That file is too large. Please upload a file under 2 MB." },
+      { status: 413 },
+    );
+  }
+
   let file: File | null = null;
   try {
     const form = await request.formData();
