@@ -58,12 +58,13 @@ Most trackers are good at storing what you watched and bad at the only question 
 - Half star ratings from 0.5 to 10, private notes, favorites, and free form tags
 - Per episode and per season tracking for shows, with a progress bar and quick "mark season" and "mark show" actions
 - Five watch states that map to a real backlog: watchlist, watching, watched, on hold, dropped
-- AI recommendations from Claude, based on a detailed picture of your taste, with mood presets and the option to base them on your whole library, your recent watches, or a hand picked set
+- AI recommendations from Claude, based on a detailed picture of your taste, with mood presets, language, genre, and era preferences, and the option to base them on your whole library, your recent watches, or a hand picked set
 - A "copy as AI prompt" export, so the same brief works in any chat assistant
 - Search, rich filtering, two layouts, and bulk editing across a large library
+- A surprise picker that pulls something random off your watchlist when you cannot decide
 - Stats with a watch activity heatmap, streaks, rating distribution, titles by year, and top rated
 - Public, read only share links for a list or your whole library
-- Exports to plain text, Markdown, JSON, and a styled Excel workbook
+- Exports to plain text, Markdown, JSON, and a styled Excel workbook, scoped as finely as language, genre, minimum rating, and release years, with filenames that say what is inside
 - Accounts with email and password, optional two factor, and a switch to close public sign ups
 
 ## The recommendation engine
@@ -112,7 +113,7 @@ A few details that make the output better:
 | Recent watches | Your most recent finishes (last 10, 20, or 50) | Matching your current mood |
 | Pick titles | A set you choose by hand | "More things like these three" |
 
-You can steer a run with a free text focus ("cozy mysteries", "something like Bramayugam", "90s sci fi") or tap a mood preset. A "show different" button keeps the same brief but excludes everything already shown, so you can keep pulling fresh ideas. Unmatched suggestions still appear with a "find on TMDB" link so you can add them by hand.
+You can steer a run with a free text focus ("cozy mysteries", "something like Bramayugam", "90s sci fi") or tap a mood preset. Three dropdowns narrow the pool further: original language, genre, and era, from the 2020s back to before 1970. A preference becomes a hard requirement in the brief, confirmed matches float to the top of the results, and your dial settings persist for the browsing session. A "show different" button keeps the same brief but excludes everything already shown, so you can keep pulling fresh ideas. Unmatched suggestions still appear with a "find on TMDB" link so you can add them by hand.
 
 **Models.** Claude Opus is the default. Sonnet and Haiku are selectable per run from the recommend page. The app adapts the request to each model: Opus and Sonnet use adaptive thinking and an effort setting, Haiku skips the options it does not support. Output is constrained to a JSON schema, and long responses are streamed so a request never times out.
 
@@ -154,6 +155,10 @@ On phones the filters collapse behind a single toggle and lay out as a clean two
 
 **Bulk editing.** Switch on select mode and act on many titles at once: set a status, add or remove a tag, favorite or unfavorite, share, or remove. Selection is always scoped to what is visible, so a bulk action can never touch a hidden title.
 
+**Surprise me.** One press picks a random title from the current view, preferring whatever is still on your watchlist, and takes you straight to it. Filter down to unwatched Malayalam horror first and the dice roll respects it.
+
+**Export these.** When filters are active, a one click link opens the export page with the same scope already applied, so "everything tagged for horror night as a spreadsheet" is two clicks.
+
 **Command palette.** Press the search button or use the keyboard shortcut to jump to any title or page from anywhere.
 
 ## Stats
@@ -170,7 +175,7 @@ Because the imported backlog starts without watch dates, the activity views begi
 
 ## Exports
 
-Everything in your library can leave in the shape you need. Pick a scope (type, status, favorites only, a tag) and a format, then copy or download.
+Everything in your library can leave in the shape you need. Pick a scope (type, status, language, genre, minimum rating, release year range, favorites only, a tag) and a format, then copy or download.
 
 | Format | File | Best for |
 | --- | --- | --- |
@@ -181,6 +186,8 @@ Everything in your library can leave in the shape you need. Pick a scope (type, 
 | Excel | `.xlsx` | A styled workbook with separate Movies and TV sheets |
 
 The AI prompt export uses the exact same taste brief as the in app engine. Even when you scope the export down, the "do not recommend these" guardrails are still drawn from your full watchlist and dropped lists, so a scoped prompt never contradicts itself.
+
+Every download gets a unique, descriptive filename, for example `celluloid-library-movie-malayalam-8plus-1990-1999-20260613-101500.xlsx`, so repeated exports never overwrite each other and a saved file tells you what it holds at a glance.
 
 ## Sharing
 
@@ -193,10 +200,11 @@ This is your data on your infrastructure.
 - Self hosted on your own Neon database. There is no shared backend and no third party account system.
 - Every query is scoped to the signed in user, so one account can never read another's titles, tags, shares, or settings.
 - Your Anthropic key is encrypted at rest with AES 256 GCM. It is never stored or logged in plaintext.
-- Accounts use email and password through Better Auth, with optional time based two factor (an authenticator app, with backup codes and a manual setup key). Sessions are stored in the database.
+- Accounts use email and password through Better Auth, with optional time based two factor (an authenticator app, with backup codes and a manual setup key). Sessions are stored in the database, and deleting your account requires your password, not just a live session.
+- Sign in, sign up, password change, and two factor verification are rate limited against brute force, and the AI, search, import, and export routes are rate limited per user to keep a runaway loop from draining your API budget.
 - Public sign ups can be closed with `DISABLE_SIGNUPS=true` once your own account exists, which is the recommended state for a personal deployment.
-- Security headers are set for every response: frame denial, no sniff, a strict referrer policy, and HSTS on the production domain.
-- The AI, search, and import routes are rate limited per user to keep a runaway loop from draining your API budget.
+- Security headers are set for every response: frame denial, no sniff, a strict referrer policy, a content security policy covering framing, plugins, base tags, and form targets, a permissions policy that turns off browser capabilities the app never uses, and HSTS on the production domain.
+- Server side input validation bounds every free text field, and `npm audit` runs clean with pinned overrides for transitive advisories.
 
 ## Architecture
 
@@ -288,6 +296,7 @@ Titles are unique per user by media type and TMDB id, and the denormalized `watc
 | Toasts | Sonner |
 | Icons | Lucide |
 | Spreadsheets | ExcelJS |
+| Tests | Node test runner through tsx |
 
 ## Getting started
 
@@ -357,6 +366,7 @@ The importer reads the title, release date, and status columns, matches each row
 | `npm run build` | Production build |
 | `npm run start` | Run the production build locally |
 | `npm run lint` | Run ESLint |
+| `npm test` | Run the test suite on Node's built in runner (Node 21 or newer) |
 | `npm run db:deploy` | Apply migrations to the database |
 | `npm run db:migrate` | Create and apply a new migration in development |
 | `npm run db:generate` | Regenerate the Prisma client |
@@ -402,6 +412,7 @@ celluloid/
 │   ├── components/            library, cards, charts, dialogs, command palette, rating stars, nav
 │   ├── generated/prisma/      generated Prisma client (not committed)
 │   └── lib/                   auth, prisma, tmdb, recommend, export, import, data, actions, crypto, rate limiting
+├── tests/                     pure logic tests: matching, export scope, filenames, prompt, crypto
 ├── proxy.ts                   Next 16 request proxy (this version uses proxy, not middleware)
 ├── next.config.ts             security headers and the TMDB image allowlist
 ├── prisma.config.ts
