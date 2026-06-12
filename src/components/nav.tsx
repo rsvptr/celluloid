@@ -48,10 +48,14 @@ export function Nav({ userName }: { userName?: string | null }) {
   return (
     <header className="sticky top-0 z-40 border-b border-line bg-background/80 backdrop-blur-md">
       <div className="mx-auto flex h-14 max-w-7xl items-center gap-2 px-4">
-        <Wordmark size={28} textClassName="hidden sm:inline" />
+        {/* Wordmark text waits for md so the tablet band (640-790px) doesn't
+            overflow once link labels appear; a divider keeps the brand and the
+            nav reading as two things instead of one run-on row. */}
+        <Wordmark size={28} textClassName="hidden md:inline" />
+        <span aria-hidden className="hidden h-5 w-px shrink-0 bg-line sm:mx-2 sm:block" />
         <MotionProvider>
           <LayoutGroup>
-            <nav className="ml-3 flex items-center gap-1">
+            <nav className="flex items-center gap-1">
               {LINKS.map((l) => {
                 const Icon = l.icon;
                 const active = isActive(l.href);
@@ -60,7 +64,9 @@ export function Nav({ userName }: { userName?: string | null }) {
                     key={l.href}
                     href={l.href}
                     className={cn(
-                      "focus-ring relative flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors",
+                      // Slimmer hit padding on phones: five links plus the brand
+                      // and the action cluster must genuinely fit in 375px.
+                      "focus-ring relative flex items-center gap-2 rounded-lg px-2 py-2 text-sm transition-colors md:px-3",
                       active
                         ? "text-foreground"
                         : "text-muted hover:bg-surface-2/60 hover:text-foreground",
@@ -74,7 +80,7 @@ export function Nav({ userName }: { userName?: string | null }) {
                       />
                     )}
                     <Icon size={16} />
-                    <span className="hidden sm:inline">{l.label}</span>
+                    <span className="hidden md:inline">{l.label}</span>
                   </Link>
                 );
               })}
@@ -94,7 +100,7 @@ export function Nav({ userName }: { userName?: string | null }) {
             </span>
           </button>
           {userName && (
-            <span className="hidden text-sm text-muted md:inline">{userName}</span>
+            <span className="hidden text-sm text-muted lg:inline">{userName}</span>
           )}
           <Link
             href="/settings"

@@ -41,7 +41,9 @@ export function Wordmark({
   );
   if (href === null) return inner;
   return (
-    <Link href={href} className="focus-ring inline-flex rounded">
+    // shrink-0: in a packed flex header the brand is the first thing the
+    // browser squeezes, and a logo collapsed to 0px just looks missing.
+    <Link href={href} className="focus-ring inline-flex shrink-0 rounded">
       {inner}
     </Link>
   );

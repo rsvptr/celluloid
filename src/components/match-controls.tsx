@@ -28,6 +28,7 @@ export function MatchControls({
   const opener = useRef<HTMLElement | null>(null);
 
   function pick(r: SearchResult) {
+    if (pending) return; // one rematch at a time; a second pick would race it
     start(async () => {
       const res = await rematchTitle(titleId, r.tmdbId, r.mediaType);
       if (res.error) {
@@ -111,7 +112,13 @@ export function MatchControls({
               Pick the correct title. Your status, rating, notes, tags, and watch
               progress all stay put.
             </Dialog.Description>
-            <div className="mt-3 min-h-0 flex-1 overflow-y-auto">
+            <div
+              className={
+                pending
+                  ? "pointer-events-none mt-3 min-h-0 flex-1 overflow-y-auto opacity-60"
+                  : "mt-3 min-h-0 flex-1 overflow-y-auto"
+              }
+            >
               <TmdbSearch
                 autoFocus
                 onPick={pick}

@@ -49,22 +49,35 @@ export function ColumnChart({
   height?: number;
 }) {
   const max = Math.max(...data.map((d) => d.value), 1);
+  // Bars are sized in PIXELS, not percentages: the column wrappers get their
+  // height from content (the row only bottom-aligns them), so a % height has
+  // no definite parent to resolve against and silently computes to 0.
+  const barArea = height - 38; // minus the value label, axis label, and gaps
   return (
-    <div className="flex items-end gap-1.5" style={{ height }}>
+    <div
+      role="img"
+      aria-label={data.map((d) => `${d.label}: ${d.value}`).join(", ")}
+      className="flex items-end gap-1.5"
+      style={{ height }}
+    >
       {data.map((d, i) => {
-        const pct = (d.value / max) * 100;
+        const px = d.value > 0 ? Math.max((d.value / max) * barArea, 4) : 0;
         return (
-          <div key={d.label} className="flex flex-1 flex-col items-center gap-1.5">
-            <div className="flex h-full w-full items-end">
-              <motion.div
-                title={`${d.label}: ${d.value}`}
-                className="w-full rounded-t-md brand-gradient"
-                style={{ height: `${Math.max(pct, d.value > 0 ? 4 : 0)}%`, transformOrigin: "bottom" }}
-                initial={{ scaleY: 0 }}
-                animate={{ scaleY: 1 }}
-                transition={{ duration: 0.5, ease: EASE, delay: i * 0.02 }}
-              />
-            </div>
+          <div
+            key={d.label}
+            className="flex flex-1 flex-col items-center justify-end gap-1"
+          >
+            {d.value > 0 && (
+              <span className="text-[10px] tabular-nums text-faint">{d.value}</span>
+            )}
+            <motion.div
+              title={`${d.label}: ${d.value}`}
+              className="w-full rounded-t-md brand-gradient"
+              style={{ height: px, transformOrigin: "bottom" }}
+              initial={{ scaleY: 0 }}
+              animate={{ scaleY: 1 }}
+              transition={{ duration: 0.5, ease: EASE, delay: i * 0.02 }}
+            />
             <span className="text-[10px] text-faint">{d.label}</span>
           </div>
         );
