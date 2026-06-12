@@ -342,6 +342,31 @@ export async function getDistinctLanguages(userId: string): Promise<string[]> {
   return rows.map((r) => r.language!).filter(Boolean).sort();
 }
 
+export interface LibraryFacets {
+  /** Distinct original-language codes present in the library. */
+  languages: string[];
+  /** Distinct genres present in the library. */
+  genres: string[];
+}
+
+/** Distinct languages + genres, for the recommendation preference controls. */
+export async function getLibraryFacets(userId: string): Promise<LibraryFacets> {
+  const rows = await prisma.title.findMany({
+    where: { userId },
+    select: { language: true, genres: true },
+  });
+  const langs = new Set<string>();
+  const genres = new Set<string>();
+  for (const r of rows) {
+    if (r.language) langs.add(r.language);
+    for (const g of r.genres) genres.add(g);
+  }
+  return {
+    languages: [...langs].sort(),
+    genres: [...genres].sort(),
+  };
+}
+
 export interface LibraryStats {
   total: number;
   movies: number;
@@ -508,9 +533,17 @@ export async function getStats(userId: string): Promise<LibraryStats> {
     byLanguage: [...langCount.entries()]
       .map(([code, count]) => ({ code, count }))
       .sort((a, b) => b.count - a.count),
-    byDecade: [...decadeCount.entries()]
-      .map(([decade, count]) => ({ decade, count }))
-      .sort((a, b) => a.decade.localeCompare(b.decade)),
+    // Zero-fill skipped decades so the chart's spacing is honest (a library
+    // with 1970s and 1990s but nothing from the 1980s shows the gap).
+    byDecade: (() => {
+      const decades = [...decadeCount.keys()].map((d) => parseInt(d, 10));
+      if (decades.length === 0) return [];
+      const out: { decade: string; count: number }[] = [];
+      for (let d = Math.min(...decades); d <= Math.max(...decades); d += 10) {
+        out.push({ decade: `${d}s`, count: decadeCount.get(`${d}s`) ?? 0 });
+      }
+      return out;
+    })(),
     byYear,
     byGenre: [...genreCount.entries()]
       .map(([genre, count]) => ({ genre, count }))

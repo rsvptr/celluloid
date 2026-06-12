@@ -1,5 +1,6 @@
 import { getSession } from "@/lib/session";
 import { generateRecommendations, type RecommendBasis } from "@/lib/recommend";
+import { isRecEra } from "@/lib/models";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 
 /** Validate the optional recommendation basis; unknown shapes fall back to the whole library. */
@@ -38,6 +39,9 @@ export async function POST(request: Request) {
     model?: unknown;
     basis?: unknown;
     exclude?: unknown;
+    language?: unknown;
+    genre?: unknown;
+    era?: unknown;
   } = {};
   try {
     body = await request.json();
@@ -46,7 +50,10 @@ export async function POST(request: Request) {
   }
 
   const exclude = Array.isArray(body.exclude)
-    ? body.exclude.filter((x): x is string => typeof x === "string").slice(0, 100)
+    ? body.exclude
+        .filter((x): x is string => typeof x === "string")
+        .map((x) => x.slice(0, 200)) // bound each entry, not just the count
+        .slice(0, 100)
     : undefined;
 
   const result = await generateRecommendations(session.user.id, {
@@ -57,6 +64,17 @@ export async function POST(request: Request) {
     model: typeof body.model === "string" ? body.model : undefined,
     basis: parseBasis(body.basis),
     exclude,
+    // Short, bounded preference hints (language is an ISO code; genre a name).
+    language:
+      typeof body.language === "string" && body.language
+        ? body.language.slice(0, 12)
+        : undefined,
+    genre:
+      typeof body.genre === "string" && body.genre
+        ? body.genre.slice(0, 40)
+        : undefined,
+    era:
+      typeof body.era === "string" && isRecEra(body.era) ? body.era : undefined,
   });
 
   return Response.json(result);
