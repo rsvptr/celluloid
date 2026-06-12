@@ -6,13 +6,14 @@ import { toast } from "sonner";
 import { Button, Card, Input, Select } from "@/components/ui";
 import { STATUS_META, STATUS_ORDER } from "@/lib/format";
 import {
-  DEFAULT_SCOPE,
   FORMATS,
   type ExportRow,
   type ExportScope,
   type FormatKey,
   buildContent,
+  exportFilename,
   filterRows,
+  sanitizeScope,
   toAiPrompt,
 } from "@/lib/export/format";
 import { cn } from "@/lib/utils";
@@ -20,14 +21,33 @@ import { cn } from "@/lib/utils";
 export function ExportPanel({
   rows,
   tags,
+  initialScope,
 }: {
   rows: ExportRow[];
   tags: string[];
+  /** Raw scope hints from the URL (library deep link); validated before use. */
+  initialScope?: Record<string, unknown>;
 }) {
-  const [scope, setScope] = useState<ExportScope>(DEFAULT_SCOPE);
+  const [scope, setScope] = useState<ExportScope>(() =>
+    sanitizeScope(initialScope ?? {}, rows, tags),
+  );
   const [format, setFormat] = useState<FormatKey>("ai");
   const [count, setCount] = useState(15);
   const [copied, setCopied] = useState(false);
+
+  // Distinct languages (code → display) and genres present in the library, so
+  // the filters only ever offer values that actually match something.
+  const languages = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const r of rows) if (r.languageCode) map.set(r.languageCode, r.language);
+    return [...map.entries()]
+      .map(([code, label]) => ({ code, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [rows]);
+  const genres = useMemo(
+    () => [...new Set(rows.flatMap((r) => r.genres))].sort(),
+    [rows],
+  );
 
   const filtered = useMemo(() => filterRows(rows, scope), [rows, scope]);
 
@@ -63,15 +83,14 @@ export function ExportPanel({
 
   function download() {
     if (format === "xlsx") {
-      window.location.href = xlsxHref(scope);
+      window.location.assign(xlsxHref(scope));
       return;
     }
-    const name = format === "ai" ? "celluloid-ai-prompt" : "celluloid-library";
     const blob = new Blob([content], { type: fmt.mime });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${name}.${fmt.ext}`;
+    a.download = exportFilename(scope, fmt.ext, format === "ai" ? "ai-prompt" : "library");
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -81,8 +100,8 @@ export function ExportPanel({
       <div>
         <h1 className="text-xl font-semibold tracking-tight">Export</h1>
         <p className="mt-1 text-sm text-muted">
-          Copy or download your library. It's formatted to drop straight into an
-          AI for recommendations.
+          Copy or download your library. It&apos;s formatted to drop straight
+          into an AI for recommendations.
         </p>
       </div>
 
@@ -113,6 +132,79 @@ export function ExportPanel({
                 </option>
               ))}
             </Select>
+          </Labeled>
+          {languages.length > 1 && (
+            <Labeled label="Language">
+              <Select
+                value={scope.language ?? ""}
+                onChange={(e) => update("language", e.target.value || null)}
+              >
+                <option value="">Any language</option>
+                {languages.map((l) => (
+                  <option key={l.code} value={l.code}>
+                    {l.label}
+                  </option>
+                ))}
+              </Select>
+            </Labeled>
+          )}
+          {genres.length > 1 && (
+            <Labeled label="Genre">
+              <Select
+                value={scope.genre ?? ""}
+                onChange={(e) => update("genre", e.target.value || null)}
+              >
+                <option value="">Any genre</option>
+                {genres.map((g) => (
+                  <option key={g} value={g}>
+                    {g}
+                  </option>
+                ))}
+              </Select>
+            </Labeled>
+          )}
+          <Labeled label="Min rating">
+            <Select
+              value={scope.minRating != null ? String(scope.minRating) : ""}
+              onChange={(e) =>
+                update("minRating", e.target.value ? Number(e.target.value) : null)
+              }
+            >
+              <option value="">Any rating</option>
+              <option value="9">9+</option>
+              <option value="8">8+</option>
+              <option value="7">7+</option>
+              <option value="6">6+</option>
+              <option value="5">5+</option>
+            </Select>
+          </Labeled>
+          <Labeled label="Released">
+            {/* min-h-10 on touch matches every other control's 40px target. */}
+            <div className="flex h-10 items-center gap-1.5 sm:h-9">
+              <Input
+                type="number"
+                inputMode="numeric"
+                placeholder="From"
+                value={scope.yearFrom ?? ""}
+                onChange={(e) => {
+                  const n = parseInt(e.target.value, 10);
+                  update("yearFrom", Number.isFinite(n) ? n : null);
+                }}
+                className="h-9 min-h-10 w-20 px-2 sm:min-h-0"
+              />
+              <span className="text-xs text-faint">to</span>
+              <Input
+                type="number"
+                inputMode="numeric"
+                placeholder="To"
+                value={scope.yearTo ?? ""}
+                onChange={(e) => {
+                  const n = parseInt(e.target.value, 10);
+                  update("yearTo", Number.isFinite(n) ? n : null);
+                }}
+                className="h-9 min-h-10 w-20 px-2 sm:min-h-0"
+              />
+            </div>
           </Labeled>
           {tags.length > 0 && (
             <Labeled label="Tag">
@@ -215,6 +307,11 @@ function xlsxHref(scope: ExportScope): string {
   if (scope.status !== "all") p.set("status", scope.status);
   if (scope.favoritesOnly) p.set("fav", "1");
   if (scope.tag) p.set("tag", scope.tag);
+  if (scope.language) p.set("lang", scope.language);
+  if (scope.genre) p.set("genre", scope.genre);
+  if (scope.minRating != null) p.set("min", String(scope.minRating));
+  if (scope.yearFrom != null) p.set("from", String(scope.yearFrom));
+  if (scope.yearTo != null) p.set("to", String(scope.yearTo));
   const qs = p.toString();
   return `/api/export/xlsx${qs ? `?${qs}` : ""}`;
 }
