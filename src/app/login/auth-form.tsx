@@ -11,7 +11,10 @@ type Mode = "signin" | "signup" | "twofa";
 export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
   const router = useRouter();
   const params = useSearchParams();
-  const next = params.get("next") || "/";
+  // Only follow same-site paths after sign-in. A full URL or a protocol-relative
+  // "//host" here would let a crafted login link bounce the user to another site.
+  const rawNext = params.get("next") || "/";
+  const next = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/";
 
   const [mode, setMode] = useState<Mode>("signin");
   const [name, setName] = useState("");

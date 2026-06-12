@@ -13,7 +13,7 @@ export interface ActionResult {
 
 export async function updateProfile(name: string): Promise<ActionResult> {
   const userId = await requireUserId();
-  const trimmed = name.trim();
+  const trimmed = name.trim().slice(0, 80);
   if (!trimmed) return { error: "Name can't be empty." };
   await prisma.user.update({ where: { id: userId }, data: { name: trimmed } });
   revalidatePath("/settings");
@@ -23,7 +23,7 @@ export async function updateProfile(name: string): Promise<ActionResult> {
 export async function setAnthropicKey(key: string): Promise<ActionResult> {
   const userId = await requireUserId();
   const k = key.trim();
-  if (!k.startsWith("sk-ant-")) {
+  if (!k.startsWith("sk-ant-") || k.length > 256 || !/^[\w-]+$/.test(k)) {
     return { error: "That doesn't look like an Anthropic key (it should start with sk-ant-)." };
   }
   await prisma.user.update({
@@ -57,12 +57,5 @@ export async function setRecommendModel(model: string): Promise<ActionResult> {
   });
   revalidatePath("/settings");
   revalidatePath("/recommend");
-  return { ok: true };
-}
-
-/** Deletes the account and all of the user's data (cascades). */
-export async function deleteAccount(): Promise<ActionResult> {
-  const userId = await requireUserId();
-  await prisma.user.delete({ where: { id: userId } });
   return { ok: true };
 }

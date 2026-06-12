@@ -38,6 +38,10 @@ yarn-error.log*
 # attached plaintext key files (secrets now live in .env)
 *Details.txt
 
+# personal credential notes (keep real passwords out of git)
+mycreds.txt
+*creds*.txt
+
 # vercel
 .vercel
 

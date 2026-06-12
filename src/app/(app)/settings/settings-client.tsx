@@ -18,7 +18,6 @@ import { authClient } from "@/lib/auth-client";
 import { Button, Card, Input, Spinner } from "@/components/ui";
 import { useConfirm } from "@/components/confirm-dialog";
 import {
-  deleteAccount,
   removeAnthropicKey,
   setAnthropicKey,
   updateProfile,
@@ -111,7 +110,7 @@ function groupSecret(s: string): string {
 function ProfileSection({ name, email }: { name: string; email: string }) {
   const router = useRouter();
   const [value, setValue] = useState(name);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [pending, start] = useTransition();
 
   return (
@@ -123,9 +122,13 @@ function ProfileSection({ name, email }: { name: string; email: string }) {
         </label>
         <label className="flex flex-col gap-1.5">
           <span className="text-xs font-medium text-muted">Display name</span>
-          <Input value={value} onChange={(e) => setValue(e.target.value)} />
+          <Input
+            value={value}
+            maxLength={80}
+            onChange={(e) => setValue(e.target.value)}
+          />
         </label>
-        {msg && <Notice kind="ok">{msg}</Notice>}
+        {msg && <Notice kind={msg.kind}>{msg.text}</Notice>}
         <Button
           variant="secondary"
           size="sm"
@@ -134,8 +137,10 @@ function ProfileSection({ name, email }: { name: string; email: string }) {
           onClick={() =>
             start(async () => {
               const r = await updateProfile(value);
-              if (r.ok) {
-                setMsg("Saved.");
+              if (r.error) {
+                setMsg({ kind: "error", text: r.error });
+              } else {
+                setMsg({ kind: "ok", text: "Saved." });
                 router.refresh();
                 setTimeout(() => setMsg(null), 1500);
               }
@@ -253,6 +258,7 @@ function SharedLinksSection({ shares }: { shares: ShareSummary[] }) {
         toast.success("Link revoked");
         router.refresh();
       })
+      .catch(() => toast.error("Couldn't revoke that link. Please try again."))
       .finally(() => setPendingId(null));
   }
 
@@ -588,6 +594,8 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
 function DangerSection() {
   const router = useRouter();
   const { confirm, dialog } = useConfirm();
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
 
   return (
@@ -604,14 +612,31 @@ function DangerSection() {
         </p>
         <ul className="mt-2 flex list-disc flex-col gap-1 pl-5 text-sm text-muted marker:text-rose-400/60">
           <li>Your whole library and watch history</li>
-          <li>Every tag, note, and rating you've added</li>
+          <li>Every tag, note, and rating you&apos;ve added</li>
           <li>Your shared links and saved API key</li>
         </ul>
+        <label className="mt-4 flex flex-col gap-1.5">
+          <span className="text-xs font-medium text-muted">
+            Enter your password to confirm it&apos;s you
+          </span>
+          <Input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+            placeholder="Current password"
+          />
+        </label>
+        {error && (
+          <p className="mt-3 rounded-lg bg-rose-500/10 px-3 py-2 text-sm text-rose-300 ring-1 ring-rose-500/20">
+            {error}
+          </p>
+        )}
         <Button
           variant="danger"
           size="sm"
           className="mt-4"
-          disabled={pending}
+          disabled={pending || !password}
           onClick={async () => {
             if (
               !(await confirm({
@@ -623,8 +648,14 @@ function DangerSection() {
             )
               return;
             start(async () => {
-              await deleteAccount();
-              await authClient.signOut().catch(() => {});
+              setError(null);
+              // Better Auth verifies the password server-side before deleting,
+              // so a hijacked session alone can't destroy the account.
+              const { error } = await authClient.deleteUser({ password });
+              if (error) {
+                setError(error.message ?? "Couldn't delete the account.");
+                return;
+              }
               router.push("/login");
               router.refresh();
             });

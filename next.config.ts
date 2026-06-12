@@ -10,9 +10,23 @@ const securityHeaders = [
     key: "Strict-Transport-Security",
     value: "max-age=63072000; includeSubDomains; preload",
   },
+  {
+    // The app uses none of these browser capabilities; saying so explicitly
+    // also covers anything embedded in future.
+    key: "Permissions-Policy",
+    value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+  },
+  {
+    // Deliberately scoped CSP: no script-src/style-src (Next's inline bootstrap
+    // needs them open), but lock down framing, plugins, <base> and form targets.
+    key: "Content-Security-Policy",
+    value:
+      "frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'",
+  },
 ];
 
 const nextConfig: NextConfig = {
+  poweredByHeader: false,
   images: {
     remotePatterns: [
       {

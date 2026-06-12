@@ -44,7 +44,8 @@ export async function createShareList(
       data: {
         slug,
         userId,
-        name: input.name?.trim() || null,
+        // The dialog caps this at 80 too; enforce it where it counts.
+        name: input.name?.trim().slice(0, 80) || null,
         titleIds,
         includeNotes: !!input.includeNotes,
         includeWatchlist: !!input.includeWatchlist,
