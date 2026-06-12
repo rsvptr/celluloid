@@ -60,10 +60,12 @@ async function tmdb<T>(
 
     if (res.ok) return (await res.json()) as T;
 
-    // Back off on rate limits / transient server errors.
+    // Back off on rate limits / transient server errors. Cap the honored
+    // Retry-After so a pathological header can't stall a serverless function
+    // for its whole timeout budget.
     if ((res.status === 429 || res.status >= 500) && attempt < retries) {
       const retryAfter = Number(res.headers.get("retry-after"));
-      const wait = retryAfter > 0 ? retryAfter * 1000 : 500 * 2 ** attempt;
+      const wait = Math.min(retryAfter > 0 ? retryAfter * 1000 : 500 * 2 ** attempt, 5000);
       await sleep(wait);
       continue;
     }
