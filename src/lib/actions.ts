@@ -19,6 +19,11 @@ function toDate(iso: string | null | undefined): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+/** Collapse whitespace and bound tag names so freehand input stays sane. */
+function normTagName(name: string): string {
+  return name.trim().replace(/\s+/g, " ").slice(0, 64);
+}
+
 function revalidateAll(id?: string) {
   revalidatePath("/");
   revalidatePath("/stats");
@@ -28,35 +33,41 @@ function revalidateAll(id?: string) {
 
 /** Recompute denormalized episode progress + natural status for a TV title. */
 async function recomputeProgress(titleId: string) {
-  const [total, watched, title] = await Promise.all([
-    prisma.episode.count({ where: { season: { titleId } } }),
-    prisma.episode.count({ where: { season: { titleId }, watched: true } }),
-    prisma.title.findUnique({
-      where: { id: titleId },
-      select: { status: true, watchedAt: true },
-    }),
-  ]);
+  // Lock the title row before counting: two rapid episode toggles otherwise
+  // interleave (both count, then the stale write lands last). With the lock,
+  // the second recompute waits and recounts AFTER the first one committed.
+  await prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<{ status: WatchStatus; watchedAt: Date | null }[]>`
+      SELECT status, "watchedAt" FROM "Title" WHERE id = ${titleId} FOR UPDATE`;
+    const title = rows[0];
+    if (!title) return; // title removed concurrently; nothing to reconcile
 
-  let status = title?.status ?? WatchStatus.WATCHLIST;
-  // Don't override deliberate ON_HOLD / DROPPED choices.
-  if (status !== WatchStatus.ON_HOLD && status !== WatchStatus.DROPPED) {
-    if (watched === 0) status = WatchStatus.WATCHLIST;
-    else if (total > 0 && watched >= total) status = WatchStatus.WATCHED;
-    else status = WatchStatus.WATCHING;
-  }
+    const total = await tx.episode.count({ where: { season: { titleId } } });
+    const watched = await tx.episode.count({
+      where: { season: { titleId }, watched: true },
+    });
 
-  const data: { watchedEpisodes: number; status: WatchStatus; watchedAt?: Date } = {
-    watchedEpisodes: watched,
-    status,
-  };
-  // Stamp a completion date when a show finishes via the episode tracker (mirrors
-  // the movie auto-stamp and bulkSetStatus) so episode-by-episode completed TV
-  // feeds the recency signal. Only when not already dated.
-  if (status === WatchStatus.WATCHED && title?.watchedAt == null) {
-    data.watchedAt = new Date();
-  }
+    let status = title.status;
+    // Don't override deliberate ON_HOLD / DROPPED choices.
+    if (status !== WatchStatus.ON_HOLD && status !== WatchStatus.DROPPED) {
+      if (watched === 0) status = WatchStatus.WATCHLIST;
+      else if (total > 0 && watched >= total) status = WatchStatus.WATCHED;
+      else status = WatchStatus.WATCHING;
+    }
 
-  await prisma.title.update({ where: { id: titleId }, data });
+    const data: { watchedEpisodes: number; status: WatchStatus; watchedAt?: Date } = {
+      watchedEpisodes: watched,
+      status,
+    };
+    // Stamp a completion date when a show finishes via the episode tracker
+    // (mirrors the movie auto-stamp and bulkSetStatus) so episode-by-episode
+    // completed TV feeds the recency signal. Only when not already dated.
+    if (status === WatchStatus.WATCHED && title.watchedAt == null) {
+      data.watchedAt = new Date();
+    }
+
+    await tx.title.update({ where: { id: titleId }, data });
+  });
 }
 
 // --- Title field updates ---------------------------------------------------
@@ -72,6 +83,11 @@ export async function updateTitle(
   },
 ) {
   const userId = await getUserId();
+  // Server actions are network-callable with arbitrary args; reject an unknown
+  // status here with a clear error instead of surfacing a Prisma 500.
+  if (data.status !== undefined && !Object.values(WatchStatus).includes(data.status)) {
+    throw new Error("Invalid status.");
+  }
   const title = await prisma.title.findFirst({
     where: { id, userId },
     select: { id: true, mediaType: true, watchedAt: true },
@@ -88,16 +104,23 @@ export async function updateTitle(
       ? new Date()
       : undefined;
 
-  // Clamp the rating to the valid 0-10 range so a bad client value can't reach
-  // the DB and skew the stats/chart math (which assumes ratings stay in range).
+  // Normalize the rating before it can reach the DB: reject non-finite numbers
+  // (NaN would poison the stats averages), clamp to 0-10, and snap to the same
+  // half-star steps the UI uses.
   const clampedRating =
-    data.rating == null ? data.rating : Math.max(0, Math.min(10, data.rating));
+    data.rating == null
+      ? data.rating
+      : Number.isFinite(data.rating)
+        ? Math.round(Math.max(0, Math.min(10, data.rating)) * 2) / 2
+        : undefined;
 
   await prisma.title.update({
     where: { id },
     data: {
       ...(data.status !== undefined ? { status: data.status } : {}),
-      ...(data.rating !== undefined ? { rating: clampedRating } : {}),
+      ...(data.rating !== undefined && clampedRating !== undefined
+        ? { rating: clampedRating }
+        : {}),
       ...(data.notes !== undefined
         ? { notes: data.notes == null ? null : data.notes.slice(0, 2000) }
         : {}),
@@ -487,6 +510,9 @@ async function ownedTitleIds(userId: string, ids: string[]): Promise<string[]> {
 
 export async function bulkSetStatus(ids: string[], status: WatchStatus) {
   const userId = await getUserId();
+  if (!Object.values(WatchStatus).includes(status)) {
+    throw new Error("Invalid status.");
+  }
   const owned = await prisma.title.findMany({
     where: { id: { in: ids }, userId },
     select: { id: true, mediaType: true },
@@ -567,7 +593,7 @@ export async function bulkSetFavorite(ids: string[], favorite: boolean) {
 
 export async function bulkAddTag(ids: string[], tagName: string) {
   const userId = await getUserId();
-  const name = tagName.trim().replace(/\s+/g, " ");
+  const name = normTagName(tagName);
   if (!name) throw new Error("Tag name required");
 
   const owned = await ownedTitleIds(userId, ids);
@@ -588,7 +614,7 @@ export async function bulkAddTag(ids: string[], tagName: string) {
 
 export async function bulkRemoveTag(ids: string[], tagName: string) {
   const userId = await getUserId();
-  const name = tagName.trim().replace(/\s+/g, " ");
+  const name = normTagName(tagName);
   if (!name) throw new Error("Tag name required");
 
   const owned = await ownedTitleIds(userId, ids);
@@ -620,7 +646,7 @@ export async function bulkRemoveTitles(ids: string[]) {
 
 export async function createTag(name: string, color?: string | null) {
   const userId = await getUserId();
-  const trimmed = name.trim().replace(/\s+/g, " ");
+  const trimmed = normTagName(name);
   if (!trimmed) throw new Error("Tag name required");
   const tag = await prisma.tag.upsert({
     where: { userId_name: { userId, name: trimmed } },

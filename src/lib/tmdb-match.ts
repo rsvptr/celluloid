@@ -5,7 +5,9 @@ export function norm(s: string): string {
   return s
     .toLowerCase()
     .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
+    // Strip combining diacritics (the explicit escape survives any re-encode
+    // of this file; raw combining chars in a regex literal are fragile).
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/&/g, "and")
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
@@ -50,10 +52,13 @@ export function pickBest(
   const scored = results.map((r, i) => {
     const rn = norm(r.title ?? r.name ?? "");
     const ry = yearOf(r);
+    // A title in a non-Latin script normalizes to "", and any string includes
+    // "" - without the length guards such a query would "partial match" every
+    // result and bypass the carve-out below. Empty-vs-empty is no signal either.
     const nameMatch: "exact" | "partial" | "none" =
-      rn === target
+      target.length > 0 && rn === target
         ? "exact"
-        : rn.length > 0 && (rn.includes(target) || target.includes(rn))
+        : target.length > 0 && rn.length > 0 && (rn.includes(target) || target.includes(rn))
           ? "partial"
           : "none";
     const yearDiff = year != null && ry != null ? Math.abs(ry - year) : null;
