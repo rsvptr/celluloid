@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Check, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui";
@@ -26,6 +26,12 @@ export interface SeasonVM {
   episodes: EpisodeVM[];
 }
 
+function watchedFromServer(seasons: SeasonVM[]): Record<string, boolean> {
+  const m: Record<string, boolean> = {};
+  for (const s of seasons) for (const e of s.episodes) m[e.id] = e.watched;
+  return m;
+}
+
 export function SeasonTracker({
   titleId,
   seasons,
@@ -37,25 +43,24 @@ export function SeasonTracker({
   const [, startTransition] = useTransition();
 
   // Local optimistic watched-state, keyed by episode id.
-  const [watched, setWatched] = useState<Record<string, boolean>>(() => {
-    const m: Record<string, boolean> = {};
-    for (const s of seasons) for (const e of s.episodes) m[e.id] = e.watched;
-    return m;
-  });
+  const [watched, setWatched] = useState<Record<string, boolean>>(() =>
+    watchedFromServer(seasons),
+  );
 
   // Re-sync to authoritative server state only when the actual server data
   // changes. The parent rebuilds the `seasons` array on every render, so we key
   // off a content signature (ids + watched flags) — that way an in-flight
-  // optimistic tick isn't clobbered by an unrelated parent re-render.
+  // optimistic tick isn't clobbered by an unrelated parent re-render. Adjusting
+  // state during render (guarded by the previous signature) lets React restart
+  // the render immediately instead of paint-then-re-render via an effect.
   const serverSig = seasons
     .map((s) => s.episodes.map((e) => `${e.id}:${e.watched ? 1 : 0}`).join(","))
     .join("|");
-  useEffect(() => {
-    const m: Record<string, boolean> = {};
-    for (const s of seasons) for (const e of s.episodes) m[e.id] = e.watched;
-    setWatched(m);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverSig]);
+  const [lastSig, setLastSig] = useState(serverSig);
+  if (lastSig !== serverSig) {
+    setLastSig(serverSig);
+    setWatched(watchedFromServer(seasons));
+  }
 
   const [open, setOpen] = useState<Record<number, boolean>>(() => {
     // Open the first season with an unwatched episode, else the first season.

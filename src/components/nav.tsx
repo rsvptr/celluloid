@@ -13,10 +13,13 @@ import {
   Settings,
   Sparkles,
 } from "lucide-react";
+import { useSyncExternalStore } from "react";
 import { authClient } from "@/lib/auth-client";
 import { LayoutGroup, motion, MotionProvider } from "@/components/motion";
 import { Wordmark } from "./brand";
 import { cn } from "@/lib/utils";
+
+const subscribeNoop = () => () => {};
 
 const LINKS = [
   { href: "/", label: "Library", icon: Film },
@@ -29,6 +32,14 @@ const LINKS = [
 export function Nav({ userName }: { userName?: string | null }) {
   const pathname = usePathname();
   const router = useRouter();
+  // ⌘ on Apple devices, Ctrl elsewhere. useSyncExternalStore is the
+  // hydration-safe way to read a client-only value: the server snapshot renders
+  // first, then React swaps in the real platform without a mismatch warning.
+  const isMac = useSyncExternalStore(
+    subscribeNoop,
+    () => /mac|iphone|ipad|ipod/i.test(navigator.platform ?? ""),
+    () => false,
+  );
 
   const isActive = (href: string) =>
     href === "/"
@@ -63,6 +74,10 @@ export function Nav({ userName }: { userName?: string | null }) {
                   <Link
                     key={l.href}
                     href={l.href}
+                    // Below md the text label is display:none, which removes it
+                    // from the accessibility tree — name the link explicitly.
+                    aria-label={l.label}
+                    aria-current={active ? "page" : undefined}
                     className={cn(
                       // Slimmer hit padding on phones: five links plus the brand
                       // and the action cluster must genuinely fit in 375px.
@@ -90,13 +105,14 @@ export function Nav({ userName }: { userName?: string | null }) {
         <div className="ml-auto flex items-center gap-2">
           <button
             onClick={openCommand}
-            title="Search (⌘K)"
+            title={isMac ? "Search (⌘K)" : "Search (Ctrl+K)"}
             aria-label="Search"
+            aria-keyshortcuts="Control+K Meta+K"
             className="focus-ring flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground"
           >
             <Search size={15} />
             <span className="hidden items-center gap-0.5 text-xs text-faint lg:flex">
-              <CommandIcon size={11} />K
+              {isMac ? <CommandIcon size={11} /> : <span>Ctrl</span>}K
             </span>
           </button>
           {userName && (

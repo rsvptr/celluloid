@@ -31,55 +31,59 @@ export interface ButtonProps
   size?: ButtonSize;
 }
 
-export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant = "secondary", size = "md", ...props }, ref) => (
+// React 19: `ref` is a regular prop — no forwardRef wrapper needed.
+export function Button({
+  className,
+  variant = "secondary",
+  size = "md",
+  ...props
+}: ButtonProps) {
+  return (
     <button
-      ref={ref}
       className={cn(buttonBase, buttonVariants[variant], buttonSizes[size], className)}
       {...props}
     />
-  ),
-);
-Button.displayName = "Button";
+  );
+}
 
 // --- Inputs ----------------------------------------------------------------
 
 const fieldBase =
   "rounded-lg bg-surface-2 px-3 text-sm text-foreground placeholder:text-faint ring-1 ring-line focus:outline-none focus:ring-2 focus:ring-brand/60 transition";
 
-export const Input = React.forwardRef<
-  HTMLInputElement,
-  React.InputHTMLAttributes<HTMLInputElement>
->(({ className, ...props }, ref) => (
-  <input ref={ref} className={cn(fieldBase, "h-10 w-full", className)} {...props} />
-));
-Input.displayName = "Input";
+export function Input({
+  className,
+  ...props
+}: React.InputHTMLAttributes<HTMLInputElement>) {
+  return <input className={cn(fieldBase, "h-10 w-full", className)} {...props} />;
+}
 
-export const Textarea = React.forwardRef<
-  HTMLTextAreaElement,
-  React.TextareaHTMLAttributes<HTMLTextAreaElement>
->(({ className, ...props }, ref) => (
-  <textarea ref={ref} className={cn(fieldBase, "py-2 min-h-20 w-full", className)} {...props} />
-));
-Textarea.displayName = "Textarea";
+export function Textarea({
+  className,
+  ...props
+}: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return (
+    <textarea className={cn(fieldBase, "py-2 min-h-20 w-full", className)} {...props} />
+  );
+}
 
 // Select sizes to its content by default (pass `w-full` where a full-width
 // control is wanted, e.g. inside a form column).
-export const Select = React.forwardRef<
-  HTMLSelectElement,
-  React.SelectHTMLAttributes<HTMLSelectElement>
->(({ className, ...props }, ref) => (
-  <select
-    ref={ref}
-    className={cn(
-      fieldBase,
-      "has-chevron h-9 pr-8 cursor-pointer appearance-none min-h-10 sm:min-h-0",
-      className,
-    )}
-    {...props}
-  />
-));
-Select.displayName = "Select";
+export function Select({
+  className,
+  ...props
+}: React.SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <select
+      className={cn(
+        fieldBase,
+        "has-chevron h-9 pr-8 cursor-pointer appearance-none min-h-10 sm:min-h-0",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
 
 // --- Badge -----------------------------------------------------------------
 

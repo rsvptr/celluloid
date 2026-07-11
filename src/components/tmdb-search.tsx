@@ -27,33 +27,31 @@ export function TmdbSearch({
   placeholder?: string;
 }) {
   const [query, setQuery] = useState(initialQuery);
-  const [results, setResults] = useState<SearchResult[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [searched, setSearched] = useState(false);
+  // Results are keyed by the query that produced them. Loading, "no results" and
+  // the idle hint all derive from comparing that key to the current query, so a
+  // query change never needs a reset-state-in-effect (stale data derives away).
+  const [data, setData] = useState<{ q: string; results: SearchResult[] } | null>(
+    null,
+  );
   const reqId = useRef(0);
 
+  const q = query.trim();
+  const active = q.length >= 2; // don't fire a TMDB request for a single character
+  const searched = active && data?.q === q;
+  const results = searched && data ? data.results : [];
+  const loading = active && !searched;
+
   useEffect(() => {
-    const q = query.trim();
-    if (q.length < 2) {
-      // Don't fire a TMDB request for a single character.
-      setResults([]);
-      setSearched(false);
-      return;
-    }
+    const qq = query.trim();
+    if (qq.length < 2) return;
     const id = ++reqId.current;
-    setLoading(true);
     const t = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
-        const data = await res.json();
-        if (id === reqId.current) {
-          setResults(data.results ?? []);
-          setSearched(true);
-        }
+        const res = await fetch(`/api/search?q=${encodeURIComponent(qq)}`);
+        const json = await res.json();
+        if (id === reqId.current) setData({ q: qq, results: json.results ?? [] });
       } catch {
-        if (id === reqId.current) setResults([]);
-      } finally {
-        if (id === reqId.current) setLoading(false);
+        if (id === reqId.current) setData({ q: qq, results: [] });
       }
     }, 350);
     return () => clearTimeout(t);
@@ -71,6 +69,8 @@ export function TmdbSearch({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder={placeholder}
+          aria-label="Search The Movie Database"
+          spellCheck={false}
           className="h-12 pl-11 text-base"
         />
         {loading && (

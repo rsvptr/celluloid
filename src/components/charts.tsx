@@ -110,7 +110,7 @@ export function Sparkline({
     const line = points.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
     const area = `${line} L${x(n - 1).toFixed(1)},${H} L${x(0).toFixed(1)},${H} Z`;
     return { line, area };
-  }, [points]);
+  }, [points, H]);
 
   if (points.length === 0) {
     return <p className="text-sm text-muted">Not enough data.</p>;
@@ -212,7 +212,11 @@ export function ActivityHeatmap({
 
   return (
     <div>
-      <div className="overflow-x-auto pb-1">
+      <div
+        className="overflow-x-auto pb-1"
+        role="img"
+        aria-label={`Watch activity heatmap: ${total} watched in the last year`}
+      >
         <div className="flex gap-[3px]">
           {cols.map((col, ci) => (
             <div key={ci} className="flex flex-col gap-[3px]">

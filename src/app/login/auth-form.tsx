@@ -106,6 +106,8 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
             placeholder={useBackup ? "backup code" : "123456"}
             inputMode={useBackup ? "text" : "numeric"}
             maxLength={useBackup ? 11 : 6}
+            autoComplete="one-time-code"
+            spellCheck={false}
             autoFocus
             className="tracking-widest"
           />
@@ -165,6 +167,7 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
             onChange={(e) => setEmail(e.target.value)}
             placeholder="you@example.com"
             autoComplete="email"
+            spellCheck={false}
             required
           />
         </Field>

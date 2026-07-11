@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, Tag as TagIcon, X } from "lucide-react";
+import { toast } from "sonner";
 import { Input } from "@/components/ui";
 import { createTag, toggleTitleTag } from "@/lib/actions";
 
@@ -31,16 +32,26 @@ export function TagEditor({
   function apply(tag: TagVM) {
     setTags((t) => [...t, tag]);
     startTransition(async () => {
-      await toggleTitleTag(titleId, tag.id, true);
-      router.refresh();
+      try {
+        await toggleTitleTag(titleId, tag.id, true);
+        router.refresh();
+      } catch {
+        setTags((t) => t.filter((x) => x.id !== tag.id)); // roll back optimistic add
+        toast.error(`Couldn't add “${tag.name}”. Please try again.`);
+      }
     });
   }
 
   function remove(tag: TagVM) {
     setTags((t) => t.filter((x) => x.id !== tag.id));
     startTransition(async () => {
-      await toggleTitleTag(titleId, tag.id, false);
-      router.refresh();
+      try {
+        await toggleTitleTag(titleId, tag.id, false);
+        router.refresh();
+      } catch {
+        setTags((t) => [...t, tag]); // roll back optimistic remove
+        toast.error(`Couldn't remove “${tag.name}”. Please try again.`);
+      }
     });
   }
 
@@ -56,10 +67,14 @@ export function TagEditor({
       return;
     }
     startTransition(async () => {
-      const id = await createTag(trimmed);
-      setTags((t) => [...t, { id, name: trimmed }]);
-      await toggleTitleTag(titleId, id, true);
-      router.refresh();
+      try {
+        const id = await createTag(trimmed);
+        setTags((t) => [...t, { id, name: trimmed }]);
+        await toggleTitleTag(titleId, id, true);
+        router.refresh();
+      } catch {
+        toast.error(`Couldn't create “${trimmed}”. Please try again.`);
+      }
     });
   }
 

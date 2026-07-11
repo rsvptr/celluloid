@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState, useTransition } from "react";
+import { useEffect, useId, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Heart, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -38,12 +38,29 @@ export function TitleControls({
   const [localNotes, setLocalNotes] = useState(notes ?? "");
   const [savedNotes, setSavedNotes] = useState(notes ?? "");
 
-  function save(patch: Parameters<typeof updateTitle>[1]) {
+  // Optimistic save with rollback: `revert` restores the local state if the
+  // server rejects the change, so the UI never silently shows unsaved state.
+  function save(patch: Parameters<typeof updateTitle>[1], revert?: () => void) {
     startTransition(async () => {
-      await updateTitle(id, patch);
-      router.refresh();
+      try {
+        await updateTitle(id, patch);
+        router.refresh();
+      } catch (e) {
+        revert?.();
+        toast.error((e as Error).message || "Couldn't save that change.");
+      }
     });
   }
+
+  // Notes are the one control with an explicit save step — warn before the tab
+  // closes with unsaved edits (in-app navigation keeps state via the router).
+  const notesDirty = localNotes !== savedNotes;
+  useEffect(() => {
+    if (!notesDirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [notesDirty]);
 
   return (
     <>
@@ -54,8 +71,9 @@ export function TitleControls({
           value={localStatus}
           onChange={(e) => {
             const v = e.target.value as WatchStatus;
+            const prev = localStatus;
             setLocalStatus(v);
-            save({ status: v });
+            save({ status: v }, () => setLocalStatus(prev));
           }}
           className="w-full"
         >
@@ -71,8 +89,9 @@ export function TitleControls({
         <RatingStars
           value={localRating}
           onChange={(v) => {
+            const prev = localRating;
             setLocalRating(v);
-            save({ rating: v });
+            save({ rating: v }, () => setLocalRating(prev));
           }}
         />
       </Field>
@@ -81,9 +100,11 @@ export function TitleControls({
         <input
           type="date"
           value={localWatchedAt}
+          aria-label="Date watched"
           onChange={(e) => {
+            const prev = localWatchedAt;
             setLocalWatchedAt(e.target.value);
-            save({ watchedAt: e.target.value || null });
+            save({ watchedAt: e.target.value || null }, () => setLocalWatchedAt(prev));
           }}
           className="h-10 w-full rounded-lg bg-surface-2 px-3 text-sm text-foreground ring-1 ring-line focus:outline-none focus:ring-2 focus:ring-brand/60 [color-scheme:dark]"
         />
@@ -102,7 +123,7 @@ export function TitleControls({
             {localNotes.length}/2000
           </p>
         )}
-        {localNotes !== savedNotes && (
+        {notesDirty && (
           <Button
             size="sm"
             variant="secondary"
@@ -131,10 +152,11 @@ export function TitleControls({
         <Button
           variant={localFav ? "primary" : "secondary"}
           size="sm"
+          aria-pressed={localFav}
           onClick={() => {
             const v = !localFav;
             setLocalFav(v);
-            save({ favorite: v });
+            save({ favorite: v }, () => setLocalFav(!v));
           }}
         >
           <Heart size={15} className={cn(localFav && "fill-current")} />

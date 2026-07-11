@@ -2,7 +2,6 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import QRCode from "qrcode";
 import { toast } from "sonner";
 import {
   Copy,
@@ -401,7 +400,10 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
         return;
       }
       const uri = (data as { totpURI?: string })?.totpURI;
-      setQr(uri ? await QRCode.toDataURL(uri, { margin: 1, width: 200 }) : null);
+      // qrcode is only needed for this one setup flow — load it on demand
+      // instead of shipping it in the settings bundle.
+      const QRCode = uri ? (await import("qrcode")).default : null;
+      setQr(uri && QRCode ? await QRCode.toDataURL(uri, { margin: 1, width: 200 }) : null);
       setSecret(uri ? secretFromUri(uri) : null);
       setBackupCodes((data as { backupCodes?: string[] })?.backupCodes ?? []);
       setPhase("setup");

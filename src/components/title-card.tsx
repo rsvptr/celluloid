@@ -119,6 +119,9 @@ function TitleCardImpl({
     </>
   );
 
+  // NOTE: no content-visibility here — its paint containment clips the hover
+  // ring (which extends past the card box) and fights the lift. The list rows
+  // use `cv-auto` instead; grid cards stay cheap via memo + plain CSS.
   const liftClass =
     "block transition duration-200 will-change-transform hover:-translate-y-1";
 

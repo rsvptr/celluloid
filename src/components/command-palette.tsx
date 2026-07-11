@@ -25,10 +25,11 @@ const NAV = [
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
-export function CommandPalette({ titles: seed }: { titles: TitleIndexEntry[] }) {
+export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry[] }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [titles, setTitles] = useState<TitleIndexEntry[]>(seed);
+  const [loaded, setLoaded] = useState(false);
   // Remember what was focused so we can restore it when the palette closes.
   const opener = useRef<HTMLElement | null>(null);
 
@@ -54,15 +55,19 @@ export function CommandPalette({ titles: seed }: { titles: TitleIndexEntry[] }) 
     };
   }, []);
 
-  // Refresh the index each time the palette opens so newly added/removed titles
-  // appear without a full reload (the server layout list can be stale).
+  // Fetch the index each time the palette opens: lazily on the first open (the
+  // layout no longer ships it with every page) and refreshed on later opens so
+  // newly added/removed titles appear without a full reload.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     fetch("/api/titles")
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (!cancelled && d?.titles) setTitles(d.titles as TitleIndexEntry[]);
+        if (!cancelled && d?.titles) {
+          setTitles(d.titles as TitleIndexEntry[]);
+          setLoaded(true);
+        }
       })
       .catch(() => {});
     return () => {
@@ -96,9 +101,9 @@ export function CommandPalette({ titles: seed }: { titles: TitleIndexEntry[] }) 
           className="h-12 w-full bg-transparent text-sm text-foreground outline-none placeholder:text-faint"
         />
       </div>
-      <Command.List className="max-h-[60vh] overflow-y-auto p-2">
+      <Command.List className="max-h-[60vh] overflow-y-auto overscroll-contain p-2">
         <Command.Empty className="px-3 py-6 text-center text-sm text-muted">
-          No matches.
+          {loaded || titles.length > 0 ? "No matches." : "Loading your titles…"}
         </Command.Empty>
 
         <Command.Group

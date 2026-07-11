@@ -51,6 +51,25 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Kill the 300ms double-tap-zoom delay on taps without disabling pinch zoom */
+button,
+a,
+select,
+input,
+textarea,
+label {
+  touch-action: manipulation;
+}
+
+/* Skip layout/paint for offscreen library LIST rows (a 500-title list renders
+   only what's visible). Deliberately not used on grid cards: paint containment
+   clips their hover ring/lift. The intrinsic size keeps the scrollbar honest
+   before first paint (once painted, `auto` remembers the real size). */
+.cv-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 61px;
+}
+
 /* --- Brand helpers --- */
 .brand-gradient {
   background-image: var(--brand-gradient);

@@ -115,8 +115,8 @@ export function MatchControls({
             <div
               className={
                 pending
-                  ? "pointer-events-none mt-3 min-h-0 flex-1 overflow-y-auto opacity-60"
-                  : "mt-3 min-h-0 flex-1 overflow-y-auto"
+                  ? "pointer-events-none mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain opacity-60"
+                  : "mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain"
               }
             >
               <TmdbSearch
