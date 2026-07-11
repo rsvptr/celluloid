@@ -55,6 +55,7 @@ Most trackers are good at storing what you watched and bad at the only question 
 ## What it does
 
 - Tracks films and TV in one library, with TMDB metadata, posters, seasons, and episodes pulled in automatically
+- Every matched title shows where to stream, rent, or buy it (region-aware, via JustWatch data), a trailer link, and a "More like this" row you can add from in one click
 - Half star ratings from 0.5 to 10, private notes, favorites, and free form tags
 - Per episode and per season tracking for shows, with a progress bar and quick "mark season" and "mark show" actions
 - Five watch states that map to a real backlog: watchlist, watching, watched, on hold, dropped
@@ -115,7 +116,9 @@ A few details that make the output better:
 
 You can steer a run with a free text focus ("cozy mysteries", "something like Bramayugam", "90s sci fi") or tap a mood preset. Three dropdowns narrow the pool further: original language, genre, and era, from the 2020s back to before 1970. A preference becomes a hard requirement in the brief, confirmed matches float to the top of the results, and your dial settings persist for the browsing session. A "show different" button keeps the same brief but excludes everything already shown, so you can keep pulling fresh ideas. Unmatched suggestions still appear with a "find on TMDB" link so you can add them by hand.
 
-**Models.** Claude Opus is the default. Sonnet and Haiku are selectable per run from the recommend page. The app adapts the request to each model: Opus and Sonnet use adaptive thinking and an effort setting, Haiku skips the options it does not support. Output is constrained to a JSON schema, and long responses are streamed so a request never times out.
+**Results stream in live.** The app doesn't wait for the whole batch: Claude's response is parsed as it streams, each suggestion is validated, deduplicated, and matched to TMDB the moment it completes, and cards appear one by one with a status line ("thinking", "curating picks", a running count) and a Stop button. Once enough suggestions have been accepted, generation is aborted server-side, so you never pay for output past what you asked for.
+
+**Models.** Claude Opus is the default. Sonnet and Haiku are selectable per run from the recommend page. The app adapts the request to each model: Opus 4.8 and Sonnet 5 use adaptive thinking and an effort setting, Haiku skips the options it does not support. Output is constrained to a JSON schema, and the taste brief carries an Anthropic prompt-cache breakpoint, so once your library is large enough to clear the cache minimum, "Show different" re-runs within a few minutes reprocess only the short run request instead of your whole taste brief.
 
 **Bring your own key.** Add an Anthropic key in settings and it is encrypted at rest with AES 256 GCM before it touches the database. A deployment wide key can also be set as a fallback.
 
@@ -151,7 +154,7 @@ The home screen is your whole collection, in a poster grid or a dense list.
 | Needs match | Only titles with no TMDB match, for cleanup |
 | Sort | Recently added, recently watched, name, release date, your rating, TMDB rating |
 
-On phones the filters collapse behind a single toggle and lay out as a clean two column drawer. Your filter, sort, and layout choices persist as you move around, so opening a title and coming back keeps your place while you work through a backlog.
+On phones the filters collapse behind a single toggle and lay out as a clean two column drawer. Your filter, sort, and layout choices live in the URL, so a filtered view is bookmarkable and shareable, and pressing Back after opening a title returns you to exactly the view you left while you work through a backlog. In the dense list view, offscreen rows skip rendering entirely (`content-visibility`), so even a very long list stays fast.
 
 **Bulk editing.** Switch on select mode and act on many titles at once: set a status, add or remove a tag, favorite or unfavorite, share, or remove. Selection is always scoped to what is visible, so a bulk action can never touch a hidden title.
 
@@ -422,7 +425,7 @@ celluloid/
 
 ## Keyboard and accessibility
 
-- A command palette opens from the header for fast navigation to any title or page.
+- A command palette opens from the header (⌘K on Mac, Ctrl+K elsewhere — the hint matches your platform) for fast navigation to any title or page.
 - The star rating is fully operable from the keyboard: arrow keys nudge by half or whole steps, Home and End jump to the ends, and 0 clears.
 - Every interactive control has a visible focus ring, icon only buttons carry labels, and toggles report their pressed state to screen readers.
 - The card hover lift and other motion respect the system "reduce motion" setting.
