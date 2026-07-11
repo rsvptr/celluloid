@@ -143,6 +143,21 @@ export function StatsClient({ stats }: { stats: LibraryStats }) {
           )}
         </Card>
 
+        {/* Taste by genre */}
+        {stats.byGenreRating.length > 0 && (
+          <Card className="p-5">
+            <h2 className="mb-1 text-sm font-semibold">Taste by genre</h2>
+            <p className="mb-4 text-xs text-muted">
+              Your average rating, for genres with at least 2 rated titles.
+            </p>
+            <div className="flex flex-col gap-2.5">
+              {stats.byGenreRating.map((g) => (
+                <BarRow key={g.genre} label={g.genre} value={g.avg} max={10} />
+              ))}
+            </div>
+          </Card>
+        )}
+
         {/* Top rated */}
         <Card className="p-5">
           <h2 className="mb-1 text-sm font-semibold">Your top rated</h2>

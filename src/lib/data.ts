@@ -329,17 +329,7 @@ export async function getTags(userId: string) {
   return prisma.tag.findMany({
     where: { userId },
     orderBy: { name: "asc" },
-    include: { _count: { select: { titles: true } } },
   });
-}
-
-export async function getDistinctLanguages(userId: string): Promise<string[]> {
-  const rows = await prisma.title.findMany({
-    where: { userId, language: { not: null } },
-    distinct: ["language"],
-    select: { language: true },
-  });
-  return rows.map((r) => r.language!).filter(Boolean).sort();
 }
 
 export interface LibraryFacets {
@@ -383,6 +373,8 @@ export interface LibraryStats {
   averageRating: number | null;
   ratingDistribution: { rating: number; count: number }[]; // ratings 1..10
   byGenre: { genre: string; count: number }[];
+  /** Average of YOUR ratings per genre (genres with at least 2 rated titles). */
+  byGenreRating: { genre: string; avg: number; count: number }[];
   // Watch activity (from watchedAt timestamps; sparse until tracked in-app)
   activity: { date: string; count: number }[]; // YYYY-MM-DD
   currentStreak: number;
@@ -432,6 +424,7 @@ export async function getStats(userId: string): Promise<LibraryStats> {
   const decadeCount = new Map<string, number>();
   const yearCount = new Map<number, number>();
   const genreCount = new Map<string, number>();
+  const genreRating = new Map<string, { sum: number; count: number }>();
   const ratingCount = new Array<number>(11).fill(0); // index = rating (1..10)
   const dayCount = new Map<string, number>(); // YYYY-MM-DD -> count
 
@@ -476,6 +469,12 @@ export async function getStats(userId: string): Promise<LibraryStats> {
       // Half-star ratings are bucketed to the nearest whole star for the histogram.
       const b = Math.round(t.rating);
       if (b >= 1 && b <= 10) ratingCount[b]++;
+      for (const g of t.genres) {
+        const agg = genreRating.get(g) ?? { sum: 0, count: 0 };
+        agg.sum += t.rating;
+        agg.count += 1;
+        genreRating.set(g, agg);
+      }
     }
   }
 
@@ -549,6 +548,16 @@ export async function getStats(userId: string): Promise<LibraryStats> {
       .map(([genre, count]) => ({ genre, count }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 12),
+    // One rated title says little about a genre; require two before averaging.
+    byGenreRating: [...genreRating.entries()]
+      .filter(([, agg]) => agg.count >= 2)
+      .map(([genre, agg]) => ({
+        genre,
+        avg: Math.round((agg.sum / agg.count) * 10) / 10,
+        count: agg.count,
+      }))
+      .sort((a, b) => b.avg - a.avg || b.count - a.count)
+      .slice(0, 8),
     topRated: rated.sort((a, b) => b.rating - a.rating).slice(0, 8),
     ratedCount: rated.length,
     averageRating,
