@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -19,6 +20,7 @@ import { MatchControls } from "@/components/match-controls";
 import { TitleControls } from "./title-controls";
 import { SeasonTracker } from "./season-tracker";
 import { TagEditor } from "./tag-editor";
+import { TitleExtras, TitleExtrasFallback } from "./title-extras";
 
 export default async function TitlePage({
   params,
@@ -154,10 +156,12 @@ export default async function TitlePage({
         </div>
       </div>
 
-      {/* Body: tracking + controls */}
+      {/* Body: tracking + controls, then streamed-in extras. DOM order keeps
+          phones sensible (tracker, controls, extras); on lg the aside is pinned
+          to the third column so the extras flow into the left two. */}
       <div className="grid gap-6 lg:grid-cols-3">
-        <div className="flex flex-col gap-6 lg:col-span-2">
-          {isTv ? (
+        {isTv && (
+          <div className="flex flex-col gap-6 lg:col-span-2">
             <SeasonTracker
               titleId={title.id}
               seasons={title.seasons.map((s) => ({
@@ -173,14 +177,10 @@ export default async function TitlePage({
                 })),
               }))}
             />
-          ) : (
-            <div className="hidden rounded-[var(--radius-card)] border border-dashed border-line p-6 text-sm text-muted lg:block">
-              Mark this movie&apos;s status and rating on the right.
-            </div>
-          )}
-        </div>
+          </div>
+        )}
 
-        <aside className="flex flex-col gap-5">
+        <aside className="flex flex-col gap-5 lg:col-start-3 lg:row-start-1">
           <TitleControls
             id={title.id}
             status={title.status}
@@ -195,6 +195,18 @@ export default async function TitlePage({
             all={allTags.map((t) => ({ id: t.id, name: t.name }))}
           />
         </aside>
+
+        {title.tmdbId != null && (
+          <div className="flex flex-col gap-6 lg:col-span-2 lg:col-start-1">
+            <Suspense fallback={<TitleExtrasFallback />}>
+              <TitleExtras
+                userId={user.id}
+                tmdbId={title.tmdbId}
+                mediaType={title.mediaType}
+              />
+            </Suspense>
+          </div>
+        )}
       </div>
     </div>
   );

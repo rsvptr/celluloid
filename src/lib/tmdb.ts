@@ -6,9 +6,6 @@
 const BASE = "https://api.themoviedb.org/3";
 export const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/";
 
-export type PosterSize = "w92" | "w154" | "w185" | "w342" | "w500" | "w780" | "original";
-export type StillSize = "w92" | "w185" | "w300" | "original";
-
 function getToken(): string {
   const t = process.env.TMDB_ACCESS_TOKEN;
   if (!t) {
@@ -77,30 +74,6 @@ async function tmdb<T>(
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
-}
-
-// --- Image + language helpers ---------------------------------------------
-
-export function tmdbImage(
-  path: string | null | undefined,
-  size: PosterSize | StillSize = "w342",
-): string | null {
-  if (!path) return null;
-  return `${TMDB_IMAGE_BASE}${size}${path}`;
-}
-
-const languageDisplay =
-  typeof Intl !== "undefined" && "DisplayNames" in Intl
-    ? new Intl.DisplayNames(["en"], { type: "language" })
-    : null;
-
-export function languageName(code: string | null | undefined): string | null {
-  if (!code) return null;
-  try {
-    return languageDisplay?.of(code) ?? code.toUpperCase();
-  } catch {
-    return code.toUpperCase();
-  }
 }
 
 // --- Response types --------------------------------------------------------
@@ -243,4 +216,82 @@ export function getSeason(tvId: number, seasonNumber: number): Promise<TmdbSeaso
     { language: "en-US" },
     { revalidate: 60 * 60 * 24 },
   );
+}
+
+// --- Title extras: watch providers, related titles, videos ------------------
+
+export interface TmdbProvider {
+  provider_id: number;
+  provider_name: string;
+  logo_path: string | null;
+  display_priority?: number;
+}
+
+export interface TmdbRegionProviders {
+  link?: string;
+  flatrate?: TmdbProvider[];
+  free?: TmdbProvider[];
+  ads?: TmdbProvider[];
+  rent?: TmdbProvider[];
+  buy?: TmdbProvider[];
+}
+
+export interface TmdbWatchProviders {
+  id: number;
+  results: Record<string, TmdbRegionProviders>;
+}
+
+export function getWatchProviders(
+  kind: "movie" | "tv",
+  id: number,
+): Promise<TmdbWatchProviders> {
+  return tmdb<TmdbWatchProviders>(
+    `/${kind}/${id}/watch/providers`,
+    {},
+    { revalidate: 60 * 60 * 24 },
+  );
+}
+
+export interface TmdbVideo {
+  site: string;
+  type: string;
+  official?: boolean;
+  key: string;
+  name: string;
+  published_at?: string;
+}
+
+export async function getVideos(kind: "movie" | "tv", id: number): Promise<TmdbVideo[]> {
+  const data = await tmdb<{ id: number; results: TmdbVideo[] }>(
+    `/${kind}/${id}/videos`,
+    { language: "en-US" },
+    { revalidate: 60 * 60 * 24 },
+  );
+  return data.results ?? [];
+}
+
+/**
+ * Titles related to this one, for the "More like this" row. TMDB's
+ * /recommendations (behavioral) beats /similar (metadata-only), but it's often
+ * empty for regional titles — fall back to /similar so those aren't blank.
+ */
+export async function getRelatedTitles(
+  kind: "movie" | "tv",
+  id: number,
+): Promise<TmdbSearchItem[]> {
+  const rec = await tmdb<TmdbPage<TmdbSearchItem>>(
+    `/${kind}/${id}/recommendations`,
+    { language: "en-US" },
+    { revalidate: 60 * 60 * 24 },
+  );
+  let results = rec.results ?? [];
+  if (results.length === 0) {
+    const sim = await tmdb<TmdbPage<TmdbSearchItem>>(
+      `/${kind}/${id}/similar`,
+      { language: "en-US" },
+      { revalidate: 60 * 60 * 24 },
+    );
+    results = sim.results ?? [];
+  }
+  return results.map((r) => ({ ...r, media_type: kind }));
 }
