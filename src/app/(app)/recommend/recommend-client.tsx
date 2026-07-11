@@ -2,15 +2,26 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
-import { Check, Film, Plus, RefreshCw, Search, Sparkles, Tv } from "lucide-react";
-import type { Recommendation } from "@/lib/recommend";
+import {
+  Check,
+  Film,
+  Plus,
+  RefreshCw,
+  Search,
+  Sparkles,
+  Square,
+  Tv,
+} from "lucide-react";
+import { toast } from "sonner";
+import type { Recommendation, RecStreamEvent } from "@/lib/recommend";
 import type { TitleIndexEntry } from "@/lib/data";
 import { Button, Card, Input, Select, Spinner } from "@/components/ui";
 import { Shimmer } from "@/components/skeleton";
 import { Poster } from "@/components/poster";
+import { AnimatePresence, motion, MotionProvider } from "@/components/motion";
 import { addFromTmdb } from "@/lib/actions";
 import { setRecommendModel } from "@/lib/settings-actions";
-import { REC_ERAS, REC_MODELS } from "@/lib/models";
+import { REC_ERAS, REC_MODELS, type RecEraId } from "@/lib/models";
 import { languageName } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +30,35 @@ const CONFIDENCE = {
   medium: "bg-amber-500/15 text-amber-300 ring-amber-500/30",
   low: "bg-slate-500/15 text-slate-300 ring-slate-500/30",
 } as const;
+
+type Phase = "idle" | "starting" | "thinking" | "generating";
+
+const PHASE_LABEL: Record<Exclude<Phase, "idle">, string> = {
+  starting: "Reading your taste brief…",
+  thinking: "Thinking about what fits your taste…",
+  generating: "Curating picks…",
+};
+
+/**
+ * Final ordering once the stream completes: preference-confirmed picks first
+ * (language/era verified via TMDB), then by the model's confidence, keeping
+ * stream order as the tiebreak. Mirrors the ranking the batch API used to do.
+ */
+function rankRecs(
+  list: Recommendation[],
+  prefLang?: string,
+  prefEra?: RecEraId | "",
+): Recommendation[] {
+  const confRank = { high: 0, medium: 1, low: 2 } as const;
+  const range = prefEra ? REC_ERAS.find((e) => e.id === prefEra)?.range : null;
+  const prefScore = (r: Recommendation) =>
+    (prefLang && r.language === prefLang ? 2 : 0) +
+    (range && r.year != null && r.year >= range[0] && r.year <= range[1] ? 1 : 0);
+  return list
+    .map((r, i) => ({ r, i, s: prefScore(r), c: confRank[r.confidence] ?? 3 }))
+    .sort((a, b) => b.s - a.s || a.c - b.c || a.i - b.i)
+    .map((x) => x.r);
+}
 
 // Mood presets that pre-fill the focus field (and optionally narrow the type).
 const PRESETS: { label: string; focus: string; type?: "movie" | "tv" }[] = [
@@ -55,10 +95,12 @@ export function RecommendClient({
   const [era, setEra] = useState("");
   const [model, setModel] = useState(initialModel);
   const [loading, setLoading] = useState(false);
+  const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [recs, setRecs] = useState<Recommendation[] | null>(null);
   // Titles shown this session, so "Show different" can ask for fresh ones.
   const seen = useRef<Set<string>>(new Set());
+  const abortRef = useRef<AbortController | null>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
   const [basisMode, setBasisMode] = useState<"all" | "recent" | "pick">("all");
   const [recentCount, setRecentCount] = useState(20);
@@ -123,6 +165,10 @@ export function RecommendClient({
     setRecommendModel(next).catch(() => {});
   }
 
+  function stop() {
+    abortRef.current?.abort();
+  }
+
   async function generate(over?: {
     focus?: string;
     type?: "all" | "movie" | "tv";
@@ -132,12 +178,19 @@ export function RecommendClient({
     const useType = over?.type ?? type;
     // A fresh run (button/preset) starts over; "Show different" keeps excluding.
     if (over?.reset) seen.current = new Set();
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
     setLoading(true);
+    setPhase("starting");
     setError(null);
+    setRecs([]);
+    const got: Recommendation[] = [];
     try {
       const res = await fetch("/api/recommend", {
         method: "POST",
         headers: { "content-type": "application/json" },
+        signal: ac.signal,
         body: JSON.stringify({
           count,
           type: useType,
@@ -155,35 +208,73 @@ export function RecommendClient({
           exclude: [...seen.current],
         }),
       });
-      // Read the body defensively: a 5xx can return an HTML error page, not JSON.
-      const data = await res.json().catch(() => null);
-      if (!res.ok) {
+      if (!res.ok || !res.body) {
+        // Pre-stream failures (auth, rate limit) come back as plain JSON.
+        const data = await res.json().catch(() => null);
         setError(
           data?.error ??
             (res.status === 429
               ? "You're going a bit fast. Please wait a moment and try again."
               : `Request failed (${res.status}). Please try again.`),
         );
-      } else if (data?.error) {
-        setError(data.error);
-      } else {
-        const list: Recommendation[] = data?.recommendations ?? [];
-        setRecs(list);
-        for (const r of list) seen.current.add(r.title);
+        return;
+      }
+
+      // Results stream in as NDJSON — render each suggestion the moment Claude
+      // produces it instead of staring at a spinner for the whole batch.
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      const handle = (ev: RecStreamEvent) => {
+        if (ev.type === "status") {
+          setPhase(ev.phase);
+        } else if (ev.type === "rec") {
+          got.push(ev.rec);
+          seen.current.add(ev.rec.title);
+          setRecs([...got]);
+        } else if (ev.type === "error") {
+          setError(ev.error);
+        }
+        // "done" needs no special handling: the final ranking happens below
+        // whether the stream completed or was stopped early.
+      };
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf("\n")) !== -1) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          try {
+            handle(JSON.parse(line) as RecStreamEvent);
+          } catch {
+            // skip malformed line
+          }
+        }
       }
     } catch (e) {
-      setError((e as Error).message);
+      if ((e as Error).name !== "AbortError") setError((e as Error).message);
     } finally {
-      setLoading(false);
+      // Ranking runs on whatever arrived — full run, stopped early, or errored
+      // partway (partial results stay useful alongside the error message).
+      if (got.length > 0) setRecs(rankRecs(got, language || undefined, era as RecEraId | ""));
+      if (abortRef.current === ac) {
+        setLoading(false);
+        setPhase("idle");
+      }
     }
   }
 
-  // When fresh results arrive, bring them into view (on mobile they sit below the form).
+  // Bring results into view as soon as the first suggestion streams in (on
+  // mobile they sit below the form).
+  const hasResults = (recs?.length ?? 0) > 0;
   useEffect(() => {
-    if (!loading && recs && recs.length > 0) {
+    if (hasResults) {
       resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }
-  }, [recs, loading]);
+  }, [hasResults]);
 
   function applyPreset(p: { focus: string; type?: "movie" | "tv" }) {
     setFocus(p.focus);
@@ -315,6 +406,7 @@ export function RecommendClient({
             <span className="text-xs font-medium text-faint">How many</span>
             <Input
               type="number"
+              inputMode="numeric"
               min={1}
               max={30}
               value={countStr}
@@ -408,51 +500,86 @@ export function RecommendClient({
         )}
       </Card>
 
-      {loading && (
-        <div className="flex flex-col gap-3">
-          <p className="text-center text-sm text-muted">
-            Analyzing your taste and finding matches. This can take up to a minute.
-          </p>
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Card key={i} className="flex items-start gap-3 p-3">
-              <Shimmer className="h-[84px] w-14 shrink-0" />
-              <div className="flex flex-1 flex-col gap-2 py-1">
-                <Shimmer className="h-4 w-2/5" />
-                <Shimmer className="h-3 w-1/4" />
-                <Shimmer className="h-3 w-full" />
-                <Shimmer className="h-3 w-3/4" />
-              </div>
-            </Card>
-          ))}
+      {(loading || (recs && recs.length > 0)) && (
+        <div ref={resultsRef} className="flex scroll-mt-20 flex-col gap-3">
+          <div className="flex items-center justify-between gap-3">
+            {loading && phase !== "idle" ? (
+              <p
+                role="status"
+                aria-live="polite"
+                className="flex items-center gap-2 text-xs text-muted"
+              >
+                <Spinner className="shrink-0" />
+                {PHASE_LABEL[phase]}
+                {recs && recs.length > 0 ? (
+                  <span className="tabular-nums">
+                    {recs.length} of {count} found
+                  </span>
+                ) : null}
+              </p>
+            ) : (
+              <p className="text-xs text-muted">
+                {recs!.length} {recs!.length === 1 ? "suggestion" : "suggestions"}
+              </p>
+            )}
+            {loading ? (
+              <button
+                type="button"
+                onClick={stop}
+                className="focus-ring flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground"
+              >
+                <Square size={13} />
+                Stop
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => generate()}
+                disabled={pickEmpty}
+                className="focus-ring flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <RefreshCw size={14} />
+                Show different
+              </button>
+            )}
+          </div>
+
+          <MotionProvider>
+            <AnimatePresence initial={false}>
+              {(recs ?? []).map((r) => (
+                <motion.div
+                  key={`${r.mediaType}:${r.tmdbId ?? r.title}`}
+                  layout
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+                >
+                  <RecCard rec={r} />
+                </motion.div>
+              ))}
+            </AnimatePresence>
+          </MotionProvider>
+
+          {loading &&
+            Array.from({ length: Math.min(2, Math.max(1, count - (recs?.length ?? 0))) }).map(
+              (_, i) => (
+                <Card key={`skeleton-${i}`} className="flex items-start gap-3 p-3">
+                  <Shimmer className="h-[84px] w-14 shrink-0" />
+                  <div className="flex flex-1 flex-col gap-2 py-1">
+                    <Shimmer className="h-4 w-2/5" />
+                    <Shimmer className="h-3 w-1/4" />
+                    <Shimmer className="h-3 w-full" />
+                  </div>
+                </Card>
+              ),
+            )}
         </div>
       )}
 
-      {!loading && recs && recs.length === 0 && (
+      {!loading && recs && recs.length === 0 && !error && (
         <p className="py-8 text-center text-sm text-muted">
           No suggestions came back. Try a different focus or count.
         </p>
-      )}
-
-      {!loading && recs && recs.length > 0 && (
-        <div ref={resultsRef} className="flex scroll-mt-20 flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <p className="text-xs text-muted">
-              {recs.length} {recs.length === 1 ? "suggestion" : "suggestions"}
-            </p>
-            <button
-              type="button"
-              onClick={() => generate()}
-              disabled={loading || pickEmpty}
-              className="focus-ring flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <RefreshCw size={14} />
-              Show different
-            </button>
-          </div>
-          {recs.map((r, i) => (
-            <RecCard key={`${r.mediaType}:${r.tmdbId ?? r.title}:${i}`} rec={r} />
-          ))}
-        </div>
       )}
     </div>
   );
@@ -461,8 +588,7 @@ export function RecommendClient({
 type AddState =
   | { kind: "idle" }
   | { kind: "adding" }
-  | { kind: "done"; id: string }
-  | { kind: "error" };
+  | { kind: "done"; id: string };
 
 function RecCard({ rec }: { rec: Recommendation }) {
   const [state, setState] = useState<AddState>({ kind: "idle" });
@@ -514,9 +640,14 @@ function RecCard({ rec }: { rec: Recommendation }) {
                 start(async () => {
                   setState({ kind: "adding" });
                   const res = await addFromTmdb(rec.tmdbId!, rec.mediaType);
-                  setState(
-                    res.id ? { kind: "done", id: res.id } : { kind: "error" },
-                  );
+                  if (res.id) {
+                    setState({ kind: "done", id: res.id });
+                  } else {
+                    setState({ kind: "idle" });
+                    toast.error(
+                      res.error ?? "Couldn't add that title. Please try again.",
+                    );
+                  }
                 })
               }
               className="focus-ring brand-gradient flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-[#04121c] hover:opacity-90 disabled:opacity-60"
@@ -608,7 +739,7 @@ function TitlePicker({
       ) : filtered.length === 0 ? (
         <p className="px-1 py-3 text-center text-xs text-muted">No titles match.</p>
       ) : (
-        <div className="max-h-60 overflow-y-auto">
+        <div className="max-h-60 overflow-y-auto overscroll-contain">
           {filtered.map((t) => {
             const on = selected.has(t.id);
             const Icon = t.mediaType === "TV" ? Tv : Film;

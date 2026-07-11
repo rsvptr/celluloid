@@ -1,11 +1,15 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { prisma } from "@/lib/prisma";
 import { MediaType } from "@/generated/prisma/client";
 import { getExportRows } from "@/lib/data";
 import { tasteSummary } from "@/lib/export/format";
 import { searchByType } from "@/lib/tmdb";
 import { norm, yearOf, pickBest, nameYearKey } from "@/lib/tmdb-match";
-import { anthropicClient, resolveAnthropicKey } from "@/lib/anthropic";
+import {
+  anthropicClient,
+  friendlyAnthropicError,
+  resolveAnthropicKey,
+} from "@/lib/anthropic";
+import { createRecExtractor } from "@/lib/rec-stream";
 import {
   DEFAULT_REC_MODEL,
   eraById,
@@ -23,6 +27,7 @@ export interface Recommendation {
   confidence: "high" | "medium" | "low";
   tmdbId?: number;
   posterPath?: string | null;
+  /** ISO-639-1 original language: TMDB-confirmed when matched, else the model's claim. */
   language?: string | null;
 }
 
@@ -53,10 +58,12 @@ export interface RecommendOptions {
   era?: RecEraId;
 }
 
-export interface RecommendResult {
-  recommendations?: Recommendation[];
-  error?: string;
-}
+/** Events emitted over the recommendation stream (NDJSON lines on the wire). */
+export type RecStreamEvent =
+  | { type: "status"; phase: "thinking" | "generating" }
+  | { type: "rec"; rec: Recommendation }
+  | { type: "done"; total: number }
+  | { type: "error"; error: string };
 
 const REC_SCHEMA: Record<string, unknown> = {
   type: "object",
@@ -71,18 +78,40 @@ const REC_SCHEMA: Record<string, unknown> = {
           title: { type: "string" },
           year: { type: ["integer", "null"] },
           mediaType: { type: "string", enum: ["movie", "tv"] },
+          language: {
+            type: ["string", "null"],
+            description: "ISO-639-1 code of the title's original language",
+          },
           reason: { type: "string" },
           confidence: { type: "string", enum: ["high", "medium", "low"] },
         },
-        required: ["title", "year", "mediaType", "reason", "confidence"],
+        required: ["title", "year", "mediaType", "language", "reason", "confidence"],
       },
     },
   },
   required: ["recommendations"],
 };
 
-function buildPrompt(
-  summary: string,
+// Static so the prompt prefix stays byte-identical across runs (prompt cache).
+const SYSTEM_PROMPT = `You are a film and TV curator with deep, worldwide knowledge of cinema — mainstream and regional, classic and current. You are given one person's complete watch history and asked for recommendations.
+
+Rules:
+- Recommend only real, released titles. Use the year of ORIGINAL release (first air date for TV).
+- Report each title's original language as an ISO-639-1 code.
+- Never recommend anything in the person's history or watchlist, anything they were already shown, or near-duplicates of either (remakes/re-releases count as duplicates only if they are the same work).
+- Titles rated 8+ and favorites are the strongest positive signal; low ratings, abandoned and dropped titles describe what to avoid; recent watches describe current mood.
+- Write each reason as ONE specific sentence tied to named titles or clear patterns in their history — never generic praise.
+- Be honest with confidence: "high" only when the fit is strong and specific.
+- If a hard requirement is given (language, genre, era, type), every suggestion must satisfy it.
+- Order the list from most to least confident.`;
+
+/** The cacheable part of the user turn: the taste brief. */
+function buildBriefBlock(summary: string): string {
+  return `${summary}`;
+}
+
+/** The volatile part of the user turn: this run's specific ask. */
+function buildRequestBlock(
   count: number,
   type: "all" | "movie" | "tv",
   focus?: string,
@@ -104,18 +133,17 @@ function buildPrompt(
     exclude && exclude.length
       ? ` I have already been shown these, so do NOT suggest any of them again: ${exclude.slice(0, 80).join(", ")}.`
       : "";
-  const prefClause =
-    [
-      language ? `originally in ${languageName(language)}` : "",
-      genre ? `in the ${genre} genre` : "",
-      era ? eraById(era).clause : "",
-    ]
-      .filter(Boolean)
-      .join(" and ");
+  const prefClause = [
+    language ? `originally in ${languageName(language)}` : "",
+    genre ? `in the ${genre} genre` : "",
+    era ? eraById(era).clause : "",
+  ]
+    .filter(Boolean)
+    .join(" and ");
   const preferClause = prefClause
-    ? ` Every suggestion must be ${prefClause}; do not include anything that doesn't fit.`
+    ? ` Hard requirement: every suggestion must be ${prefClause}.`
     : "";
-  return `${summary}\n\nBased on what I've rated highly and the patterns above, recommend ${count} titles I have NOT seen and that are NOT already on my watchlist.${focusClause}${preferClause}${excludeClause} ${typeClause} Strongly prefer titles that match what I rated highly; avoid obvious blockbusters unless they genuinely fit. Give each a specific one-sentence reason tied to my taste, plus a confidence level. Use the year of original release. Order from most to least confident.`;
+  return `Based on my taste brief above, recommend ${count} titles I have NOT seen and that are NOT already on my watchlist.${focusClause}${preferClause}${excludeClause} ${typeClause} Strongly prefer titles that match what I rated highly; avoid obvious blockbusters unless they genuinely fit. Return the full ${count} suggestions: when you run out of strong fits, include lower-confidence picks and label their confidence honestly rather than shortening the list.`;
 }
 
 /** Defensive shape check for a model-produced recommendation. */
@@ -132,43 +160,75 @@ function isValidRec(x: unknown): x is Recommendation {
   );
 }
 
-async function mapLimit<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const out: R[] = new Array(items.length);
-  let idx = 0;
-  const worker = async () => {
-    while (idx < items.length) {
-      const i = idx++;
-      out[i] = await fn(items[i]);
-    }
-  };
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length || 1) }, worker),
-  );
-  return out;
+interface StreamContext {
+  existingSet: Set<string>;
+  libNameYear: Set<string>;
+  excludeSet: Set<string>;
+  seenKeys: Set<string>;
 }
 
-export async function generateRecommendations(
+/**
+ * Try to enrich one model suggestion with its TMDB match. Returns null when the
+ * suggestion turns out to already be in the library; returns the (possibly
+ * unenriched) rec otherwise.
+ */
+async function enrichRec(
+  r: Recommendation,
+  ctx: StreamContext,
+): Promise<Recommendation | null> {
+  try {
+    const results = await searchByType(r.mediaType, r.title);
+    const best = pickBest(results, r.title, r.year);
+    if (!best) return r;
+    const mt = r.mediaType === "tv" ? MediaType.TV : MediaType.MOVIE;
+    if (ctx.existingSet.has(`${mt}:${best.id}`)) return null; // already in library
+    const resolvedYear = r.year ?? yearOf(best);
+    // TMDB may supply a year the model omitted; re-check ownership with it.
+    if (ctx.libNameYear.has(nameYearKey(r.mediaType, r.title, resolvedYear))) return null;
+    return {
+      ...r,
+      tmdbId: best.id,
+      posterPath: best.poster_path ?? null,
+      year: resolvedYear,
+      // TMDB's language is authoritative; fall back to the model's claim.
+      language: best.original_language ?? r.language ?? null,
+    };
+  } catch {
+    return r;
+  }
+}
+
+/**
+ * Run one recommendation request end to end, emitting events as results become
+ * available: the Claude response streams in, each completed suggestion is
+ * validated, deduped and TMDB-enriched immediately, and generation is aborted
+ * early once enough suggestions have been accepted (saving tokens and time).
+ */
+export async function runRecommendationStream(
   userId: string,
-  opts: RecommendOptions = {},
-): Promise<RecommendResult> {
+  opts: RecommendOptions,
+  emit: (e: RecStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
   const count = Math.min(30, Math.max(1, opts.count ?? 12));
   const type = opts.type ?? "all";
 
   const key = await resolveAnthropicKey(userId);
   if (!key) {
-    return {
-      error:
-        "No Anthropic API key found. Add one in Settings to use AI recommendations.",
-    };
+    emit({
+      type: "error",
+      error: "No Anthropic API key found. Add one in Settings to use AI recommendations.",
+    });
+    return;
   }
 
   const rows = await getExportRows(userId);
   if (rows.length === 0) {
-    return { error: "Add a few titles first so the AI has something to learn from." };
+    emit({
+      type: "error",
+      error: "Add a few titles first so the AI has something to learn from.",
+    });
+    return;
   }
 
   // Precedence: explicit per-run model > the user's saved default > server default.
@@ -204,20 +264,22 @@ export async function generateRecommendations(
     const idSet = new Set(basis.ids ?? []);
     basisRows = rows.filter((r) => idSet.has(r.id));
     if (basisRows.length === 0) {
-      return { error: "Pick at least one title to base recommendations on." };
+      emit({ type: "error", error: "Pick at least one title to base recommendations on." });
+      return;
     }
   }
 
-  // Over-ask generously so type/in-library/dedup/exclude attrition (which grows
-  // as "Show different" accumulates) still leaves ~count usable results. Type-
-  // constrained runs lose more: the model often returns a mix that the post-filter
-  // halves, so ask harder when a single type is requested. A language/genre
-  // preference narrows the pool further, so add a little more headroom.
+  // Over-ask so type/in-library/dedup/exclude attrition still leaves ~count
+  // usable results. Generation is aborted the moment `count` are accepted, so
+  // the over-ask costs nothing when attrition turns out to be low.
   const hasPref = !!(opts.language || opts.genre || opts.era);
   const baseAsk = type === "all" ? count * 2 : count * 3 + 10;
   const askCount = Math.min(50, hasPref ? baseAsk + 10 : baseAsk);
-  const prompt = buildPrompt(
+
+  const brief = buildBriefBlock(
     tasteSummary(basisRows, { watchlist: fullWatchlist, abandoned: fullAbandoned }),
+  );
+  const request = buildRequestBlock(
     askCount,
     type,
     opts.focus,
@@ -227,123 +289,128 @@ export async function generateRecommendations(
     opts.era,
   );
 
-  let recs: Recommendation[];
-  try {
-    const client = anthropicClient(key);
-    // Stream so long outputs don't trip the route's request timeout.
-    const res = await client.messages
-      .stream({
-        model,
-        max_tokens: 16000,
-        // Opus/Sonnet take adaptive thinking; Haiku 4.5 doesn't.
-        ...(caps.adaptiveThinking
-          ? { thinking: { type: "adaptive" as const } }
-          : {}),
-        output_config: {
-          // `effort` 400s on Haiku 4.5 — only send it where supported.
-          ...(caps.effort ? { effort: "medium" as const } : {}),
-          format: { type: "json_schema", schema: REC_SCHEMA },
-        },
-        messages: [{ role: "user", content: prompt }],
-      })
-      .finalMessage();
-    const text = res.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("");
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      return {
-        error: "The AI response couldn't be read. Please try again.",
-      };
-    }
-    const list = (parsed as { recommendations?: unknown })?.recommendations;
-    recs = Array.isArray(list) ? list.filter(isValidRec) : [];
-    if (recs.length === 0) {
-      return {
-        error:
-          "The AI didn't return any usable suggestions. Try again, or tweak your focus.",
-      };
-    }
-  } catch (e) {
-    console.error("Recommendation request failed:", e);
-    return { error: `AI request failed: ${(e as Error).message}` };
-  }
-
-  if (type !== "all") recs = recs.filter((r) => r.mediaType === type);
-
-  // Drop near-duplicate suggestions (e.g. two spellings of the same film).
-  const recSeen = new Set<string>();
-  recs = recs.filter((r) => {
-    const k = nameYearKey(r.mediaType, r.title, r.year);
-    if (recSeen.has(k)) return false;
-    recSeen.add(k);
-    return true;
-  });
-
-  // Two ways to detect "I already own this": by TMDB id (matched titles) and by
-  // normalized name+year (covers unmatched titles, common for regional films).
+  // Dedup / ownership context shared by every suggestion in this run.
   const existing = await prisma.title.findMany({
     where: { userId, tmdbId: { not: null } },
     select: { tmdbId: true, mediaType: true },
   });
-  const existingSet = new Set(existing.map((e) => `${e.mediaType}:${e.tmdbId}`));
-  const libNameYear = new Set(
-    rows.map((r) => nameYearKey(r.mediaType, r.name, r.year)),
-  );
-  // Titles already shown this session (a "show different" run), matched by name.
-  const excludeSet = new Set((opts.exclude ?? []).map((t) => norm(t)));
+  const ctx: StreamContext = {
+    existingSet: new Set(existing.map((e) => `${e.mediaType}:${e.tmdbId}`)),
+    libNameYear: new Set(rows.map((r) => nameYearKey(r.mediaType, r.name, r.year))),
+    excludeSet: new Set((opts.exclude ?? []).map((t) => norm(t))),
+    seenKeys: new Set(),
+  };
 
-  const enriched = await mapLimit(recs, 6, async (r): Promise<Recommendation | null> => {
-    // Already in the library by name+year (matched or not)? Skip it.
-    if (libNameYear.has(nameYearKey(r.mediaType, r.title, r.year))) return null;
-    // Already shown this session? Skip it.
-    if (excludeSet.has(norm(r.title))) return null;
-    try {
-      const results = await searchByType(r.mediaType, r.title);
-      const best = pickBest(results, r.title, r.year);
-      if (!best) return r;
-      const mt = r.mediaType === "tv" ? MediaType.TV : MediaType.MOVIE;
-      if (existingSet.has(`${mt}:${best.id}`)) return null; // already in library
-      const resolvedYear = r.year ?? yearOf(best);
-      // TMDB may supply a year the model omitted; re-check ownership with it.
-      if (libNameYear.has(nameYearKey(r.mediaType, r.title, resolvedYear))) return null;
-      return {
-        ...r,
-        tmdbId: best.id,
-        posterPath: best.poster_path ?? null,
-        year: resolvedYear,
-        language: best.original_language ?? null,
-      };
-    } catch {
-      return r;
-    }
+  const client = anthropicClient(key);
+  const stream = client.messages.stream({
+    model,
+    max_tokens: 16000,
+    // Opus / Sonnet take adaptive thinking; Haiku 4.5 doesn't.
+    ...(caps.adaptiveThinking ? { thinking: { type: "adaptive" as const } } : {}),
+    output_config: {
+      // `effort` 400s on Haiku 4.5 — only send it where supported.
+      ...(caps.effort ? { effort: "medium" as const } : {}),
+      format: { type: "json_schema", schema: REC_SCHEMA },
+    },
+    system: [{ type: "text", text: SYSTEM_PROMPT }],
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: brief,
+            // Cache breakpoint AFTER the brief: system + brief form a stable
+            // prefix, so "Show different" and preset re-runs within the TTL
+            // reprocess only the short run request below (~90% cheaper, faster
+            // time-to-first-suggestion).
+            cache_control: { type: "ephemeral" },
+          },
+          { type: "text", text: request },
+        ],
+      },
+    ],
   });
-
-  // Surface the model's strongest picks first and, crucially, sort BEFORE the
-  // slice so attrition can't drop a high-confidence rec while keeping a low one.
-  const confRank = { high: 0, medium: 1, low: 2 } as const;
-  let ranked = enriched
-    .filter((r): r is Recommendation => r !== null)
-    .sort((a, b) => (confRank[a.confidence] ?? 3) - (confRank[b.confidence] ?? 3));
-
-  // If a language or era was requested, float confirmed matches (by the TMDB-
-  // resolved language/year) to the top. This is a soft rank, not a hard filter:
-  // it never drops a suggestion that couldn't be confirmed, so results don't
-  // collapse to empty when enrichment can't verify a field.
-  if (opts.language || opts.era) {
-    const range = opts.era ? eraById(opts.era).range : null;
-    const prefScore = (r: Recommendation) =>
-      (opts.language && r.language === opts.language ? 2 : 0) +
-      (range && r.year != null && r.year >= range[0] && r.year <= range[1] ? 1 : 0);
-    ranked = ranked
-      .map((r, i) => ({ r, i, s: prefScore(r) }))
-      .sort((a, b) => b.s - a.s || a.i - b.i) // stable: index breaks ties
-      .map((x) => x.r);
+  if (signal) {
+    // Client went away (or asked to stop): stop paying for generation.
+    signal.addEventListener("abort", () => stream.abort(), { once: true });
   }
 
-  return { recommendations: ranked.slice(0, count) };
+  const extractor = createRecExtractor();
+  let accepted = 0;
+  let statusSent: "thinking" | "generating" | null = null;
+  let stopped = false; // no further emits once set (enough results, or a failure)
+  // Round-robin lanes bound enrichment concurrency: a model that bursts out 40
+  // suggestions can't burst-fire 40 TMDB searches at once.
+  const lanes: Promise<void>[] = Array.from({ length: 5 }, () => Promise.resolve());
+  let nextLane = 0;
+
+  const handleParsed = (raw: unknown) => {
+    if (stopped || accepted >= count) return;
+    if (!isValidRec(raw)) return;
+    const rec = raw as Recommendation;
+    // Near-duplicate of an earlier suggestion this run?
+    const k = nameYearKey(rec.mediaType, rec.title, rec.year);
+    if (ctx.seenKeys.has(k)) return;
+    ctx.seenKeys.add(k);
+    // Already shown this session, or already in the library by name+year?
+    if (ctx.excludeSet.has(norm(rec.title))) return;
+    if (ctx.libNameYear.has(k)) return;
+    if (opts.type && opts.type !== "all" && rec.mediaType !== opts.type) return;
+
+    // Enrich concurrently with parsing; emit the moment each one resolves.
+    const lane = nextLane++ % lanes.length;
+    lanes[lane] = lanes[lane].then(async () => {
+      if (stopped || accepted >= count) return;
+      const r = await enrichRec(rec, ctx);
+      if (!r || stopped || accepted >= count) return;
+      accepted++;
+      emit({ type: "rec", rec: r });
+      if (accepted >= count) {
+        // Enough accepted — stop the model mid-generation to save tokens.
+        stopped = true;
+        stream.abort();
+      }
+    });
+  };
+
+  try {
+    for await (const event of stream) {
+      if (event.type === "content_block_start") {
+        if (event.content_block.type === "thinking" && statusSent === null) {
+          statusSent = "thinking";
+          emit({ type: "status", phase: "thinking" });
+        }
+      } else if (event.type === "content_block_delta") {
+        if (event.delta.type === "text_delta") {
+          if (statusSent !== "generating") {
+            statusSent = "generating";
+            emit({ type: "status", phase: "generating" });
+          }
+          for (const item of extractor.push(event.delta.text)) handleParsed(item);
+        }
+      }
+    }
+  } catch (e) {
+    // An abort we triggered (enough results) or the client triggered is not an
+    // error; anything else gets a friendly explanation. Partial results already
+    // emitted stay valid — the client keeps them alongside the error.
+    if (!stopped && !signal?.aborted) {
+      stopped = true;
+      await Promise.allSettled(lanes);
+      console.error("Recommendation request failed:", e);
+      emit({ type: "error", error: friendlyAnthropicError(e) });
+      return;
+    }
+  }
+
+  await Promise.allSettled(lanes);
+  if (accepted === 0) {
+    emit({
+      type: "error",
+      error: "The AI didn't return any usable suggestions. Try again, or tweak your focus.",
+    });
+    return;
+  }
+  emit({ type: "done", total: accepted });
 }

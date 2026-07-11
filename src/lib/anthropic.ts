@@ -26,3 +26,34 @@ export async function resolveAnthropicKey(userId: string): Promise<string | null
 export function anthropicClient(apiKey: string): Anthropic {
   return new Anthropic({ apiKey });
 }
+
+/**
+ * Map an Anthropic SDK error to a message a person can act on, using the SDK's
+ * typed error classes (never string-matching). Falls back to the raw message.
+ */
+export function friendlyAnthropicError(e: unknown): string {
+  if (e instanceof Anthropic.AuthenticationError) {
+    return "Your Anthropic API key was rejected. Check it in Settings (it may have been revoked).";
+  }
+  if (e instanceof Anthropic.PermissionDeniedError) {
+    return "Your Anthropic API key doesn't have access to this model. Try another model, or check your plan.";
+  }
+  if (e instanceof Anthropic.RateLimitError) {
+    return "Anthropic is rate-limiting your key right now. Wait a moment and try again.";
+  }
+  if (e instanceof Anthropic.NotFoundError) {
+    return "That model isn't available to your API key. Pick a different model and try again.";
+  }
+  if (e instanceof Anthropic.InternalServerError) {
+    return e.type === "overloaded_error"
+      ? "Claude is briefly overloaded. Try again in a few seconds, or switch models."
+      : "The Anthropic API hit a server error. Please try again.";
+  }
+  if (e instanceof Anthropic.APIConnectionError) {
+    return "Couldn't reach the Anthropic API. Check your connection and try again.";
+  }
+  if (e instanceof Anthropic.APIError) {
+    return `AI request failed: ${e.message}`;
+  }
+  return `AI request failed: ${(e as Error).message ?? "unknown error"}`;
+}

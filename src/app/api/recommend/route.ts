@@ -1,5 +1,9 @@
 import { getSession } from "@/lib/session";
-import { generateRecommendations, type RecommendBasis } from "@/lib/recommend";
+import {
+  runRecommendationStream,
+  type RecommendBasis,
+  type RecStreamEvent,
+} from "@/lib/recommend";
 import { isRecEra } from "@/lib/models";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 
@@ -23,6 +27,10 @@ function parseBasis(raw: unknown): RecommendBasis | undefined {
 export const runtime = "nodejs";
 export const maxDuration = 60; // Claude + TMDB enrichment can take a while
 
+/**
+ * Streams recommendations as NDJSON (one RecStreamEvent per line) so results
+ * appear the moment Claude produces them, instead of after the whole batch.
+ */
 export async function POST(request: Request) {
   const session = await getSession();
   if (!session?.user) {
@@ -56,9 +64,12 @@ export async function POST(request: Request) {
         .slice(0, 100)
     : undefined;
 
-  const result = await generateRecommendations(session.user.id, {
+  const opts = {
     count: typeof body.count === "number" ? body.count : undefined,
-    type: body.type === "movie" || body.type === "tv" ? body.type : "all",
+    type: (body.type === "movie" || body.type === "tv" ? body.type : "all") as
+      | "movie"
+      | "tv"
+      | "all",
     // Bound the free-text focus so it can't bloat the prompt / token spend.
     focus: typeof body.focus === "string" ? body.focus.slice(0, 280) : undefined,
     model: typeof body.model === "string" ? body.model : undefined,
@@ -73,9 +84,44 @@ export async function POST(request: Request) {
       typeof body.genre === "string" && body.genre
         ? body.genre.slice(0, 40)
         : undefined,
-    era:
-      typeof body.era === "string" && isRecEra(body.era) ? body.era : undefined,
+    era: typeof body.era === "string" && isRecEra(body.era) ? body.era : undefined,
+  };
+
+  const encoder = new TextEncoder();
+  const userId = session.user.id;
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const emit = (e: RecStreamEvent) => {
+        try {
+          controller.enqueue(encoder.encode(JSON.stringify(e) + "\n"));
+        } catch {
+          // Controller already closed (client went away) — nothing to do.
+        }
+      };
+      try {
+        await runRecommendationStream(userId, opts, emit, request.signal);
+      } catch (err) {
+        console.error("Recommendation stream crashed:", err);
+        emit({ type: "error", error: "Something went wrong. Please try again." });
+      } finally {
+        try {
+          controller.close();
+        } catch {
+          // already closed
+        }
+      }
+    },
+    cancel() {
+      // Reader cancelled; runRecommendationStream also observes request.signal.
+    },
   });
 
-  return Response.json(result);
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-store",
+      // Tell proxies not to buffer — results must reach the client as produced.
+      "X-Accel-Buffering": "no",
+    },
+  });
 }

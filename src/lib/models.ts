@@ -3,7 +3,7 @@
 
 export const REC_MODELS = [
   { id: "claude-opus-4-8", label: "Claude Opus 4.8", note: "Most capable · default" },
-  { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", note: "Faster, lower cost" },
+  { id: "claude-sonnet-5", label: "Claude Sonnet 5", note: "Near-Opus quality, faster" },
   { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", note: "Fastest, cheapest" },
 ] as const;
 
@@ -42,14 +42,15 @@ export function eraById(id: RecEraId) {
   return REC_ERAS.find((e) => e.id === id)!;
 }
 
-// Per-model request-surface capabilities. Opus 4.8 / Sonnet 4.6 take adaptive
+// Per-model request-surface capabilities. Opus 4.8 / Sonnet 5 take adaptive
 // thinking + the `effort` knob; Haiku 4.5 rejects `effort` (400) and has no
-// adaptive thinking, so we omit both for it.
+// adaptive thinking, so we omit both for it. (A user whose saved default was
+// the retired Sonnet 4.6 entry simply falls back to the default model.)
 export const MODEL_CAPS: Record<
   RecModelId,
   { effort: boolean; adaptiveThinking: boolean }
 > = {
   "claude-opus-4-8": { effort: true, adaptiveThinking: true },
-  "claude-sonnet-4-6": { effort: true, adaptiveThinking: true },
+  "claude-sonnet-5": { effort: true, adaptiveThinking: true },
   "claude-haiku-4-5": { effort: false, adaptiveThinking: false },
 };
