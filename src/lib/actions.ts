@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { MediaType, WatchStatus } from "@/generated/prisma/client";
 import type { Prisma } from "@/generated/prisma/client";
 import { getMovie, getSeason, getTv } from "@/lib/tmdb";
+import { mapLimit } from "@/lib/async";
 
 async function getUserId(): Promise<string> {
   const session = await getSession();
@@ -94,12 +95,13 @@ export async function updateTitle(
   });
   if (!title) throw new Error("Not found");
 
-  // When a movie is completed without an explicit date, stamp it so it feeds
-  // the stats activity/streaks (only if not already dated).
+  // When a title is completed without an explicit date, stamp it so it feeds
+  // the stats activity/streaks and the AI recency signal (only if not already
+  // dated). Applies to TV too: marking a show WATCHED from its status select is
+  // as deliberate a completion as ticking the last episode.
   const autoWatchedAt =
     data.watchedAt === undefined &&
     data.status === WatchStatus.WATCHED &&
-    title.mediaType === MediaType.MOVIE &&
     title.watchedAt == null
       ? new Date()
       : undefined;
@@ -220,14 +222,14 @@ async function fetchSeasonData(
     .filter((n) => n >= 1)
     .sort((a, b) => a - b);
 
-  const seasons: FetchedSeason[] = [];
-  let allOk = true;
-  for (const n of seasonNumbers) {
-    const sd = await getSeason(tvTmdbId, n).catch(() => null);
-    if (sd) seasons.push({ n, sd });
-    else allOk = false;
-  }
-  return { seasons, allOk };
+  // Season fetches are independent — run them concurrently (bounded, so a
+  // 40-season soap doesn't burst-fire at TMDB) instead of one at a time.
+  const fetched = await mapLimit(seasonNumbers, 6, async (n) => ({
+    n,
+    sd: await getSeason(tvTmdbId, n).catch(() => null),
+  }));
+  const seasons = fetched.filter((f): f is FetchedSeason => f.sd !== null);
+  return { seasons, allOk: seasons.length === seasonNumbers.length };
 }
 
 /**
@@ -539,16 +541,38 @@ export async function bulkSetStatus(ids: string[], status: WatchStatus) {
         where: { season: { titleId: { in: tvIds } }, watched: false },
         data: { watched: true, watchedAt: now },
       });
-      for (const titleId of tvIds) {
-        const c = await prisma.episode.count({ where: { season: { titleId } } });
-        // For an episode-less TV title (e.g. unmatched import) don't fabricate a
-        // watchedAt — that would pollute the activity heatmap/streaks.
-        await prisma.title.update({
-          where: { id: titleId },
-          data:
-            c > 0
-              ? { status, watchedEpisodes: c, watchedAt: now }
-              : { status, watchedEpisodes: 0 },
+      // One grouped count instead of a query per selected show.
+      const counts = await prisma.episode.groupBy({
+        by: ["seasonId"],
+        where: { season: { titleId: { in: tvIds } } },
+        _count: { _all: true },
+      });
+      const seasonRows = await prisma.season.findMany({
+        where: { titleId: { in: tvIds } },
+        select: { id: true, titleId: true },
+      });
+      const titleOfSeason = new Map(seasonRows.map((s) => [s.id, s.titleId]));
+      const epTotals = new Map<string, number>();
+      for (const c of counts) {
+        const titleId = titleOfSeason.get(c.seasonId);
+        if (titleId) epTotals.set(titleId, (epTotals.get(titleId) ?? 0) + c._count._all);
+      }
+      await Promise.all(
+        tvIds.map((titleId) =>
+          prisma.title.update({
+            where: { id: titleId },
+            data: { status, watchedEpisodes: epTotals.get(titleId) ?? 0 },
+          }),
+        ),
+      );
+      // Stamp completion dates only where episodes exist (an episode-less
+      // unmatched import shouldn't fabricate activity) and only where no real
+      // date is set already — mirroring the movie branch above.
+      const withEpisodes = tvIds.filter((id) => (epTotals.get(id) ?? 0) > 0);
+      if (withEpisodes.length) {
+        await prisma.title.updateMany({
+          where: { id: { in: withEpisodes }, userId, watchedAt: null },
+          data: { watchedAt: now },
         });
       }
     }
