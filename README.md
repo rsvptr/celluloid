@@ -118,7 +118,7 @@ You can steer a run with a free text focus ("cozy mysteries", "something like Br
 
 **Results stream in live.** The app doesn't wait for the whole batch: Claude's response is parsed as it streams, each suggestion is validated, deduplicated, and matched to TMDB the moment it completes, and cards appear one by one with a status line ("thinking", "curating picks", a running count) and a Stop button. Once enough suggestions have been accepted, generation is aborted server-side, so you never pay for output past what you asked for.
 
-**Models.** Claude Opus is the default. Sonnet and Haiku are selectable per run from the recommend page. The app adapts the request to each model: Opus 4.8 and Sonnet 5 use adaptive thinking and an effort setting, Haiku skips the options it does not support. Output is constrained to a JSON schema, and the taste brief carries an Anthropic prompt-cache breakpoint, so once your library is large enough to clear the cache minimum, "Show different" re-runs within a few minutes reprocess only the short run request instead of your whole taste brief.
+**Models.** Claude Opus is the default. Sonnet and Haiku are selectable per run from the recommend page. The app adapts the request to each model: Opus 4.8 and Sonnet 5 use adaptive thinking and an effort setting, Haiku skips the options it does not support. Output is constrained to a JSON schema, and the taste brief carries an Anthropic prompt-cache breakpoint, so once your library is large enough to clear the cache minimum, a "Show different" re-run a few minutes later reprocesses only the short request block instead of your whole taste brief.
 
 **Bring your own key.** Add an Anthropic key in settings and it is encrypted at rest with AES 256 GCM before it touches the database. A deployment wide key can also be set as a fallback.
 
@@ -425,7 +425,7 @@ celluloid/
 
 ## Keyboard and accessibility
 
-- A command palette opens from the header (⌘K on Mac, Ctrl+K elsewhere — the hint matches your platform) for fast navigation to any title or page.
+- A command palette opens from the header (⌘K on Mac, Ctrl+K elsewhere; the hint matches your platform) for fast navigation to any title or page.
 - The star rating is fully operable from the keyboard: arrow keys nudge by half or whole steps, Home and End jump to the ends, and 0 clears.
 - Every interactive control has a visible focus ring, icon only buttons carry labels, and toggles report their pressed state to screen readers.
 - The card hover lift and other motion respect the system "reduce motion" setting.
