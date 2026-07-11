@@ -48,6 +48,10 @@ mycreds.txt
 # local tooling (Claude Code preview config + local settings)
 .claude/
 
+# locally installed agent skills (dev-time guidance, not app code)
+.agents/
+skills-lock.json
+
 # personal data (your own watch history; keep it off a public repo)
 /data/*.xlsx
 
