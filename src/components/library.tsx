@@ -1,6 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import {
+  filtersToParams,
+  type LibraryFilters,
+  type SortKey,
+  type TypeFilter,
+} from "@/lib/library-filters";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -26,7 +32,7 @@ import { TitleCard } from "./title-card";
 import { Poster } from "./poster";
 import { ShareDialog } from "./share-dialog";
 import { useConfirm } from "./confirm-dialog";
-import { AnimatePresence, motion } from "./motion";
+import { AnimatePresence, motion, MotionProvider } from "./motion";
 import { STATUS_META, STATUS_ORDER, languageName, progressPct } from "@/lib/format";
 import {
   bulkAddTag,
@@ -36,9 +42,6 @@ import {
   bulkSetStatus,
 } from "@/lib/actions";
 import { cn } from "@/lib/utils";
-
-type SortKey = "added" | "watched" | "name" | "release" | "myrating" | "tmdb";
-type TypeFilter = "all" | "MOVIE" | "TV";
 
 const SORTS: { key: SortKey; label: string }[] = [
   { key: "added", label: "Recently added" },
@@ -53,22 +56,26 @@ export function Library({
   items,
   languages,
   tags,
+  genres,
+  initialFilters,
 }: {
   items: LibraryItem[];
   languages: string[];
   tags: string[];
+  genres: string[];
+  initialFilters: LibraryFilters;
 }) {
   const router = useRouter();
-  const [query, setQuery] = useState("");
-  const [type, setType] = useState<TypeFilter>("all");
-  const [status, setStatus] = useState<WatchStatus | "all">("all");
-  const [language, setLanguage] = useState<string>("all");
-  const [tag, setTag] = useState<string>("all");
-  const [genre, setGenre] = useState<string>("all");
-  const [rating, setRating] = useState<string>("all");
-  const [sort, setSort] = useState<SortKey>("added");
-  const [view, setView] = useState<"grid" | "list">("grid");
-  const [onlyUnmatched, setOnlyUnmatched] = useState(false);
+  const [query, setQuery] = useState(initialFilters.query);
+  const [type, setType] = useState<TypeFilter>(initialFilters.type);
+  const [status, setStatus] = useState<WatchStatus | "all">(initialFilters.status);
+  const [language, setLanguage] = useState<string>(initialFilters.language);
+  const [tag, setTag] = useState<string>(initialFilters.tag);
+  const [genre, setGenre] = useState<string>(initialFilters.genre);
+  const [rating, setRating] = useState<string>(initialFilters.rating);
+  const [sort, setSort] = useState<SortKey>(initialFilters.sort);
+  const [view, setView] = useState<"grid" | "list">(initialFilters.view);
+  const [onlyUnmatched, setOnlyUnmatched] = useState(initialFilters.onlyUnmatched);
   const [showFilters, setShowFilters] = useState(false); // mobile filter drawer
 
   const [selectMode, setSelectMode] = useState(false);
@@ -78,69 +85,29 @@ export function Library({
   // Remember what was focused when the share dialog opened, to restore on close.
   const shareOpener = useRef<HTMLElement | null>(null);
 
-  // Persist the filter/sort/view within the browsing session so returning from a
-  // title detail (e.g. while working through the "Unrated" backlog) keeps the same
-  // view instead of resetting to all titles. Session-scoped: a fresh tab starts clean.
-  const skipFirstWrite = useRef(true);
+  // Mirror the view into the URL (replaceState: no history spam, no server
+  // round trip) so the current filters are shareable, bookmarkable, and restored
+  // when you come back from a title detail via the browser's Back button.
   useEffect(() => {
-    try {
-      const raw = sessionStorage.getItem("celluloid:libview");
-      if (!raw) return;
-      const s = JSON.parse(raw);
-      // Validate every restored value against what's actually selectable now.
-      // A stale value (say, a tag deleted since) would otherwise filter the list
-      // invisibly while the select renders its first option.
-      const oneOf = <T,>(v: unknown, allowed: readonly T[]): v is T =>
-        allowed.includes(v as T);
-      if (typeof s.query === "string") setQuery(s.query.slice(0, 200));
-      if (oneOf(s.type, ["all", "MOVIE", "TV"] as const)) setType(s.type);
-      if (
-        oneOf(s.status, [
-          "all",
-          "WATCHLIST",
-          "WATCHING",
-          "WATCHED",
-          "ON_HOLD",
-          "DROPPED",
-        ] as const)
-      )
-        setStatus(s.status);
-      if (s.language === "all" || languages.includes(s.language)) setLanguage(s.language);
-      if (s.tag === "all" || tags.includes(s.tag)) setTag(s.tag);
-      if (s.genre === "all" || items.some((it) => it.genres.includes(s.genre)))
-        setGenre(s.genre);
-      if (oneOf(s.rating, ["all", "unrated", "9", "8", "7", "6", "5"] as const))
-        setRating(s.rating);
-      if (SORTS.some((x) => x.key === s.sort)) setSort(s.sort);
-      if (s.view === "grid" || s.view === "list") setView(s.view);
-      if (typeof s.onlyUnmatched === "boolean") setOnlyUnmatched(s.onlyUnmatched);
-    } catch {
-      // ignore malformed/unavailable storage
-    }
-    // Mount-only by design; props are stable for the life of this page view.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  useEffect(() => {
-    // Skip the mount write so it can't clobber saved state before the hydrate
-    // effect's restored values have propagated.
-    if (skipFirstWrite.current) {
-      skipFirstWrite.current = false;
-      return;
-    }
-    try {
-      sessionStorage.setItem(
-        "celluloid:libview",
-        JSON.stringify({ query, type, status, language, tag, genre, rating, sort, view, onlyUnmatched }),
-      );
-    } catch {
-      // storage may be unavailable (private mode); persistence is best-effort
+    const qs = filtersToParams({
+      query: query.trim(),
+      type,
+      status,
+      language,
+      tag,
+      genre,
+      rating: rating as LibraryFilters["rating"],
+      sort,
+      view,
+      onlyUnmatched,
+    }).toString();
+    const next = qs
+      ? `${window.location.pathname}?${qs}`
+      : window.location.pathname;
+    if (`${window.location.pathname}${window.location.search}` !== next) {
+      window.history.replaceState(window.history.state, "", next);
     }
   }, [query, type, status, language, tag, genre, rating, sort, view, onlyUnmatched]);
-
-  const genres = useMemo(
-    () => [...new Set(items.flatMap((it) => it.genres))].sort(),
-    [items],
-  );
 
   const hasFilters =
     query !== "" ||
@@ -188,24 +155,10 @@ export function Library({
     return list;
   }, [items, query, type, status, language, tag, genre, rating, sort, onlyUnmatched]);
 
-  // Keep selection in sync with what's visible: drop any selected id that's no
-  // longer in the filtered set (after a filter change or a refresh that removed
-  // titles), so bulk actions can never touch hidden titles.
-  useEffect(() => {
-    setSelected((prev) => {
-      if (prev.size === 0) return prev;
-      const visible = new Set(filtered.map((f) => f.id));
-      let changed = false;
-      const next = new Set<string>();
-      for (const id of prev) {
-        if (visible.has(id)) next.add(id);
-        else changed = true;
-      }
-      return changed ? next : prev;
-    });
-  }, [filtered]);
-
   // The authoritative selection for actions: visible AND selected, in view order.
+  // Deriving the intersection here (instead of pruning `selected` in an effect)
+  // means bulk actions still can never touch hidden titles, while a title that's
+  // filtered away and back keeps its checkmark.
   const selectedIds = useMemo(
     () => filtered.filter((f) => selected.has(f.id)).map((f) => f.id),
     [filtered, selected],
@@ -330,10 +283,18 @@ export function Library({
               </>
             )}
             <div className="flex items-center gap-1 rounded-lg bg-surface-2 p-0.5 ring-1 ring-line">
-              <ViewToggle active={view === "grid"} onClick={() => setView("grid")}>
+              <ViewToggle
+                active={view === "grid"}
+                onClick={() => setView("grid")}
+                label="Grid view"
+              >
                 <LayoutGrid size={16} />
               </ViewToggle>
-              <ViewToggle active={view === "list"} onClick={() => setView("list")}>
+              <ViewToggle
+                active={view === "list"}
+                onClick={() => setView("list")}
+                label="List view"
+              >
                 <List size={16} />
               </ViewToggle>
             </div>
@@ -350,6 +311,8 @@ export function Library({
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search your library…"
+              aria-label="Search your library"
+              spellCheck={false}
               className="pl-9"
             />
           </div>
@@ -371,7 +334,11 @@ export function Library({
                 : "hidden sm:contents",
             )}
           >
-          <Select value={type} onChange={(e) => setType(e.target.value as TypeFilter)}>
+          <Select
+            value={type}
+            onChange={(e) => setType(e.target.value as TypeFilter)}
+            aria-label="Filter by type"
+          >
             <option value="all">All types</option>
             <option value="MOVIE">Movies</option>
             <option value="TV">TV shows</option>
@@ -379,6 +346,7 @@ export function Library({
           <Select
             value={status}
             onChange={(e) => setStatus(e.target.value as WatchStatus | "all")}
+            aria-label="Filter by status"
           >
             <option value="all">Any status</option>
             {STATUS_ORDER.map((s) => (
@@ -388,7 +356,11 @@ export function Library({
             ))}
           </Select>
           {languages.length > 1 && (
-            <Select value={language} onChange={(e) => setLanguage(e.target.value)}>
+            <Select
+              value={language}
+              onChange={(e) => setLanguage(e.target.value)}
+              aria-label="Filter by language"
+            >
               <option value="all">Any language</option>
               {languages.map((l) => (
                 <option key={l} value={l}>
@@ -398,7 +370,11 @@ export function Library({
             </Select>
           )}
           {genres.length > 1 && (
-            <Select value={genre} onChange={(e) => setGenre(e.target.value)}>
+            <Select
+              value={genre}
+              onChange={(e) => setGenre(e.target.value)}
+              aria-label="Filter by genre"
+            >
               <option value="all">Any genre</option>
               {genres.map((g) => (
                 <option key={g} value={g}>
@@ -407,7 +383,11 @@ export function Library({
               ))}
             </Select>
           )}
-          <Select value={rating} onChange={(e) => setRating(e.target.value)}>
+          <Select
+            value={rating}
+            onChange={(e) => setRating(e.target.value)}
+            aria-label="Filter by rating"
+          >
             <option value="all">Any rating</option>
             <option value="unrated">Unrated</option>
             <option value="9">9+</option>
@@ -417,7 +397,11 @@ export function Library({
             <option value="5">5+</option>
           </Select>
           {tags.length > 0 && (
-            <Select value={tag} onChange={(e) => setTag(e.target.value)}>
+            <Select
+              value={tag}
+              onChange={(e) => setTag(e.target.value)}
+              aria-label="Filter by tag"
+            >
               <option value="all">Any tag</option>
               {tags.map((t) => (
                 <option key={t} value={t}>
@@ -426,7 +410,11 @@ export function Library({
               ))}
             </Select>
           )}
-          <Select value={sort} onChange={(e) => setSort(e.target.value as SortKey)}>
+          <Select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as SortKey)}
+            aria-label="Sort titles"
+          >
             {SORTS.map((s) => (
               <option key={s.key} value={s.key}>
                 {s.label}
@@ -436,6 +424,7 @@ export function Library({
           <button
             onClick={() => setOnlyUnmatched((v) => !v)}
             title="Show titles with no TMDB match"
+            aria-pressed={onlyUnmatched}
             className={cn(
               "focus-ring rounded-lg px-2.5 py-1.5 text-sm ring-1 transition-colors",
               onlyUnmatched
@@ -575,6 +564,7 @@ function BulkBar({
   return (
     <>
       {dialog}
+      <MotionProvider>
       <AnimatePresence>
       {open && (
         <motion.div
@@ -704,6 +694,7 @@ function BulkBar({
         </motion.div>
       )}
       </AnimatePresence>
+      </MotionProvider>
     </>
   );
 }
@@ -711,15 +702,20 @@ function BulkBar({
 function ViewToggle({
   active,
   onClick,
+  label,
   children,
 }: {
   active: boolean;
   onClick: () => void;
+  label: string;
   children: React.ReactNode;
 }) {
   return (
     <button
       onClick={onClick}
+      aria-label={label}
+      title={label}
+      aria-pressed={active}
       className={cn(
         "focus-ring flex h-9 w-9 items-center justify-center rounded-md transition-colors sm:h-7 sm:w-7",
         active ? "bg-surface text-foreground" : "text-muted hover:text-foreground",
@@ -780,7 +776,7 @@ function ListRow({
       <button
         onClick={() => onToggle(item.id)}
         className={cn(
-          "focus-ring flex items-center gap-3 px-3 py-2.5 text-left transition-colors",
+          "cv-auto focus-ring flex items-center gap-3 px-3 py-2.5 text-left transition-colors",
           selected ? "bg-brand/10" : "bg-surface hover:bg-surface-2/50",
         )}
       >
@@ -800,7 +796,7 @@ function ListRow({
   return (
     <Link
       href={`/title/${item.id}`}
-      className="focus-ring flex items-center gap-3 bg-surface px-3 py-2.5 transition-colors hover:bg-surface-2/50"
+      className="cv-auto focus-ring flex items-center gap-3 bg-surface px-3 py-2.5 transition-colors hover:bg-surface-2/50"
     >
       {inner}
     </Link>
