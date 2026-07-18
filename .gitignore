@@ -35,39 +35,14 @@ yarn-error.log*
 .env.*
 !.env.example
 
-# attached plaintext key files (secrets now live in .env)
-*Details.txt
-
-# personal credential notes (keep real passwords out of git)
-mycreds.txt
-*creds*.txt
-
-# exported API keys file (existing *creds*.txt / *Details.txt patterns don't match this name)
-API keys.txt
-
-# local audit artifacts (agent-generated codebase audit reports, not app docs)
-/*AUDIT*.md
+# personal data (your own watch history; keep it off a public repo)
+/data/*.xlsx
 
 # vercel
 .vercel
-
-# local tooling (Claude Code preview config + local settings)
-.claude/
-
-# locally installed agent skills (dev-time guidance, not app code)
-.agents/
-skills-lock.json
-
-# untracked local artifacts (agent collaboration notes, TMDB reference docs)
-.agent-collaboration/
-tmdb-docs/
-
-# personal data (your own watch history; keep it off a public repo)
-/data/*.xlsx
 
 # typescript
 *.tsbuildinfo
 next-env.d.ts
 
 /src/generated/prisma
-backups/
