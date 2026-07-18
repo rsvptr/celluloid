@@ -3,8 +3,17 @@
  * (Bearer). Never import this into client components — it reads a secret.
  */
 
+import {
+  imdbUrl,
+  pickCreators,
+  pickDirector,
+  pickMovieCertification,
+  pickTopCast,
+  pickTvCertification,
+  type TitleCastMember,
+} from "@/lib/tmdb-extras";
+
 const BASE = "https://api.themoviedb.org/3";
-export const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/";
 
 function getToken(): string {
   const t = process.env.TMDB_ACCESS_TOKEN;
@@ -43,6 +52,14 @@ async function tmdb<T>(
       },
     };
     if (opts.revalidate !== undefined) init.next = { revalidate: opts.revalidate };
+
+    // Bound the request so a stalled TMDB response can't hang indefinitely
+    // and bypass the retry/backoff below (which only triggers on rejection
+    // or a non-2xx response).
+    const timeoutSignal = AbortSignal.timeout(8000);
+    init.signal = init.signal
+      ? AbortSignal.any([init.signal, timeoutSignal])
+      : timeoutSignal;
 
     let res: Response;
     try {
@@ -236,22 +253,6 @@ export interface TmdbRegionProviders {
   buy?: TmdbProvider[];
 }
 
-export interface TmdbWatchProviders {
-  id: number;
-  results: Record<string, TmdbRegionProviders>;
-}
-
-export function getWatchProviders(
-  kind: "movie" | "tv",
-  id: number,
-): Promise<TmdbWatchProviders> {
-  return tmdb<TmdbWatchProviders>(
-    `/${kind}/${id}/watch/providers`,
-    {},
-    { revalidate: 60 * 60 * 24 },
-  );
-}
-
 export interface TmdbVideo {
   site: string;
   type: string;
@@ -261,37 +262,212 @@ export interface TmdbVideo {
   published_at?: string;
 }
 
-export async function getVideos(kind: "movie" | "tv", id: number): Promise<TmdbVideo[]> {
-  const data = await tmdb<{ id: number; results: TmdbVideo[] }>(
-    `/${kind}/${id}/videos`,
-    { language: "en-US" },
-    { revalidate: 60 * 60 * 24 },
-  );
-  return data.results ?? [];
+// --- Title bundle: one append_to_response request ---------------------------
+// A single /movie/{id} or /tv/{id} call carries everything the title page's
+// extras need (videos, providers, recommendations, credits, external ids and a
+// certification source) as nested keys, replacing 3-4 round trips with one.
+
+/** A cast row on a movie `credits` response. */
+export interface TmdbCastCredit {
+  id: number;
+  name: string;
+  original_name?: string;
+  character?: string;
+  profile_path: string | null;
+  order?: number;
+  known_for_department?: string;
+}
+
+/** A crew row on a movie `credits` response. */
+export interface TmdbCrewCredit {
+  id: number;
+  name: string;
+  original_name?: string;
+  job?: string;
+  department?: string;
+  profile_path: string | null;
+}
+
+export interface TmdbCredits {
+  cast?: TmdbCastCredit[];
+  crew?: TmdbCrewCredit[];
+}
+
+/** One credited role within a TV `aggregate_credits` cast row. */
+export interface TmdbAggregateRole {
+  credit_id?: string;
+  character?: string;
+  episode_count?: number;
+}
+
+/** One credited job within a TV `aggregate_credits` crew row. */
+export interface TmdbAggregateJob {
+  credit_id?: string;
+  job?: string;
+  episode_count?: number;
+}
+
+/** A cast row on a TV `aggregate_credits` response (roles are aggregated). */
+export interface TmdbAggregateCastCredit {
+  id: number;
+  name: string;
+  roles?: TmdbAggregateRole[];
+  total_episode_count?: number;
+  order?: number;
+  profile_path: string | null;
+}
+
+/** A crew row on a TV `aggregate_credits` response (jobs are aggregated). */
+export interface TmdbAggregateCrewCredit {
+  id: number;
+  name: string;
+  jobs?: TmdbAggregateJob[];
+  department?: string;
+  total_episode_count?: number;
+  profile_path: string | null;
+}
+
+export interface TmdbAggregateCredits {
+  cast?: TmdbAggregateCastCredit[];
+  crew?: TmdbAggregateCrewCredit[];
+}
+
+/** A single certification entry within a movie `release_dates` region result. */
+export interface TmdbReleaseDate {
+  certification: string;
+  iso_639_1?: string;
+  note?: string;
+  release_date?: string;
+  type?: number;
+}
+
+/** A per-region group of release dates on a movie `release_dates` response. */
+export interface TmdbReleaseDatesResult {
+  iso_3166_1: string;
+  release_dates: TmdbReleaseDate[];
+}
+
+/** A per-region rating on a TV `content_ratings` response. */
+export interface TmdbContentRating {
+  iso_3166_1: string;
+  rating: string;
+  descriptors?: string[];
+}
+
+export interface TmdbExternalIds {
+  imdb_id?: string | null;
+  wikidata_id?: string | null;
+  facebook_id?: string | null;
+  instagram_id?: string | null;
+  twitter_id?: string | null;
+}
+
+/** A TV `created_by` entry from the detail response. */
+export interface TmdbCreatedBy {
+  id: number;
+  credit_id?: string;
+  name: string;
+  gender?: number;
+  profile_path?: string | null;
 }
 
 /**
- * Titles related to this one, for the "More like this" row. TMDB's
- * /recommendations (behavioral) beats /similar (metadata-only), but it's often
- * empty for regional titles — fall back to /similar so those aren't blank.
+ * A /movie/{id} or /tv/{id} response with our append_to_response sub-objects
+ * attached as nested keys. Every appended field is optional: TMDB omits an
+ * append entirely when the title has no data for it.
  */
-export async function getRelatedTitles(
+interface TmdbAppendedDetail {
+  id: number;
+  imdb_id?: string | null;
+  created_by?: TmdbCreatedBy[];
+  videos?: { results?: TmdbVideo[] };
+  "watch/providers"?: { results?: Record<string, TmdbRegionProviders> };
+  recommendations?: TmdbPage<TmdbSearchItem>;
+  credits?: TmdbCredits;
+  aggregate_credits?: TmdbAggregateCredits;
+  external_ids?: TmdbExternalIds;
+  release_dates?: { results?: TmdbReleaseDatesResult[] };
+  content_ratings?: { results?: TmdbContentRating[] };
+}
+
+/** Normalized, render-ready payload for the title page's extras. */
+export interface TitleBundle {
+  /** Raw provider results keyed by region — feed to regionWatchInfo(results, region). */
+  providersResults: Record<string, TmdbRegionProviders> | undefined;
+  /** Related titles, media_type-tagged, with the /similar fallback already applied. */
+  related: TmdbSearchItem[];
+  /** Raw videos — feed to pickTrailer(videos). */
+  videos: TmdbVideo[];
+  /**
+   * Age/content certification for the viewer's streaming region (falls back
+   * to any region with data), or null.
+   */
+  certification: string | null;
+  /** Top-billed cast, ordered by billing and capped. */
+  topCast: TitleCastMember[];
+  /** Director(s) for movies; empty for TV. */
+  directors: string[];
+  /** Creator(s) for TV; empty for movies. */
+  creators: string[];
+  /** Canonical IMDb URL, or null when TMDB has no imdb_id. */
+  imdbUrl: string | null;
+}
+
+/**
+ * Everything the title page's below-the-fold extras need, in ONE TMDB request.
+ * Appends videos, watch/providers, recommendations, credits (aggregate_credits
+ * for TV), external_ids and the per-kind certification source onto the detail
+ * response. Only when recommendations come back empty do we spend a second
+ * request on /similar — matching the old recommendations -> similar fallback,
+ * so worst case is 2 calls and the typical case is 1 (down from 3-4).
+ *
+ * `region` localizes the certification badge to the viewer's streaming region
+ * (the same picker that scopes watch providers); it does not affect the fetch
+ * URL, so the 24h response cache stays shared across regions.
+ */
+export async function getTitleBundle(
   kind: "movie" | "tv",
   id: number,
-): Promise<TmdbSearchItem[]> {
-  const rec = await tmdb<TmdbPage<TmdbSearchItem>>(
-    `/${kind}/${id}/recommendations`,
-    { language: "en-US" },
+  region = "US",
+): Promise<TitleBundle> {
+  const appends =
+    kind === "movie"
+      ? "videos,watch/providers,recommendations,credits,external_ids,release_dates"
+      : "videos,watch/providers,recommendations,aggregate_credits,external_ids,content_ratings";
+
+  const data = await tmdb<TmdbAppendedDetail>(
+    `/${kind}/${id}`,
+    { language: "en-US", append_to_response: appends },
     { revalidate: 60 * 60 * 24 },
   );
-  let results = rec.results ?? [];
-  if (results.length === 0) {
+
+  // Recommendations ride along in the bundle; only when they're empty do we
+  // spend one more request on /similar so regional titles aren't left blank.
+  let relatedRaw = data.recommendations?.results ?? [];
+  if (relatedRaw.length === 0) {
     const sim = await tmdb<TmdbPage<TmdbSearchItem>>(
       `/${kind}/${id}/similar`,
       { language: "en-US" },
       { revalidate: 60 * 60 * 24 },
-    );
-    results = sim.results ?? [];
+    ).catch(() => null);
+    relatedRaw = sim?.results ?? [];
   }
-  return results.map((r) => ({ ...r, media_type: kind }));
+  const related = relatedRaw.map((r) => ({ ...r, media_type: kind }));
+
+  const credits = kind === "movie" ? data.credits : data.aggregate_credits;
+
+  return {
+    providersResults: data["watch/providers"]?.results,
+    related,
+    videos: data.videos?.results ?? [],
+    certification:
+      kind === "movie"
+        ? pickMovieCertification(data.release_dates?.results, region)
+        : pickTvCertification(data.content_ratings?.results, region),
+    topCast: pickTopCast(credits),
+    directors: kind === "movie" ? pickDirector(data.credits) : [],
+    creators:
+      kind === "tv" ? pickCreators(data.created_by, data.aggregate_credits?.crew) : [],
+    imdbUrl: imdbUrl(data.external_ids),
+  };
 }

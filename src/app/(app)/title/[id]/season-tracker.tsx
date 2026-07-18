@@ -84,13 +84,14 @@ export function SeasonTracker({
 
   function toggleEpisode(epId: string) {
     const next = !watched[epId];
-    const prev = watched;
     setWatched((w) => ({ ...w, [epId]: next }));
     startTransition(async () => {
       try {
         await setEpisodeWatched(epId, next);
       } catch {
-        setWatched(prev); // roll back optimistic update on failure
+        // Roll back only this episode, not the whole map — a concurrent
+        // successful toggle elsewhere shouldn't be clobbered.
+        setWatched((w) => ({ ...w, [epId]: !next }));
       } finally {
         router.refresh();
       }
@@ -98,7 +99,7 @@ export function SeasonTracker({
   }
 
   function toggleSeason(season: SeasonVM, value: boolean) {
-    const prev = watched;
+    const prevValues = new Map(season.episodes.map((e) => [e.id, watched[e.id]]));
     setWatched((w) => {
       const copy = { ...w };
       for (const e of season.episodes) copy[e.id] = value;
@@ -108,7 +109,12 @@ export function SeasonTracker({
       try {
         await setSeasonWatched(season.id, value);
       } catch {
-        setWatched(prev);
+        // Roll back only this season's episodes, not the whole map.
+        setWatched((w) => {
+          const copy = { ...w };
+          for (const [id, v] of prevValues) copy[id] = v;
+          return copy;
+        });
       } finally {
         router.refresh();
       }
@@ -116,7 +122,7 @@ export function SeasonTracker({
   }
 
   function toggleAll(value: boolean) {
-    const prev = watched;
+    const prevValues = new Map(allEpisodes.map((e) => [e.id, watched[e.id]]));
     setWatched((w) => {
       const copy = { ...w };
       for (const e of allEpisodes) copy[e.id] = value;
@@ -126,7 +132,12 @@ export function SeasonTracker({
       try {
         await setAllEpisodesWatched(titleId, value);
       } catch {
-        setWatched(prev);
+        // Roll back only the episodes this action touched, not the whole map.
+        setWatched((w) => {
+          const copy = { ...w };
+          for (const [id, v] of prevValues) copy[id] = v;
+          return copy;
+        });
       } finally {
         router.refresh();
       }
@@ -150,7 +161,12 @@ export function SeasonTracker({
       </div>
 
       <div className="h-1.5 overflow-hidden rounded-full bg-surface-2">
-        <div className="brand-gradient h-full transition-all" style={{ width: `${pct}%` }} />
+        {/* Animate the fill with a GPU-friendly scaleX (origin-left) and scope the
+            transition to transform only — transition-all also animated layout. */}
+        <div
+          className="brand-gradient h-full w-full origin-left transition-transform"
+          style={{ transform: `scaleX(${Math.max(0, Math.min(1, pct / 100))})` }}
+        />
       </div>
 
       <div className="flex flex-col gap-2">
@@ -173,7 +189,7 @@ export function SeasonTracker({
                     }))
                   }
                   aria-expanded={isOpen}
-                  className="flex flex-1 items-center gap-3 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/60"
+                  className="flex min-h-11 flex-1 items-center gap-3 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/60 sm:min-h-0"
                 >
                   <ChevronDown
                     size={16}
@@ -192,7 +208,7 @@ export function SeasonTracker({
                   onClick={() => toggleSeason(season, !sComplete)}
                   aria-pressed={sComplete}
                   className={cn(
-                    "focus-ring shrink-0 rounded-md px-2 py-1 text-xs ring-1 transition-colors",
+                    "focus-ring flex min-h-11 shrink-0 items-center justify-center rounded-md px-2 py-1 text-xs ring-1 transition-colors sm:min-h-0",
                     sComplete
                       ? "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30"
                       : "bg-surface-2 text-muted ring-line hover:text-foreground",
@@ -211,7 +227,10 @@ export function SeasonTracker({
                         <button
                           onClick={() => toggleEpisode(ep.id)}
                           aria-pressed={isWatched}
-                          className="focus-ring flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-surface-2/40"
+                          // min-h grows the whole row's hit target to >=44px on
+                          // touch without inflating the h-5 w-5 checkbox glyph;
+                          // sm:min-h-0 restores the original content-driven height.
+                          className="focus-ring flex min-h-11 w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-surface-2/40 sm:min-h-0"
                         >
                           <span
                             className={cn(

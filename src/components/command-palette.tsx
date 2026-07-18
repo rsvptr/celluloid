@@ -19,7 +19,7 @@ import type { TitleIndexEntry } from "@/lib/data";
 const NAV = [
   { href: "/", label: "Library", icon: Film },
   { href: "/add", label: "Add a title", icon: Plus },
-  { href: "/recommend", label: "AI recommendations", icon: Sparkles },
+  { href: "/recommend", label: "Recommendations", icon: Sparkles },
   { href: "/stats", label: "Stats", icon: BarChart3 },
   { href: "/export", label: "Export", icon: Download },
   { href: "/settings", label: "Settings", icon: Settings },
@@ -90,7 +90,7 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
       }}
       label="Command menu"
       overlayClassName="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm"
-      contentClassName="fixed left-1/2 top-[12vh] z-50 w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 overflow-hidden rounded-2xl bg-surface ring-1 ring-line shadow-2xl"
+      contentClassName="fixed left-1/2 top-[12dvh] z-50 w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 overflow-hidden rounded-2xl bg-surface ring-1 ring-line shadow-2xl"
     >
       <DialogTitle className="sr-only">Command menu</DialogTitle>
       <div className="flex items-center gap-2 border-b border-line px-4">
@@ -98,10 +98,10 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
         <Command.Input
           autoFocus
           placeholder="Search titles or jump to a page…"
-          className="h-12 w-full bg-transparent text-sm text-foreground outline-none placeholder:text-faint"
+          className="h-12 w-full bg-transparent text-base text-foreground outline-none placeholder:text-faint sm:text-sm"
         />
       </div>
-      <Command.List className="max-h-[60vh] overflow-y-auto overscroll-contain p-2">
+      <Command.List className="max-h-[60dvh] overflow-y-auto overscroll-contain p-2">
         <Command.Empty className="px-3 py-6 text-center text-sm text-muted">
           {loaded || titles.length > 0 ? "No matches." : "Loading your titles…"}
         </Command.Empty>
@@ -117,7 +117,7 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
                 key={n.href}
                 value={`go ${n.label}`}
                 onSelect={() => go(n.href)}
-                className="flex cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-foreground/90 data-[selected=true]:bg-surface-2 data-[selected=true]:text-foreground"
+                className="flex min-h-11 cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-foreground/90 data-[selected=true]:bg-surface-2 data-[selected=true]:text-foreground sm:min-h-0"
               >
                 <Icon size={15} className="text-muted" />
                 {n.label}
@@ -138,7 +138,7 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
                   key={t.id}
                   value={`${t.name} ${t.year ?? ""}`}
                   onSelect={() => go(`/title/${t.id}`)}
-                  className="flex cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-foreground/90 data-[selected=true]:bg-surface-2 data-[selected=true]:text-foreground"
+                  className="flex min-h-11 cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-foreground/90 data-[selected=true]:bg-surface-2 data-[selected=true]:text-foreground sm:min-h-0"
                 >
                   <Icon size={15} className="text-muted" />
                   <span className="min-w-0 flex-1 truncate">{t.name}</span>

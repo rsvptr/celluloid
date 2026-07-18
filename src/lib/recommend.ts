@@ -1,8 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import { MediaType } from "@/generated/prisma/client";
 import { getExportRows } from "@/lib/data";
-import { tasteSummary } from "@/lib/export/format";
-import { searchByType } from "@/lib/tmdb";
+import { tasteSummary, type ExportRow } from "@/lib/export/format";
+import { searchByType, type TmdbSearchItem } from "@/lib/tmdb";
 import { norm, yearOf, pickBest, nameYearKey } from "@/lib/tmdb-match";
 import {
   anthropicClient,
@@ -62,6 +62,7 @@ export interface RecommendOptions {
 export type RecStreamEvent =
   | { type: "status"; phase: "thinking" | "generating" }
   | { type: "rec"; rec: Recommendation }
+  | { type: "warning"; message: string }
   | { type: "done"; total: number }
   | { type: "error"; error: string };
 
@@ -111,7 +112,7 @@ function buildBriefBlock(summary: string): string {
 }
 
 /** The volatile part of the user turn: this run's specific ask. */
-function buildRequestBlock(
+export function buildRequestBlock(
   count: number,
   type: "all" | "movie" | "tv",
   focus?: string,
@@ -146,8 +147,23 @@ function buildRequestBlock(
   return `Based on my taste brief above, recommend ${count} titles I have NOT seen and that are NOT already on my watchlist.${focusClause}${preferClause}${excludeClause} ${typeClause} Strongly prefer titles that match what I rated highly; avoid obvious blockbusters unless they genuinely fit. Return the full ${count} suggestions: when you run out of strong fits, include lower-confidence picks and label their confidence honestly rather than shortening the list.`;
 }
 
+/**
+ * Select the basis rows for `mode: "recent"`: the most recently watched
+ * titles, excluding the watchlist and — critically — anything with no real
+ * watch date. Falling back to createdAt would let a freshly imported title
+ * with no watch history masquerade as a recent watch just because its row is
+ * new; a null watchedAt is simply excluded instead.
+ */
+export function selectRecentBasis(rows: ExportRow[], recentCount?: number): ExportRow[] {
+  const n = Math.min(200, Math.max(1, recentCount ?? 20));
+  return [...rows]
+    .filter((r) => r.statusKey !== "WATCHLIST" && r.watchedAt !== null)
+    .sort((a, b) => b.watchedAt!.localeCompare(a.watchedAt!))
+    .slice(0, n);
+}
+
 /** Defensive shape check for a model-produced recommendation. */
-function isValidRec(x: unknown): x is Recommendation {
+export function isValidRec(x: unknown): x is Recommendation {
   if (!x || typeof x !== "object") return false;
   const r = x as Record<string, unknown>;
   return (
@@ -160,24 +176,32 @@ function isValidRec(x: unknown): x is Recommendation {
   );
 }
 
-interface StreamContext {
+export interface StreamContext {
   existingSet: Set<string>;
   libNameYear: Set<string>;
   excludeSet: Set<string>;
   seenKeys: Set<string>;
 }
 
+/** The TMDB lookup enrichRec depends on; injectable so it can be stubbed in tests. */
+type TitleSearch = (
+  mediaType: "movie" | "tv",
+  title: string,
+) => Promise<TmdbSearchItem[]>;
+
 /**
  * Try to enrich one model suggestion with its TMDB match. Returns null when the
  * suggestion turns out to already be in the library; returns the (possibly
- * unenriched) rec otherwise.
+ * unenriched) rec otherwise. `search` defaults to the real TMDB client and is
+ * only overridden in tests.
  */
-async function enrichRec(
+export async function enrichRec(
   r: Recommendation,
   ctx: StreamContext,
+  search: TitleSearch = searchByType,
 ): Promise<Recommendation | null> {
   try {
-    const results = await searchByType(r.mediaType, r.title);
+    const results = await search(r.mediaType, r.title);
     const best = pickBest(results, r.title, r.year);
     if (!best) return r;
     const mt = r.mediaType === "tv" ? MediaType.TV : MediaType.MOVIE;
@@ -198,6 +222,16 @@ async function enrichRec(
   }
 }
 
+// Streaming output-token ceilings per recommend model. max_tokens scales with
+// the ask below but is always kept a safe margin under these so a large batch
+// plus adaptive thinking can't be rejected or silently truncated. A model with
+// no entry falls back to the smallest ceiling.
+const MODEL_OUTPUT_CEILING: Record<string, number> = {
+  "claude-opus-4-8": 128000,
+  "claude-sonnet-5": 128000,
+  "claude-haiku-4-5": 64000,
+};
+
 /**
  * Run one recommendation request end to end, emitting events as results become
  * available: the Claude response streams in, each completed suggestion is
@@ -213,7 +247,12 @@ export async function runRecommendationStream(
   const count = Math.min(30, Math.max(1, opts.count ?? 12));
   const type = opts.type ?? "all";
 
-  const key = await resolveAnthropicKey(userId);
+  // If the client already went away before we did any work, stop here. Every
+  // await below re-checks, so we never start — or keep paying for — a run for a
+  // request no one is listening to. Bailing is a clean, error-free return.
+  if (signal?.aborted) return;
+
+  const { key, usedFallback, hadUserKey } = await resolveAnthropicKey(userId);
   if (!key) {
     emit({
       type: "error",
@@ -221,15 +260,27 @@ export async function runRecommendationStream(
     });
     return;
   }
+  if (signal?.aborted) return;
+  // The user's own key exists but wouldn't decrypt, so we're silently on the
+  // deployment default — tell them once, without failing the run. "No user key
+  // at all" is the normal case and stays quiet.
+  if (usedFallback && hadUserKey) {
+    emit({
+      type: "warning",
+      message:
+        "Your saved API key couldn't be used; falling back to the default. Re-enter it in Settings.",
+    });
+  }
 
   const rows = await getExportRows(userId);
   if (rows.length === 0) {
     emit({
       type: "error",
-      error: "Add a few titles first so the AI has something to learn from.",
+      error: "Add a few titles first so Claude has something to learn from.",
     });
     return;
   }
+  if (signal?.aborted) return;
 
   // Precedence: explicit per-run model > the user's saved default > server default.
   let model = DEFAULT_REC_MODEL;
@@ -242,6 +293,7 @@ export async function runRecommendationStream(
     });
     if (isRecModel(userPref?.recommendModel)) model = userPref!.recommendModel!;
   }
+  if (signal?.aborted) return;
   // Fail safe if a model is ever added to REC_MODELS without a caps entry.
   const caps = MODEL_CAPS[model] ?? { effort: false, adaptiveThinking: false };
 
@@ -253,13 +305,7 @@ export async function runRecommendationStream(
   let basisRows = rows;
   const basis = opts.basis;
   if (basis?.mode === "recent") {
-    const n = Math.min(200, Math.max(1, basis.recentCount ?? 20));
-    basisRows = [...rows]
-      .filter((r) => r.statusKey !== "WATCHLIST")
-      .sort((a, b) =>
-        (b.watchedAt ?? b.createdAt).localeCompare(a.watchedAt ?? a.createdAt),
-      )
-      .slice(0, n);
+    basisRows = selectRecentBasis(rows, basis.recentCount);
   } else if (basis?.mode === "pick") {
     const idSet = new Set(basis.ids ?? []);
     basisRows = rows.filter((r) => idSet.has(r.id));
@@ -289,11 +335,15 @@ export async function runRecommendationStream(
     opts.era,
   );
 
-  // Dedup / ownership context shared by every suggestion in this run.
+  // Dedup / ownership context shared by every suggestion in this run. Trashed
+  // titles are excluded (deletedAt: null) so a soft-deleted title no longer blocks
+  // being recommended again — consistent with it being absent from the taste brief,
+  // which is built from getExportRows (also deletedAt-filtered).
   const existing = await prisma.title.findMany({
-    where: { userId, tmdbId: { not: null } },
+    where: { userId, tmdbId: { not: null }, deletedAt: null },
     select: { tmdbId: true, mediaType: true },
   });
+  if (signal?.aborted) return;
   const ctx: StreamContext = {
     existingSet: new Set(existing.map((e) => `${e.mediaType}:${e.tmdbId}`)),
     libNameYear: new Set(rows.map((r) => nameYearKey(r.mediaType, r.name, r.year))),
@@ -301,10 +351,20 @@ export async function runRecommendationStream(
     seenKeys: new Set(),
   };
 
+  // Scale the output budget with the ask so a large batch (askCount up to 50)
+  // plus adaptive thinking — which draws from the same ceiling — can't truncate
+  // mid-JSON. The base (~the old flat budget) covers thinking + the JSON
+  // envelope; the per-item budget covers each suggestion and its share of
+  // thinking. Capped a safe margin under the model's streaming ceiling. This is a
+  // ceiling, not a target: generation is aborted once `count` are accepted, so
+  // the headroom only prevents truncation, it never costs tokens.
+  const outputCeiling = MODEL_OUTPUT_CEILING[model] ?? 64000;
+  const maxTokens = Math.min(outputCeiling - 8000, 16000 + askCount * 800);
+
   const client = anthropicClient(key);
   const stream = client.messages.stream({
     model,
-    max_tokens: 16000,
+    max_tokens: maxTokens,
     // Opus / Sonnet take adaptive thinking; Haiku 4.5 doesn't.
     ...(caps.adaptiveThinking ? { thinking: { type: "adaptive" as const } } : {}),
     output_config: {
@@ -332,14 +392,18 @@ export async function runRecommendationStream(
     ],
   });
   if (signal) {
-    // Client went away (or asked to stop): stop paying for generation.
-    signal.addEventListener("abort", () => stream.abort(), { once: true });
+    // Client went away (or asked to stop): stop paying for generation. Guard the
+    // race where the signal fired between the last checkpoint and here — a fresh
+    // "abort" would never fire on an already-aborted signal, so abort directly.
+    if (signal.aborted) stream.abort();
+    else signal.addEventListener("abort", () => stream.abort(), { once: true });
   }
 
   const extractor = createRecExtractor();
   let accepted = 0;
   let statusSent: "thinking" | "generating" | null = null;
   let stopped = false; // no further emits once set (enough results, or a failure)
+  let hitMaxTokens = false; // model ran into the output ceiling (budget exhausted)
   // Round-robin lanes bound enrichment concurrency: a model that bursts out 40
   // suggestions can't burst-fire 40 TMDB searches at once.
   const lanes: Promise<void>[] = Array.from({ length: 5 }, () => Promise.resolve());
@@ -389,6 +453,11 @@ export async function runRecommendationStream(
           }
           for (const item of extractor.push(event.delta.text)) handleParsed(item);
         }
+      } else if (event.type === "message_delta") {
+        // The final message_delta carries the stop reason. "max_tokens" means the
+        // budget was exhausted mid-generation (likely truncating the JSON), which
+        // needs a specific message rather than the generic "no results" below.
+        if (event.delta.stop_reason === "max_tokens") hitMaxTokens = true;
       }
     }
   } catch (e) {
@@ -408,9 +477,19 @@ export async function runRecommendationStream(
   if (accepted === 0) {
     emit({
       type: "error",
-      error: "The AI didn't return any usable suggestions. Try again, or tweak your focus.",
+      error: hitMaxTokens
+        ? "Claude ran out of room before finishing a single suggestion. Ask for fewer titles, or pick a shorter focus, and try again."
+        : "Claude didn't return any usable suggestions. Try again, or tweak your focus.",
     });
     return;
+  }
+  // Got some, but the model hit the token ceiling before the full batch — let the
+  // user know the short list is a budget limit, not a lack of ideas.
+  if (hitMaxTokens && accepted < count) {
+    emit({
+      type: "warning",
+      message: `Claude hit its length limit after ${accepted} of ${count} suggestions. Ask for fewer titles for a complete set.`,
+    });
   }
   emit({ type: "done", total: accepted });
 }

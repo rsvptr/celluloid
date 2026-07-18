@@ -1,6 +1,6 @@
 import { getSession } from "@/lib/session";
-import { getExportRows } from "@/lib/data";
-import { exportFilename, filterRows, type ExportScope } from "@/lib/export/format";
+import { getExportRows, getTags } from "@/lib/data";
+import { exportFilename, filterRows, sanitizeScope } from "@/lib/export/format";
 import { buildWorkbookBuffer } from "@/lib/export/xlsx";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 
@@ -8,37 +8,35 @@ export const runtime = "nodejs";
 
 export async function GET(request: Request) {
   const session = await getSession();
-  if (!session?.user) return new Response("Unauthorized", { status: 401 });
+  if (!session?.user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
   const rl = rateLimit(`xlsx:${session.user.id}`, 10, 60_000);
   if (!rl.ok) return tooManyRequests(rl.retryAfter);
 
   const sp = new URL(request.url).searchParams;
-  const minRaw = Number(sp.get("min"));
-  const intIn = (raw: string | null, lo: number, hi: number): number | null => {
-    const n = Number(raw);
-    return Number.isFinite(n) && n >= lo && n <= hi ? Math.floor(n) : null;
-  };
-  const typeRaw = sp.get("type");
-  const statusRaw = sp.get("status") ?? "";
-  const validStatus = ["WATCHLIST", "WATCHING", "WATCHED", "ON_HOLD", "DROPPED"];
-  const scope: ExportScope = {
-    type: typeRaw === "movie" || typeRaw === "tv" ? typeRaw : "all",
-    status: validStatus.includes(statusRaw)
-      ? (statusRaw as ExportScope["status"])
-      : "all",
-    favoritesOnly: sp.get("fav") === "1",
-    tag: sp.get("tag") || null,
-    language: sp.get("lang") || null,
-    genre: sp.get("genre") || null,
-    minRating: Number.isFinite(minRaw) && minRaw > 0 ? minRaw : null,
-    yearFrom: intIn(sp.get("from"), 1870, 2100),
-    yearTo: intIn(sp.get("to"), 1870, 2100),
+  // Raw scope hints from the query string (library "Export these" deep link);
+  // sanitizeScope validates everything against the actual library before use,
+  // same as the export panel's client-side path.
+  const rawScope: Record<string, unknown> = {
+    type: sp.get("type") ?? undefined,
+    status: sp.get("status") ?? undefined,
+    tag: sp.get("tag") ?? undefined,
+    genre: sp.get("genre") ?? undefined,
+    language: sp.get("lang") ?? undefined,
+    minRating: sp.get("min") ?? undefined,
+    yearFrom: sp.get("from") ?? undefined,
+    yearTo: sp.get("to") ?? undefined,
+    favoritesOnly: sp.get("fav") ?? undefined,
   };
 
   try {
-    const rows = filterRows(await getExportRows(session.user.id), scope);
-    const buf = await buildWorkbookBuffer(rows);
+    const [rows, tags] = await Promise.all([
+      getExportRows(session.user.id),
+      getTags(session.user.id),
+    ]);
+    const scope = sanitizeScope(rawScope, rows, tags.map((t) => t.name));
+    const filtered = filterRows(rows, scope);
+    const buf = await buildWorkbookBuffer(filtered);
     const filename = exportFilename(scope, "xlsx", "library");
 
     // Cast: Node/Next Response accepts a Uint8Array body at runtime; the DOM
@@ -48,10 +46,14 @@ export async function GET(request: Request) {
         "Content-Type":
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename="${filename}"`,
+        "Cache-Control": "private, no-store",
       },
     });
   } catch (err) {
     console.error("XLSX export failed:", err);
-    return new Response("Export failed. Please try again.", { status: 500 });
+    return new Response("Export failed. Please try again.", {
+      status: 500,
+      headers: { "Cache-Control": "private, no-store" },
+    });
   }
 }

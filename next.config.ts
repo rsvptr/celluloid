@@ -16,13 +16,12 @@ const securityHeaders = [
     key: "Permissions-Policy",
     value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
   },
-  {
-    // Deliberately scoped CSP: no script-src/style-src (Next's inline bootstrap
-    // needs them open), but lock down framing, plugins, <base> and form targets.
-    key: "Content-Security-Policy",
-    value:
-      "frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'",
-  },
+  // NOTE: Content-Security-Policy is intentionally NOT set here. It is now a
+  // per-request, nonce-based header generated in proxy.ts (the official Next.js
+  // nonce pattern needs a fresh nonce per request, which a static config header
+  // cannot provide). Setting it here as well would emit a conflicting duplicate
+  // CSP header. See proxy.ts for the full policy (script-src nonce +
+  // strict-dynamic, plus frame-ancestors/object-src/base-uri/form-action).
 ];
 
 const nextConfig: NextConfig = {
@@ -37,7 +36,21 @@ const nextConfig: NextConfig = {
     ],
   },
   async headers() {
-    return [{ source: "/(.*)", headers: securityHeaders }];
+    return [
+      { source: "/(.*)", headers: securityHeaders },
+      // proxy.ts's nonce-based CSP only runs on the document-request matcher
+      // (which excludes /api/*), so API responses got none of the four
+      // document-scoped directives below — restore them here for that path.
+      {
+        source: "/api/:path*",
+        headers: [
+          {
+            key: "Content-Security-Policy",
+            value: "frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'",
+          },
+        ],
+      },
+    ];
   },
 };
 

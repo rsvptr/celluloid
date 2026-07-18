@@ -42,6 +42,12 @@ yarn-error.log*
 mycreds.txt
 *creds*.txt
 
+# exported API keys file (existing *creds*.txt / *Details.txt patterns don't match this name)
+API keys.txt
+
+# local audit artifacts (agent-generated codebase audit reports, not app docs)
+/*AUDIT*.md
+
 # vercel
 .vercel
 
@@ -52,6 +58,10 @@ mycreds.txt
 .agents/
 skills-lock.json
 
+# untracked local artifacts (agent collaboration notes, TMDB reference docs)
+.agent-collaboration/
+tmdb-docs/
+
 # personal data (your own watch history; keep it off a public repo)
 /data/*.xlsx
 
@@ -60,3 +70,4 @@ skills-lock.json
 next-env.d.ts
 
 /src/generated/prisma
+backups/

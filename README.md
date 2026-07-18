@@ -26,7 +26,7 @@
 
 > **Note**
 >
-> Celluloid is built for one person: you. The live app at [mycelluloid.vercel.app](https://mycelluloid.vercel.app) is real, but it sits behind a login, so there is nothing to browse without an account. You bring your own Neon database, your own TMDB token, and your own Anthropic key, then deploy your own copy. Sign ups can be closed with a single environment variable once your account exists.
+> Celluloid is built for one person: you. The live app at [mycelluloid.vercel.app](https://mycelluloid.vercel.app) is real, but it sits behind a login, so there is nothing to browse without an account. You bring your own Neon database, your own TMDB token, and your own Anthropic key, then deploy your own copy. Sign ups are closed by default, opened with a single environment variable only long enough to create your account.
 
 Most trackers are good at storing what you watched and bad at the only question that matters afterward, which is what to watch tonight. Celluloid is built the other way around. Logging is quick, but everything feeds one feature: a recommendation engine that reads your ratings, your notes, the things you abandoned, what you watched recently, and the languages you actually lean toward, then asks Claude for titles that fit. You can run that inside the app, or copy the exact same brief as a prompt to paste into any other AI.
 
@@ -38,6 +38,7 @@ Most trackers are good at storing what you watched and bad at the only question 
 - [The library](#the-library)
 - [Stats](#stats)
 - [Exports](#exports)
+- [Backups and recovery](#backups-and-recovery)
 - [Sharing](#sharing)
 - [Privacy and security](#privacy-and-security)
 - [Architecture](#architecture)
@@ -57,14 +58,19 @@ Most trackers are good at storing what you watched and bad at the only question 
 - Tracks films and TV in one library, with TMDB metadata, posters, seasons, and episodes pulled in automatically
 - Every matched title shows where to stream, rent, or buy it (region-aware, via JustWatch data), a trailer link, and a "More like this" row you can add from in one click
 - Half star ratings from 0.5 to 10, private notes, favorites, and free form tags
-- Per episode and per season tracking for shows, with a progress bar and quick "mark season" and "mark show" actions
+- Per episode and per season tracking for shows, with a progress bar, quick "mark season" and "mark show" actions, and a quiet "New" badge once a watching show has an aired episode you have not logged yet
+- Every viewing is logged to a private watch history, with an optional note. Logging again on a title you already finished counts as a rewatch instead of overwriting the first watch
 - Five watch states that map to a real backlog: watchlist, watching, watched, on hold, dropped
 - AI recommendations from Claude, based on a detailed picture of your taste, with mood presets, language, genre, and era preferences, and the option to base them on your whole library, your recent watches, or a hand picked set
 - A "copy as AI prompt" export, so the same brief works in any chat assistant
 - Search, rich filtering, two layouts, and bulk editing across a large library
+- Soft delete: removing a title moves it to Trash with every piece of personal data intact, ready to restore or delete forever
+- Uploading a spreadsheet stages a review: Celluloid proposes a TMDB match for every row, you fix or exclude what is wrong, then commit in resumable batches you can leave and pick back up later
 - A surprise picker that pulls something random off your watchlist when you cannot decide
-- Stats with a watch activity heatmap, streaks, rating distribution, titles by year, and top rated
-- Public, read only share links for a list or your whole library
+- Stats built from real activity: a heatmap and streaks, rating distribution, taste and totals by genre, and your most rewatched titles
+- Public, read only share links for a list or your whole library, with an optional expiry and a revoke switch that pulls access without deleting the link's record
+- A full JSON backup you can restore with a preview first, so nothing writes to your library until you confirm exactly what will change
+- Time zone and a default watch region in Settings, used for stats day boundaries and for which region's streaming and rental info you see
 - Exports to plain text, Markdown, JSON, and a styled Excel workbook, scoped as finely as language, genre, minimum rating, and release years, with filenames that say what is inside
 - Accounts with email and password, optional two factor, and a switch to close public sign ups
 
@@ -136,7 +142,8 @@ Every title carries personal tracking on top of its TMDB metadata.
 
 - **Half star ratings** run from 0.5 to 10. Click the left or right half of a star, or use the keyboard (arrow keys nudge by half or whole steps, 0 clears).
 - **Notes** are private and double as context for the AI. Favorites and tags layer on top, and tags also work as a recommendation lens.
-- **TV is tracked properly.** Shows expand into seasons and episodes. Tick a single episode, a whole season, or the whole show. Progress is denormalized for a fast bar on the card, and finishing a show stamps a watch date so it counts toward recency and stats.
+- **TV is tracked properly.** Shows expand into seasons and episodes. Tick a single episode, a whole season, or the whole show. Progress is denormalized for a fast bar on the card, and finishing a show stamps a watch date so it counts toward recency and stats. Once you are watching a show, an aired episode you have not logged shows a small "New" badge on its card.
+- **Log watch** records a dated viewing with an optional note, from the title page. The first log on a title stamps its watch date; logging again on an already watched title is recorded as a rewatch and adds to the running count on that title and on the stats page, without disturbing the original watch date.
 
 ## The library
 
@@ -168,11 +175,12 @@ On phones the filters collapse behind a single toggle and lay out as a clean two
 
 The stats page reads your activity rather than just counting rows.
 
-- Totals for titles, movies, shows, movies watched, and episodes watched
+- Totals for titles, movies, shows, movies watched, episodes watched, and rewatches
 - An estimated watch time, with an honest note that episodes without a known runtime are estimated at about 42 minutes each
 - A watch activity heatmap and current and longest streaks, built from real in app watch dates
 - Titles by release year as a sparkline, a rating distribution histogram, and a by decade breakdown
-- Your top rated titles and a language breakdown
+- Your top rated titles, your most rewatched titles, and a by status and by language breakdown
+- Taste by genre: your average rating per genre, for genres with at least two rated titles, alongside a top genres count by how often each appears in your library
 
 Because the imported backlog starts without watch dates, the activity views begin empty and fill in as you mark things watched in the app. The page says so plainly rather than showing a misleading blank.
 
@@ -192,9 +200,31 @@ The AI prompt export uses the exact same taste brief as the in app engine. Even 
 
 Every download gets a unique, descriptive filename, for example `celluloid-library-movie-malayalam-8plus-1990-1999-20260613-101500.xlsx`, so repeated exports never overwrite each other and a saved file tells you what it holds at a glance.
 
+## Backups and recovery
+
+Celluloid has an application-level backup for the personal data that would be painful to rebuild. In **Settings > Backup**, choose **Download backup** to save a versioned JSON file. The current v2 format contains movie and TV metadata, soft-deleted titles, status, ratings, favorites, notes, watch dates and watch-event history, full season and episode progress, tags and their title joins, owner timezone/region preferences, and ordered shared-list settings including expiry and revocation. Restore also accepts v1 files through an explicit compatibility upgrade, for files up to 4 MB. Backups deliberately exclude passwords, sessions, two-factor secrets and backup codes, encrypted API keys, and share slugs. A restored shared list receives a new unguessable link instead of reviving an old bearer token.
+
+To restore, select the JSON file and a mode, then choose **Preview restore**. The preview reports how many titles will be created, updated, left unchanged, or skipped as conflicts. Nothing is written until you approve the confirmation dialog.
+
+- **Merge without replacing personal data** adds missing titles and nested records, fills empty nullable values such as a rating, note, or watch date, and unions tags. It keeps existing status, favorites, counters, and episode progress.
+- **Use backup personal data** makes the backup authoritative for status, ratings, notes, watch dates, favorites, tags, and episode progress on matching titles. Titles absent from the backup remain in the library.
+- Titles match first by media type and TMDB id, then by normalized name and release year when an id is unavailable. Ambiguous matches are conflicts and are skipped. Repeating the same restore is safe: already-restored records are recognized rather than duplicated.
+
+Treat the JSON as private library data. Keep at least one copy off the deployment, preferably in encrypted storage, and download a fresh copy before migrations or large imports. This file complements Neon recovery; it does not replace a database restore point because it intentionally omits authentication state and secrets.
+
+### Neon operator actions
+
+These steps are manual owner responsibilities, not actions the application performs:
+
+1. **Check point-in-time recovery now.** Open the production project in the Neon Console, go to **Settings > Instant restore**, and confirm that the restore window is non-zero. Record the selected duration somewhere outside the database. Neon's [restore-window guide](https://neon.com/docs/introduction/restore-window) explains current plan limits, storage cost, and the fact that this setting applies to every branch in the project.
+2. **Set retention to the time you need to notice a mistake.** For this private workflow, choose the longest window you can justify rather than assuming the plan default is enough. Recheck it after a plan change, project move, or billing change. If the plan supports scheduled snapshots, configure and review their retention under **Backup & restore**; deleted snapshots cannot be recovered.
+3. **Create a recovery point before risky work.** Download the Celluloid JSON backup. On a root production branch, also create a manual Neon snapshot before a schema migration, bulk import, or repair. Follow Neon's current [Backup & restore guide](https://neon.com/docs/guides/backup-restore), since snapshot availability and limits are plan-dependent.
+4. **Run a restore drill at least quarterly.** Use Neon's preview-data tools or a multi-step snapshot restore to create an isolated branch. Do not point the production deployment at it. Connect with the scratch branch's own connection string and check representative counts and records, including titles, tags, watched episodes, notes, and ratings. Preview the Celluloid JSON restore against that scratch copy as a second check. Record the date and result, then delete the scratch branch after verification.
+5. **For a real incident, inspect before replacing production.** Stop avoidable writes, download the current application backup if possible, choose a timestamp or snapshot from before the damage, and use Neon's read-only preview to confirm the data and schema. Restore only after that check. Neon keeps the pre-restore branch as a backup branch; verify Celluloid sign-in, title counts, TV progress, notes, tags, and shares before deleting it.
+
 ## Sharing
 
-You can publish a read only snapshot of your library, or just a selection, at an unguessable link under `/s/`. Shared pages need no login and are marked no index. Notes are hidden unless you opt in, and a whole library share hides your not yet watched watchlist by default so you are not broadcasting your plans. Every link is listed in settings, where you can copy or revoke it.
+You can publish a read only view of your library, or an ordered selection, at an unguessable link under `/s/`. Shared pages need no login and are marked no index. Notes are hidden unless you opt in, and a whole library share hides your not yet watched watchlist by default so you are not broadcasting your plans. Links can be permanent or expire after 7, 30, or 90 days. Every link remains listed in settings, where you can copy it, revoke access without losing its record, or delete it permanently.
 
 ## Privacy and security
 
@@ -205,7 +235,7 @@ This is your data on your infrastructure.
 - Your Anthropic key is encrypted at rest with AES 256 GCM. It is never stored or logged in plaintext.
 - Accounts use email and password through Better Auth, with optional time based two factor (an authenticator app, with backup codes and a manual setup key). Sessions are stored in the database, and deleting your account requires your password, not just a live session.
 - Sign in, sign up, password change, and two factor verification are rate limited against brute force, and the AI, search, import, and export routes are rate limited per user to keep a runaway loop from draining your API budget.
-- Public sign ups can be closed with `DISABLE_SIGNUPS=true` once your own account exists, which is the recommended state for a personal deployment.
+- Public sign ups are closed by default. Set `ALLOW_SIGNUPS=true` only long enough to create your own account, then remove it, which is the recommended locked down state for a personal deployment.
 - Security headers are set for every response: frame denial, no sniff, a strict referrer policy, a content security policy covering framing, plugins, base tags, and form targets, a permissions policy that turns off browser capabilities the app never uses, and HSTS on the production domain.
 - Server side input validation bounds every free text field, and `npm audit` runs clean with pinned overrides for transitive advisories.
 
@@ -221,7 +251,7 @@ flowchart LR
     subgraph "Next.js 16 (App Router)"
       direction TB
       RSC["Server components<br/>and server actions"]
-      API["Route handlers<br/>(recommend, search, import, xlsx)"]
+      API["Route handlers<br/>(recommend, search, import, backup, xlsx)"]
       AUTH["Better Auth<br/>(sessions, 2FA)"]
     end
     DB[("Neon Postgres<br/>via Prisma 7")]
@@ -244,7 +274,7 @@ Reads and simple mutations go through server components and server actions. The 
 
 ## Data model
 
-A user owns titles, tags, and share lists. A title can be a movie or a show. Shows own seasons, seasons own episodes. Tags attach to titles through a join table. Auth tables (sessions, accounts, two factor) hang off the user as well.
+A user owns titles, tags, and share lists. A title can be a movie or a show. Shows own seasons, seasons own episodes. Every logged viewing appends a `WatchEvent`, an append-only record separate from the title's own `status`/`rating`/`watchedAt` fields. Tags attach to titles through a join table. Auth tables (sessions, accounts, two factor) hang off the user as well.
 
 ```mermaid
 erDiagram
@@ -256,6 +286,7 @@ erDiagram
     TITLE ||--o{ SEASON : has
     SEASON ||--o{ EPISODE : has
     TITLE }o--o{ TAG : "tagged via TitleTag"
+    TITLE ||--o{ WATCHEVENT : logs
 
     TITLE {
       string id
@@ -276,9 +307,14 @@ erDiagram
       int  episodeNumber
       bool watched
     }
+    WATCHEVENT {
+      enum kind
+      date occurredAt
+      string note
+    }
 ```
 
-Titles are unique per user by media type and TMDB id, and the denormalized `watchedEpisodes` count keeps the progress bar fast without walking every episode on each render.
+Titles are unique per user by media type and TMDB id, and the denormalized `watchedEpisodes` count keeps the progress bar fast without walking every episode on each render. A staged spreadsheet upload gets its own short-lived `ImportJob` and per-row `ImportItem` rows (see [Bringing in your library](#bringing-in-your-library)); they hold no personal library data and are not part of the core model above.
 
 ## Tech stack
 
@@ -303,7 +339,7 @@ Titles are unique per user by media type and TMDB id, and the denormalized `watc
 
 ## Getting started
 
-You need Node.js 20 or newer, a Neon Postgres database, a TMDB API Read Access Token, and (for AI features) an Anthropic API key.
+You need Node.js 22 or newer, a Neon Postgres database, a TMDB API Read Access Token, and (for AI features) an Anthropic API key.
 
 **1. Install dependencies.** This also generates the Prisma client through a postinstall step.
 
@@ -329,7 +365,7 @@ npm run db:deploy
 npm run dev
 ```
 
-Open http://localhost:3000, create your account, then add a few titles by searching TMDB. Add an Anthropic key in settings and open the recommend page to see suggestions. Once your account exists, set `DISABLE_SIGNUPS=true` to close the door behind you.
+Open http://localhost:3000, create your account, then add a few titles by searching TMDB. Add an Anthropic key in settings and open the recommend page to see suggestions. Once your account exists, remove `ALLOW_SIGNUPS` to close the door behind you.
 
 ## Environment variables
 
@@ -343,23 +379,35 @@ Copy `.env.example` to `.env`. Never commit `.env`; it is already ignored.
 | `BETTER_AUTH_SECRET` | Yes | A long random secret for signing sessions. |
 | `BETTER_AUTH_URL` | Yes | The app base URL. Local is `http://localhost:3000`, production is your deployed URL. |
 | `NEXT_PUBLIC_SITE_URL` | Yes | Public base URL for metadata and the auth client. Match `BETTER_AUTH_URL`. |
-| `ENCRYPTION_KEY` | Recommended | Key for encrypting per user Anthropic keys at rest. Falls back to `BETTER_AUTH_SECRET` if unset. |
+| `ENCRYPTION_KEY` | Required in production (dev/test may fall back to `BETTER_AUTH_SECRET`) | Key for encrypting per user Anthropic keys at rest. |
 | `ANTHROPIC_API_KEY` | Optional | A deployment wide Claude key, used when a user has not added their own. |
-| `DISABLE_SIGNUPS` | Optional | Set to `true` to close public sign ups. Existing users can still sign in. |
+| `ALLOW_SIGNUPS` | Optional | Public sign ups are closed unless this is `true`. Set it to bootstrap your account, then remove it. Existing users can always sign in. |
+
+The old `DISABLE_SIGNUPS` flag is deprecated. For one release, `DISABLE_SIGNUPS=false` is still honored as `ALLOW_SIGNUPS=true` and the server logs a one time warning. Move to `ALLOW_SIGNUPS` and drop the old variable.
 
 ## Bringing in your library
 
 There are three ways to get titles in, and they all enrich from TMDB (posters, seasons, episodes, genres, runtime, original language).
 
 1. **Search and add.** The fastest path for a handful of titles. Search TMDB inside the app and add with one click.
-2. **Upload a sheet.** The in app importer accepts an `.xlsx` or `.csv` file of titles and matches each one to TMDB.
-3. **Import the legacy workbook.** If you are coming from a "Movies and TV Shows Watched" style spreadsheet with separate sheets, drop it at `data/watched.xlsx` and run the importer:
+2. **Upload a sheet.** The in app importer on the Add page accepts an `.xlsx` or `.csv` file with a Title column, up to 2 MB and 250 rows.
+3. **Import the legacy workbook.** If you are coming from a "Movies and TV Shows Watched" style spreadsheet with separate sheets, drop it at `data/watched.xlsx` and run the importer.
+
+**Uploading a sheet stages a review before anything touches your library.** Celluloid proposes a TMDB match for each row and shows a confidence label. From there you can:
+
+- Exclude a row you do not want, or retry one that failed
+- Search TMDB yourself and pick the exact match if the proposal is wrong or missing
+- Commit once you are happy, which runs in small resumable batches rather than one long request
+
+Nothing is written until you commit, and committing itself is safe to interrupt: leave the page mid-batch and the same job is offered for resume the next time you open Add, picking up right where it left off. Cancelling abandons whatever has not committed yet, but keeps anything already saved. A row that keeps failing can be retried up to a fixed number of attempts before it needs a manual match.
+
+Imported titles never get an invented watch date or a fabricated history entry, since the sheet does not carry one. A row marked watched creates the title with its status set but no `WatchEvent`, so the recommendation engine's recency signal and the stats activity views stay quiet for it until you actually watch or log it in the app.
 
 ```bash
 npm run import
 ```
 
-The importer reads the title, release date, and status columns, matches each row to TMDB (with a guard that prevents a wrong poster from being attached to a transliterated or regional title), and pulls season and episode structure for shows. Your own `data/watched.xlsx` is kept out of git, since it is personal.
+The legacy workbook importer bypasses the review step entirely (it is meant for a one-time bootstrap from an existing spreadsheet, not repeat uploads). It reads the title, release date, and status columns, matches each row to TMDB (with a guard that prevents a wrong poster from being attached to a transliterated or regional title), and pulls season and episode structure for shows. It is idempotent: re-running it updates metadata but never overwrites a rating, note, or watch status you already set. `npm run db:seed` runs the same import through Prisma's seed hook; use whichever of the two commands fits your workflow. Your own `data/watched.xlsx` is kept out of git, since it is personal.
 
 ## Scripts
 
@@ -369,11 +417,13 @@ The importer reads the title, release date, and status columns, matches each row
 | `npm run build` | Production build |
 | `npm run start` | Run the production build locally |
 | `npm run lint` | Run ESLint |
-| `npm test` | Run the test suite on Node's built in runner (Node 21 or newer) |
+| `npm test` | Run the test suite on Node's built in runner (Node 22 or newer) |
 | `npm run db:deploy` | Apply migrations to the database |
 | `npm run db:migrate` | Create and apply a new migration in development |
 | `npm run db:generate` | Regenerate the Prisma client |
+| `npm run db:push` | Push the schema straight to the database, no migration file. For prototyping only; use `db:migrate` for a real change |
 | `npm run db:studio` | Open Prisma Studio to browse the data |
+| `npm run db:seed` | Prisma's seed hook, wired to the same legacy workbook import as `npm run import` |
 | `npm run import` | Import the legacy Excel workbook from `data/watched.xlsx` |
 
 ## Deploying to Vercel
@@ -390,7 +440,7 @@ A short checklist for a clean first deploy:
 - [ ] Use fresh secrets in production. Rotate anything that has been on a local machine: the Neon password, the TMDB token, the Anthropic key, `BETTER_AUTH_SECRET`, and `ENCRYPTION_KEY`.
 - [ ] Both `BETTER_AUTH_URL` and `NEXT_PUBLIC_SITE_URL` point at the production URL.
 - [ ] `DATABASE_URL` is the pooled string and `DIRECT_URL` is the direct one.
-- [ ] Create your account on the live site, then set `DISABLE_SIGNUPS=true` and redeploy.
+- [ ] Set `ALLOW_SIGNUPS=true` for the first deploy, create your account on the live site, then remove it and redeploy.
 
 ## Project structure
 
@@ -403,20 +453,21 @@ celluloid/
 │   ├── logo.png
 │   └── icon-192.png
 ├── scripts/
-│   └── import-excel.ts        importer for the legacy workbook
+│   ├── import-excel.ts        importer for the legacy workbook
+│   └── db-check.mjs, db-dump.mjs   ad hoc, read only maintenance scripts (run manually before a migration)
 ├── src/
 │   ├── app/
 │   │   ├── (app)/             signed in pages: library, add, title, recommend, export, stats, settings
-│   │   ├── api/               route handlers: recommend, search, titles, import, export/xlsx, auth
+│   │   ├── api/               route handlers: recommend, search, titles, import (upload + staged jobs), backup, export/xlsx, auth
 │   │   ├── login/
 │   │   ├── s/[slug]/          public read only shared lists
 │   │   ├── layout.tsx, globals.css, manifest.ts, robots.ts
 │   │   └── error.tsx, not-found.tsx, global-error.tsx
-│   ├── components/            library, cards, charts, dialogs, command palette, rating stars, nav
+│   ├── components/            library, cards, charts, dialogs, import review, command palette, rating stars, nav
 │   ├── generated/prisma/      generated Prisma client (not committed)
-│   └── lib/                   auth, prisma, tmdb, recommend, export, import, data, actions, crypto, rate limiting
-├── tests/                     pure logic tests: matching, export scope, filenames, prompt, crypto
-├── proxy.ts                   Next 16 request proxy (this version uses proxy, not middleware)
+│   ├── lib/                   auth, prisma, tmdb, recommend, export, import (legacy + staged review), backup, share, region and settings actions, data, actions, crypto, rate limiting
+│   └── proxy.ts               Next 16 request proxy (this version uses proxy, not middleware; also sets the nonce-based CSP)
+├── tests/                     pure logic tests: matching, export scope, filenames, prompt, crypto, backup, staged import, rate limiting
 ├── next.config.ts             security headers and the TMDB image allowlist
 ├── prisma.config.ts
 ├── .env.example
@@ -432,7 +483,8 @@ celluloid/
 
 ## Notes and limitations
 
-- Celluloid is a personal tool, not a multi tenant service. It supports more than one account, but it is meant to be locked to one with `DISABLE_SIGNUPS` after setup.
+- Celluloid is a personal tool, not a multi tenant service. It supports more than one account, but it is meant to be locked to one by leaving `ALLOW_SIGNUPS` unset after setup.
 - An imported backlog has no ratings or watch dates at first, so the recommendation quality and the activity stats both improve as you rate titles and mark things watched. The "unrated" filter is the quick way to work through that.
 - TMDB matching is automatic and usually right, but a transliterated or regional title can occasionally match the wrong entry. The "needs match" filter and the per title "change match" control are there to fix those by hand.
 - The in memory rate limiter bounds bursts per server instance. For a single user deployment that is plenty; a busy multi user instance would want a shared store.
+- Starting a new spreadsheet upload while an earlier one was left mid-review (never committed or cancelled) leaves that earlier job orphaned. Only the most recent active job is offered for resume, and there is no scheduled cleanup for the ones left behind yet.

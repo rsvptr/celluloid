@@ -12,6 +12,7 @@ export function Poster({
   sizes,
   className,
   priority,
+  decorative = false,
 }: {
   path: string | null | undefined;
   name: string;
@@ -20,6 +21,8 @@ export function Poster({
   sizes?: string;
   className?: string;
   priority?: boolean;
+  /** Hide the image from assistive tech when nearby text already names the title. */
+  decorative?: boolean;
 }) {
   const url = posterUrl(path, size);
   return (
@@ -28,15 +31,17 @@ export function Poster({
         "relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-surface-2",
         className,
       )}
+      aria-hidden={decorative || undefined}
     >
       {url ? (
         <Image
           src={url}
-          alt={name}
+          alt={decorative ? "" : name}
           fill
           sizes={sizes ?? "(max-width: 640px) 40vw, 180px"}
           className="object-cover"
           priority={priority}
+          loading={priority ? "eager" : undefined}
         />
       ) : (
         <PlaceholderPoster name={name} mediaType={mediaType} />
@@ -55,7 +60,7 @@ function PlaceholderPoster({
   const Icon = mediaType === "TV" ? Tv : Film;
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-gradient-to-br from-surface-2 to-surface p-3 text-center">
-      <Icon className="text-faint" size={28} />
+      <Icon aria-hidden="true" className="text-faint" size={28} />
       <span className="line-clamp-3 text-xs font-medium text-muted">{name}</span>
     </div>
   );

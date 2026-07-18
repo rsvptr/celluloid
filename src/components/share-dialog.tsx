@@ -4,7 +4,7 @@ import { type RefObject, useState, useTransition } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Check, Copy, ExternalLink, Link2, X } from "lucide-react";
 import { toast } from "sonner";
-import { Button, Input } from "@/components/ui";
+import { Button, Input, Select } from "@/components/ui";
 import { createShareList } from "@/lib/share-actions";
 import { cn } from "@/lib/utils";
 
@@ -28,6 +28,7 @@ export function ShareDialog({
   const [name, setName] = useState("");
   const [includeNotes, setIncludeNotes] = useState(false);
   const [includeWatchlist, setIncludeWatchlist] = useState(false);
+  const [expiresInDays, setExpiresInDays] = useState<7 | 30 | 90 | null>(null);
   const [url, setUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,6 +38,7 @@ export function ShareDialog({
     setName("");
     setIncludeNotes(false);
     setIncludeWatchlist(false);
+    setExpiresInDays(null);
     setUrl(null);
     setCopied(false);
     setError(null);
@@ -58,9 +60,10 @@ export function ShareDialog({
         name: name || null,
         includeNotes,
         includeWatchlist: wholeLibrary ? includeWatchlist : false,
+        expiresInDays,
       });
       if (res.error || !res.slug) {
-        setError(res.error ?? "Could not create link.");
+        setError(res.error ?? "Celluloid couldn't create the link. Check your connection and retry.");
         return;
       }
       setUrl(`${window.location.origin}/s/${res.slug}`);
@@ -91,10 +94,10 @@ export function ShareDialog({
               opener.current.focus();
             }
           }}
-          className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-[var(--radius-card)] bg-surface p-5 ring-1 ring-line focus:outline-none data-[state=open]:animate-[dialog-content-in_0.2s_cubic-bezier(0.16,1,0.3,1)]"
+          className="fixed left-1/2 top-1/2 z-50 max-h-[85dvh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[var(--radius-card)] bg-surface p-5 ring-1 ring-line focus:outline-none data-[state=open]:animate-[dialog-content-in_0.2s_cubic-bezier(0.16,1,0.3,1)]"
         >
           <Dialog.Close
-            className="absolute right-3 top-3 text-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/60 rounded"
+            className="absolute right-3 top-3 -m-3 flex min-h-11 min-w-11 items-center justify-center rounded text-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/60 sm:m-0 sm:min-h-0 sm:min-w-0"
             aria-label="Close"
           >
             <X size={18} />
@@ -125,11 +128,31 @@ export function ShareDialog({
                 <Input
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g. My horror favourites"
+                  placeholder="e.g. My horror favorites"
                   maxLength={80}
                 />
               </label>
-              <label className="flex cursor-pointer items-center gap-2 text-sm text-muted">
+              <label className="flex flex-col gap-1.5">
+                <span className="text-xs font-medium text-muted">
+                  Link expiry
+                </span>
+                <Select
+                  value={expiresInDays?.toString() ?? "never"}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setExpiresInDays(
+                      value === "never" ? null : (Number(value) as 7 | 30 | 90),
+                    );
+                  }}
+                  className="w-full"
+                >
+                  <option value="never">Never</option>
+                  <option value="7">7 days</option>
+                  <option value="30">30 days</option>
+                  <option value="90">90 days</option>
+                </Select>
+              </label>
+              <label className="flex min-h-11 cursor-pointer items-center gap-2 text-sm text-muted sm:min-h-0">
                 <input
                   type="checkbox"
                   checked={includeNotes}
@@ -139,7 +162,7 @@ export function ShareDialog({
                 Include my personal notes
               </label>
               {wholeLibrary && (
-                <label className="flex cursor-pointer items-center gap-2 text-sm text-muted">
+                <label className="flex min-h-11 cursor-pointer items-center gap-2 text-sm text-muted sm:min-h-0">
                   <input
                     type="checkbox"
                     checked={includeWatchlist}
@@ -150,7 +173,10 @@ export function ShareDialog({
                 </label>
               )}
               {error && (
-                <p className="rounded-lg bg-rose-500/10 px-3 py-2 text-sm text-rose-300 ring-1 ring-rose-500/20">
+                <p
+                  role="alert"
+                  className="rounded-lg bg-rose-500/10 px-3 py-2 text-sm text-rose-300 ring-1 ring-rose-500/20"
+                >
                   {error}
                 </p>
               )}
@@ -173,7 +199,7 @@ export function ShareDialog({
           ) : (
             <div className="flex flex-col gap-3">
               <Dialog.Description className="text-xs text-emerald-300">
-                ✓ Link ready. Share it with anyone.
+                Link ready. Share it with anyone.
               </Dialog.Description>
               <div className="flex items-center gap-2 rounded-lg bg-surface-2 px-3 py-2 ring-1 ring-line">
                 <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground/90">

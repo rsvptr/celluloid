@@ -1,10 +1,13 @@
 import { Suspense } from "react";
+import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, Calendar, Clock, Globe, Star } from "lucide-react";
 import { requireUser } from "@/lib/session";
 import { getTags, getTitleDetail } from "@/lib/data";
+import { prisma } from "@/lib/prisma";
+import { WatchEventKind } from "@/generated/prisma/client";
 import { Poster } from "@/components/poster";
 import { Badge } from "@/components/ui";
 import { backdropUrl } from "@/lib/images";
@@ -21,6 +24,18 @@ import { TitleControls } from "./title-controls";
 import { SeasonTracker } from "./season-tracker";
 import { TagEditor } from "./tag-editor";
 import { TitleExtras, TitleExtrasFallback } from "./title-extras";
+import { WatchHistory } from "./watch-history";
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}): Promise<Metadata> {
+  const { id } = await params;
+  const user = await requireUser();
+  const title = await getTitleDetail(user.id, id);
+  return { title: title?.name ?? "Title" };
+}
 
 export default async function TitlePage({
   params,
@@ -29,9 +44,18 @@ export default async function TitlePage({
 }) {
   const { id } = await params;
   const user = await requireUser();
-  const [title, allTags] = await Promise.all([
+  const [title, allTags, watchCount] = await Promise.all([
     getTitleDetail(user.id, id),
     getTags(user.id),
+    // Completion + rewatch count for the "Watched n times" badge and the
+    // log-watch toast. Scoped to the owner via WatchEvent.userId (indexed).
+    prisma.watchEvent.count({
+      where: {
+        userId: user.id,
+        titleId: id,
+        kind: { in: [WatchEventKind.TITLE_COMPLETED, WatchEventKind.REWATCH] },
+      },
+    }),
   ]);
   if (!title) notFound();
 
@@ -77,6 +101,7 @@ export default async function TitlePage({
             <Poster
               path={title.posterPath}
               name={title.name}
+              decorative
               mediaType={title.mediaType}
               size="w500"
               sizes="(max-width: 640px) 128px, 176px"
@@ -92,6 +117,11 @@ export default async function TitlePage({
                 <span className={`h-1.5 w-1.5 rounded-full ${status.dot}`} />
                 {status.label}
               </Badge>
+              {watchCount >= 2 ? (
+                <Badge className="bg-surface-2 text-muted ring-line">
+                  Watched {watchCount} times
+                </Badge>
+              ) : null}
               {title.tmdbRating ? (
                 <Badge className="bg-amber-500/15 text-amber-300 ring-amber-500/30">
                   <Star size={11} className="fill-amber-300" />
@@ -188,7 +218,9 @@ export default async function TitlePage({
             notes={title.notes}
             favorite={title.favorite}
             watchedAt={title.watchedAt ? title.watchedAt.toISOString() : null}
+            watchCount={watchCount}
           />
+          <WatchHistory userId={user.id} titleId={title.id} total={watchCount} />
           <TagEditor
             titleId={title.id}
             current={title.tags.map((t) => ({ id: t.tag.id, name: t.tag.name }))}

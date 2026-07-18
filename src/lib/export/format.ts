@@ -245,7 +245,7 @@ export function toMarkdown(rows: ExportRow[]): string {
 }
 
 function escapeMd(s: string): string {
-  return s.replace(/\|/g, "\\|");
+  return s.replace(/\|/g, "\\|").replace(/\r?\n+/g, " ");
 }
 
 // --- JSON ------------------------------------------------------------------
@@ -381,7 +381,7 @@ export function toAiPrompt(
   recommendCount = 15,
   opts?: { watchlist?: ExportRow[]; abandoned?: ExportRow[] },
 ): string {
-  return `${tasteSummary(rows, opts)}\n\nTask: Based on what I've rated highly and the patterns across the lists above, recommend ${recommendCount} titles (mix of films and TV) that I have NOT seen and that are NOT already on my watchlist. Only real, released titles, using the year of original release. For each one, write: Title (Year): one specific sentence on why it fits my taste, referencing titles I rated highly. Order from most to least confident, and be honest — don't pad the list with weak fits. Skip the obvious blockbusters unless they genuinely match.`;
+  return `${tasteSummary(rows, opts)}\n\nTask: Based on what I've rated highly and the patterns across the lists above, recommend ${recommendCount} titles (mix of films and TV) that I have NOT seen and that are NOT already on my watchlist. Only real, released titles, using the year of original release. For each one, write: Title (Year): one specific sentence on why it fits my taste, referencing titles I rated highly. Order from most to least confident, and be honest: don't pad the list with weak fits. Skip the obvious blockbusters unless they genuinely match.`;
 }
 
 export const FORMATS = [

@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { Check, Plus } from "lucide-react";
+import { toast } from "sonner";
 import type { SearchResult } from "@/app/api/search/route";
 import { Spinner } from "@/components/ui";
 import { TmdbSearch } from "@/components/tmdb-search";
@@ -23,15 +24,27 @@ export function AddSearch({ initialQuery }: { initialQuery?: string }) {
     const key = `${r.mediaType}:${r.tmdbId}`;
     setStates((s) => ({ ...s, [key]: { kind: "adding" } }));
     startTransition(async () => {
-      const res = await addFromTmdb(r.tmdbId, r.mediaType);
-      setStates((s) => ({
-        ...s,
-        [key]: res.error
-          ? { kind: "error", message: res.error }
-          : res.existing
-            ? { kind: "exists", id: res.id! }
-            : { kind: "added", id: res.id! },
-      }));
+      try {
+        const res = await addFromTmdb(r.tmdbId, r.mediaType);
+        if (res.restored)
+          toast.success("Restored from Trash with your old ratings and notes.");
+        setStates((s) => ({
+          ...s,
+          [key]: res.error
+            ? { kind: "error", message: res.error }
+            : res.existing
+              ? { kind: "exists", id: res.id! }
+              : { kind: "added", id: res.id! },
+        }));
+      } catch {
+        setStates((s) => ({
+          ...s,
+          [key]: {
+            kind: "error",
+            message: "Celluloid couldn't add this title. Check your connection and retry.",
+          },
+        }));
+      }
     });
   }
 
@@ -50,43 +63,61 @@ export function AddSearch({ initialQuery }: { initialQuery?: string }) {
         renderAction={(r) => {
           const key = `${r.mediaType}:${r.tmdbId}`;
           const state = states[key] ?? { kind: "idle" };
-          return <AddButton state={state} onAdd={() => add(r)} />;
+          return <AddButton name={r.name} state={state} onAdd={() => add(r)} />;
         }}
       />
     </div>
   );
 }
 
-function AddButton({ state, onAdd }: { state: AddState; onAdd: () => void }) {
+function AddButton({
+  name,
+  state,
+  onAdd,
+}: {
+  name: string;
+  state: AddState;
+  onAdd: () => void;
+}) {
   if (state.kind === "added" || state.kind === "exists") {
     return (
       <Link
         href={`/title/${state.id}`}
-        className="focus-ring flex shrink-0 items-center gap-1.5 rounded-lg bg-emerald-500/15 px-3 py-2 text-sm font-medium text-emerald-300 ring-1 ring-emerald-500/30 hover:bg-emerald-500/25"
+        aria-label={`View ${name} in your library`}
+        className="focus-ring flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg bg-emerald-500/15 px-3 py-2 text-sm font-medium text-emerald-300 ring-1 ring-emerald-500/30 hover:bg-emerald-500/25 sm:min-h-0"
       >
-        <Check size={15} />
+        <Check size={15} aria-hidden="true" />
         {state.kind === "added" ? "Added" : "In library"}
       </Link>
     );
   }
   if (state.kind === "error") {
     return (
-      <button
-        onClick={onAdd}
-        title={state.message}
-        className="focus-ring shrink-0 rounded-lg bg-rose-500/15 px-3 py-2 text-sm text-rose-300 ring-1 ring-rose-500/30"
-      >
-        Retry
-      </button>
+      <div className="flex shrink-0 flex-col items-end gap-1">
+        <button
+          type="button"
+          onClick={onAdd}
+          aria-label={`Retry adding ${name}`}
+          title={state.message}
+          className="focus-ring min-h-11 shrink-0 rounded-lg bg-rose-500/15 px-3 py-2 text-sm text-rose-300 ring-1 ring-rose-500/30 sm:min-h-0"
+        >
+          Retry
+        </button>
+        <p role="alert" className="max-w-[10rem] text-right text-[11px] text-rose-300">
+          {state.message}
+        </p>
+      </div>
     );
   }
   return (
     <button
+      type="button"
       onClick={onAdd}
       disabled={state.kind === "adding"}
-      className="focus-ring brand-gradient flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-[#04121c] hover:opacity-90 disabled:opacity-60"
+      aria-label={`Add ${name} to your library`}
+      className="focus-ring brand-gradient flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-[#04121c] hover:opacity-90 disabled:opacity-60 sm:min-h-0"
     >
-      {state.kind === "adding" ? <Spinner /> : <Plus size={15} />}
+      {state.kind === "adding" ? <Spinner /> : <Plus size={15} aria-hidden="true" />}
       Add
     </button>
   );

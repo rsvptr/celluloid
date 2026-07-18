@@ -10,6 +10,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  ArrowLeft,
   CheckSquare,
   Dices,
   Download,
@@ -17,6 +18,8 @@ import {
   LayoutGrid,
   List,
   Minus,
+  Plus,
+  RotateCcw,
   Search,
   Share2,
   SlidersHorizontal,
@@ -25,21 +28,28 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { LibraryItem } from "@/lib/data";
+import type { LibraryItem, TrashedTitle } from "@/lib/data";
 import type { WatchStatus } from "@/generated/prisma/client";
-import { Badge, Button, Input, Select } from "./ui";
+import { Badge, Button, Card, Input, Select } from "./ui";
 import { TitleCard } from "./title-card";
 import { Poster } from "./poster";
 import { ShareDialog } from "./share-dialog";
 import { useConfirm } from "./confirm-dialog";
-import { AnimatePresence, motion, MotionProvider } from "./motion";
-import { STATUS_META, STATUS_ORDER, languageName, progressPct } from "@/lib/format";
+import {
+  AnimatePresence,
+  EASE_OUT,
+  motion,
+  useReducedMotion,
+} from "./motion";
+import { STATUS_META, STATUS_ORDER, fullDate, languageName, progressPct } from "@/lib/format";
 import {
   bulkAddTag,
   bulkRemoveTag,
   bulkRemoveTitles,
   bulkSetFavorite,
   bulkSetStatus,
+  purgeTitle,
+  restoreTitle,
 } from "@/lib/actions";
 import { cn } from "@/lib/utils";
 
@@ -52,20 +62,45 @@ const SORTS: { key: SortKey; label: string }[] = [
   { key: "tmdb", label: "TMDB rating" },
 ];
 
+// Segmented quick-filter options, wired to the same `type` state (and URL param)
+// the advanced-panel <Select> used to drive.
+const TYPE_OPTIONS: { value: TypeFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "MOVIE", label: "Movies" },
+  { value: "TV", label: "TV shows" },
+];
+
+// Primary CTA rendered as a real anchor (Link to /add). Mirrors
+// <Button variant="primary" size="md"> from ui.tsx — that primitive can't take
+// an href, and ui.tsx is out of this task's scope, so its classes are inlined.
+const addTitleButtonClass =
+  "inline-flex min-h-11 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg brand-gradient px-4 text-sm font-semibold text-[#04121c] shadow-sm shadow-brand/20 transition-colors hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/60 sm:min-h-10";
+
 export function Library({
   items,
   languages,
   tags,
   genres,
+  trashed,
   initialFilters,
 }: {
   items: LibraryItem[];
   languages: string[];
   tags: string[];
   genres: string[];
+  trashed: TrashedTitle[];
   initialFilters: LibraryFilters;
 }) {
   const router = useRouter();
+  const reduceMotion = useReducedMotion();
+  // Trash is a distinct mode that replaces the whole toolbar + grid; entered from
+  // the Filters panel, exited via "Back to library". trashedCount drives the entry.
+  const [trashMode, setTrashMode] = useState(false);
+  const trashedCount = trashed.length;
+  // Tracks the trashedCount last reconciled against trashMode, so the render-time
+  // adjustment below (React's "adjusting state when a prop changes" pattern) runs
+  // its setState exactly once per actual count change instead of looping.
+  const [reconciledTrashedCount, setReconciledTrashedCount] = useState(trashedCount);
   const [query, setQuery] = useState(initialFilters.query);
   const [type, setType] = useState<TypeFilter>(initialFilters.type);
   const [status, setStatus] = useState<WatchStatus | "all">(initialFilters.status);
@@ -76,7 +111,8 @@ export function Library({
   const [sort, setSort] = useState<SortKey>(initialFilters.sort);
   const [view, setView] = useState<"grid" | "list">(initialFilters.view);
   const [onlyUnmatched, setOnlyUnmatched] = useState(initialFilters.onlyUnmatched);
-  const [showFilters, setShowFilters] = useState(false); // mobile filter drawer
+  // The single advanced-filters disclosure (all widths); collapsed by default.
+  const [showFilters, setShowFilters] = useState(false);
 
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -84,6 +120,8 @@ export function Library({
   const [shareIds, setShareIds] = useState<string[]>([]);
   // Remember what was focused when the share dialog opened, to restore on close.
   const shareOpener = useRef<HTMLElement | null>(null);
+  // The advanced-filters disclosure trigger, so Escape can return focus to it.
+  const filtersTriggerRef = useRef<HTMLButtonElement>(null);
 
   // Mirror the view into the URL (replaceState: no history spam, no server
   // round trip) so the current filters are shareable, bookmarkable, and restored
@@ -118,6 +156,40 @@ export function Library({
     genre !== "all" ||
     rating !== "all" ||
     onlyUnmatched;
+
+  // Active advanced facets, one removable chip each. Excludes type (its own
+  // quick-filter) and sort (ordering, not a filter), so the chip set and the
+  // disclosure badge count stay in step with what actually narrows the results.
+  const facetChips: { key: string; label: string; clear: () => void }[] = [];
+  if (status !== "all")
+    facetChips.push({
+      key: "status",
+      label: `Status: ${STATUS_META[status].label}`,
+      clear: () => setStatus("all"),
+    });
+  if (language !== "all")
+    facetChips.push({
+      key: "language",
+      label: `Language: ${languageName(language)}`,
+      clear: () => setLanguage("all"),
+    });
+  if (genre !== "all")
+    facetChips.push({ key: "genre", label: `Genre: ${genre}`, clear: () => setGenre("all") });
+  if (rating !== "all")
+    facetChips.push({
+      key: "rating",
+      label: rating === "unrated" ? "Rating: Unrated" : `Rating: ${rating}+`,
+      clear: () => setRating("all"),
+    });
+  if (tag !== "all")
+    facetChips.push({ key: "tag", label: `Tag: ${tag}`, clear: () => setTag("all") });
+  if (onlyUnmatched)
+    facetChips.push({
+      key: "unmatched",
+      label: "Needs match",
+      clear: () => setOnlyUnmatched(false),
+    });
+  const advancedCount = facetChips.length;
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -177,6 +249,30 @@ export function Library({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [selectMode]);
+
+  // While the advanced-filters disclosure is open, Escape closes it and returns
+  // focus to the trigger. The panel is an inline region (not a modal), so focus
+  // is never trapped and Tab moves through it and back out normally.
+  useEffect(() => {
+    if (!showFilters) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      setShowFilters(false);
+      filtersTriggerRef.current?.focus();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showFilters]);
+
+  // Return to the library automatically once Trash empties (e.g. the last title
+  // was restored or purged), so the user isn't stranded on an empty Trash view.
+  // Adjusted during render (not in an effect) per React's "adjusting state when a
+  // prop changes" pattern: avoids the extra commit-then-effect-then-re-render pass
+  // a useEffect here would trigger on every restore/purge.
+  if (trashedCount !== reconciledTrashedCount) {
+    setReconciledTrashedCount(trashedCount);
+    if (trashMode && trashedCount === 0) setTrashMode(false);
+  }
 
   function clearFilters() {
     setQuery("");
@@ -239,70 +335,20 @@ export function Library({
     return qs ? `/export?${qs}` : "/export";
   }, [type, status, tag, genre, language, rating]);
 
+  if (trashMode) {
+    return <TrashView trashed={trashed} onExit={() => setTrashMode(false)} />;
+  }
+
   return (
     <div className="flex flex-col gap-5 pb-24">
       {/* Toolbar */}
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center justify-between gap-3">
-          <h1 className="text-xl font-semibold tracking-tight">Library</h1>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}
-              aria-label="Select titles"
-              title="Select titles"
-              className={cn(
-                "focus-ring flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm ring-1 transition-colors",
-                selectMode
-                  ? "bg-brand/15 text-brand ring-brand/40"
-                  : "text-muted ring-line hover:text-foreground",
-              )}
-            >
-              <CheckSquare size={15} />
-              <span className="hidden sm:inline">Select</span>
-            </button>
-            {!selectMode && items.length > 0 && (
-              <>
-                <button
-                  onClick={surprise}
-                  title="Pick something random to watch (prefers your watchlist)"
-                  aria-label="Surprise me"
-                  className="focus-ring flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground"
-                >
-                  <Dices size={15} />
-                  <span className="hidden sm:inline">Surprise</span>
-                </button>
-                <button
-                  onClick={() => openShare([])}
-                  title="Share your library"
-                  aria-label="Share your library"
-                  className="focus-ring flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground"
-                >
-                  <Share2 size={15} />
-                  <span className="hidden sm:inline">Share</span>
-                </button>
-              </>
-            )}
-            <div className="flex items-center gap-1 rounded-lg bg-surface-2 p-0.5 ring-1 ring-line">
-              <ViewToggle
-                active={view === "grid"}
-                onClick={() => setView("grid")}
-                label="Grid view"
-              >
-                <LayoutGrid size={16} />
-              </ViewToggle>
-              <ViewToggle
-                active={view === "list"}
-                onClick={() => setView("list")}
-                label="List view"
-              >
-                <List size={16} />
-              </ViewToggle>
-            </div>
-          </div>
-        </div>
+      <div className="flex flex-col gap-4">
+        <h1 className="text-xl font-semibold tracking-tight">Library</h1>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative min-w-48 flex-1">
+        {/* Row 1 — primary: the search is the dominant utility, next to a live
+            result count and the one high-emphasis action (Add title). */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="relative order-last w-full min-w-0 sm:order-none sm:w-auto sm:max-w-md sm:flex-1">
             <Search
               size={16}
               className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-faint"
@@ -316,150 +362,302 @@ export function Library({
               className="pl-9"
             />
           </div>
-          <button
-            type="button"
-            onClick={() => setShowFilters((v) => !v)}
-            aria-expanded={showFilters}
-            className="focus-ring relative flex min-h-10 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground sm:hidden"
-          >
-            <SlidersHorizontal size={15} /> Filters
-            {hasFilters && (
-              <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-brand" />
-            )}
-          </button>
-          <div
-            className={cn(
-              showFilters
-                ? "grid w-full grid-cols-2 gap-2 [&>*]:w-full sm:contents sm:[&>*]:w-auto"
-                : "hidden sm:contents",
-            )}
-          >
-          <Select
-            value={type}
-            onChange={(e) => setType(e.target.value as TypeFilter)}
-            aria-label="Filter by type"
-          >
-            <option value="all">All types</option>
-            <option value="MOVIE">Movies</option>
-            <option value="TV">TV shows</option>
-          </Select>
-          <Select
-            value={status}
-            onChange={(e) => setStatus(e.target.value as WatchStatus | "all")}
-            aria-label="Filter by status"
-          >
-            <option value="all">Any status</option>
-            {STATUS_ORDER.map((s) => (
-              <option key={s} value={s}>
-                {STATUS_META[s].label}
-              </option>
-            ))}
-          </Select>
-          {languages.length > 1 && (
-            <Select
-              value={language}
-              onChange={(e) => setLanguage(e.target.value)}
-              aria-label="Filter by language"
+          <div className="flex w-full items-center justify-between gap-3 sm:w-auto sm:justify-normal">
+            <p
+              role="status"
+              aria-live="polite"
+              className="shrink-0 text-xs tabular-nums text-muted"
             >
-              <option value="all">Any language</option>
-              {languages.map((l) => (
-                <option key={l} value={l}>
-                  {languageName(l)}
-                </option>
-              ))}
-            </Select>
-          )}
-          {genres.length > 1 && (
-            <Select
-              value={genre}
-              onChange={(e) => setGenre(e.target.value)}
-              aria-label="Filter by genre"
-            >
-              <option value="all">Any genre</option>
-              {genres.map((g) => (
-                <option key={g} value={g}>
-                  {g}
-                </option>
-              ))}
-            </Select>
-          )}
-          <Select
-            value={rating}
-            onChange={(e) => setRating(e.target.value)}
-            aria-label="Filter by rating"
-          >
-            <option value="all">Any rating</option>
-            <option value="unrated">Unrated</option>
-            <option value="9">9+</option>
-            <option value="8">8+</option>
-            <option value="7">7+</option>
-            <option value="6">6+</option>
-            <option value="5">5+</option>
-          </Select>
-          {tags.length > 0 && (
-            <Select
-              value={tag}
-              onChange={(e) => setTag(e.target.value)}
-              aria-label="Filter by tag"
-            >
-              <option value="all">Any tag</option>
-              {tags.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </Select>
-          )}
-          <Select
-            value={sort}
-            onChange={(e) => setSort(e.target.value as SortKey)}
-            aria-label="Sort titles"
-          >
-            {SORTS.map((s) => (
-              <option key={s.key} value={s.key}>
-                {s.label}
-              </option>
-            ))}
-          </Select>
-          <button
-            onClick={() => setOnlyUnmatched((v) => !v)}
-            title="Show titles with no TMDB match"
-            aria-pressed={onlyUnmatched}
-            className={cn(
-              "focus-ring rounded-lg px-2.5 py-1.5 text-sm ring-1 transition-colors",
-              onlyUnmatched
-                ? "bg-amber-500/15 text-amber-300 ring-amber-500/30"
-                : "text-muted ring-line hover:text-foreground",
-            )}
-          >
-            Needs match
-          </button>
-          {hasFilters && (
-            <button
-              onClick={clearFilters}
-              className="focus-ring flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm text-muted hover:text-foreground"
-            >
-              <X size={14} /> Clear
-            </button>
-          )}
-          {hasFilters && (
-            <Link
-              href={exportHref}
-              title="Open Export with these filters applied"
-              className="focus-ring flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm text-muted hover:text-foreground"
-            >
-              <Download size={14} /> Export these
+              {filtered.length} {filtered.length === 1 ? "title" : "titles"}
+              {hasFilters ? ` of ${items.length}` : ""}
+            </p>
+            <Link href="/add" className={addTitleButtonClass}>
+              <Plus size={16} /> Add title
             </Link>
-          )}
           </div>
         </div>
 
-        <div className="flex items-center justify-between">
-          <p className="text-xs text-muted">
-            {filtered.length} {filtered.length === 1 ? "title" : "titles"}
-            {hasFilters ? ` of ${items.length}` : ""}
-          </p>
-          {selectMode && filtered.length > 0 && (
+        {/* Row 2 — contextual: a type quick-filter and the single entry point to
+            the advanced facets, on every width. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div
+            role="group"
+            aria-label="Filter by type"
+            className="inline-flex items-center gap-0.5 rounded-lg bg-surface-2 p-0.5 ring-1 ring-line"
+          >
+            {TYPE_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setType(opt.value)}
+                aria-pressed={type === opt.value}
+                className={cn(
+                  "focus-ring flex min-h-11 items-center justify-center rounded-md px-3 text-sm transition-colors sm:min-h-8",
+                  type === opt.value
+                    ? "bg-surface text-foreground shadow-sm"
+                    : "text-muted hover:text-foreground",
+                )}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <button
+            ref={filtersTriggerRef}
+            type="button"
+            onClick={() => setShowFilters((v) => !v)}
+            aria-expanded={showFilters}
+            aria-controls="library-advanced-filters"
+            aria-label={advancedCount > 0 ? `Filters, ${advancedCount} active` : "Filters"}
+            className={cn(
+              "focus-ring ml-auto flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-sm ring-1 transition-colors sm:min-h-8",
+              showFilters || advancedCount > 0
+                ? "bg-surface-2 text-foreground ring-line-strong"
+                : "text-muted ring-line hover:text-foreground",
+            )}
+          >
+            <SlidersHorizontal size={15} />
+            Filters
+            {advancedCount > 0 && (
+              <span
+                aria-hidden
+                className="inline-flex min-w-5 items-center justify-center rounded-full bg-brand/15 px-1.5 text-xs font-medium tabular-nums text-brand"
+              >
+                {advancedCount}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {/* Active-filter chips — one removable chip per active facet, shown
+            whether or not the advanced panel is open. */}
+        {facetChips.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2">
+            {facetChips.map((chip) => (
+              <button
+                key={chip.key}
+                type="button"
+                onClick={chip.clear}
+                aria-label={`Remove ${chip.label} filter`}
+                className="focus-ring flex min-h-11 min-w-0 items-center gap-1.5 rounded-full bg-surface-2 px-3 text-xs text-foreground ring-1 ring-line transition-colors hover:text-foreground sm:min-h-0 sm:py-1"
+              >
+                <span className="break-words">{chip.label}</span>
+                <X size={13} aria-hidden className="text-muted" />
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="focus-ring flex min-h-11 items-center rounded-lg px-2 text-xs font-medium text-muted transition-colors hover:text-foreground sm:min-h-0"
+            >
+              Clear all
+            </button>
+          </div>
+        )}
+
+        {/* Advanced filters — collapsed by default; the only entry point is the
+            Row 2 disclosure button. Inline region, so focus is never trapped. */}
+        <AnimatePresence>
+          {showFilters && (
+            <motion.div
+              key="advanced-filters"
+              id="library-advanced-filters"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: EASE_OUT }}
+              className="overflow-hidden"
+            >
+              <Card variant="inset" className="flex flex-col gap-3 p-3">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  <Select
+                    value={status}
+                    onChange={(e) => setStatus(e.target.value as WatchStatus | "all")}
+                    aria-label="Filter by status"
+                    className="w-full"
+                  >
+                    <option value="all">Any status</option>
+                    {STATUS_ORDER.map((s) => (
+                      <option key={s} value={s}>
+                        {STATUS_META[s].label}
+                      </option>
+                    ))}
+                  </Select>
+                  {languages.length > 1 && (
+                    <Select
+                      value={language}
+                      onChange={(e) => setLanguage(e.target.value)}
+                      aria-label="Filter by language"
+                      className="w-full"
+                    >
+                      <option value="all">Any language</option>
+                      {languages.map((l) => (
+                        <option key={l} value={l}>
+                          {languageName(l)}
+                        </option>
+                      ))}
+                    </Select>
+                  )}
+                  {genres.length > 1 && (
+                    <Select
+                      value={genre}
+                      onChange={(e) => setGenre(e.target.value)}
+                      aria-label="Filter by genre"
+                      className="w-full"
+                    >
+                      <option value="all">Any genre</option>
+                      {genres.map((g) => (
+                        <option key={g} value={g}>
+                          {g}
+                        </option>
+                      ))}
+                    </Select>
+                  )}
+                  <Select
+                    value={rating}
+                    onChange={(e) => setRating(e.target.value)}
+                    aria-label="Filter by rating"
+                    className="w-full"
+                  >
+                    <option value="all">Any rating</option>
+                    <option value="unrated">Unrated</option>
+                    <option value="9">9+</option>
+                    <option value="8">8+</option>
+                    <option value="7">7+</option>
+                    <option value="6">6+</option>
+                    <option value="5">5+</option>
+                  </Select>
+                  {tags.length > 0 && (
+                    <Select
+                      value={tag}
+                      onChange={(e) => setTag(e.target.value)}
+                      aria-label="Filter by tag"
+                      className="w-full"
+                    >
+                      <option value="all">Any tag</option>
+                      {tags.map((t) => (
+                        <option key={t} value={t}>
+                          {t}
+                        </option>
+                      ))}
+                    </Select>
+                  )}
+                  <Select
+                    value={sort}
+                    onChange={(e) => setSort(e.target.value as SortKey)}
+                    aria-label="Sort titles"
+                    className="w-full"
+                  >
+                    {SORTS.map((s) => (
+                      <option key={s.key} value={s.key}>
+                        {s.label}
+                      </option>
+                    ))}
+                  </Select>
+                  <button
+                    type="button"
+                    onClick={() => setOnlyUnmatched((v) => !v)}
+                    title="Show titles with no TMDB match"
+                    aria-pressed={onlyUnmatched}
+                    className={cn(
+                      "focus-ring flex min-h-11 w-full items-center justify-center rounded-lg px-2.5 text-sm ring-1 transition-colors sm:min-h-9",
+                      onlyUnmatched
+                        ? "bg-amber-500/15 text-amber-300 ring-amber-500/30"
+                        : "text-muted ring-line hover:text-foreground",
+                    )}
+                  >
+                    Needs match
+                  </button>
+                </div>
+                {(trashedCount > 0 || hasFilters) && (
+                  <div className="flex items-center justify-between gap-2 border-t border-line pt-3">
+                    {trashedCount > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => setTrashMode(true)}
+                        className="focus-ring flex min-h-11 items-center gap-1.5 rounded-lg px-2 text-sm text-muted transition-colors hover:text-foreground sm:min-h-0"
+                      >
+                        <Trash2 size={14} /> Trash ({trashedCount})
+                      </button>
+                    ) : (
+                      <span />
+                    )}
+                    {hasFilters && (
+                      <Link
+                        href={exportHref}
+                        title="Open Export with these filters applied"
+                        className="focus-ring flex min-h-11 items-center gap-1.5 rounded-lg px-2 text-sm text-muted transition-colors hover:text-foreground sm:min-h-0"
+                      >
+                        <Download size={14} /> Export these
+                      </Link>
+                    )}
+                  </div>
+                )}
+              </Card>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Row 3 — utilities: de-emphasized selection, discovery, and view
+            controls, right-aligned in one compact cluster. */}
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <button
+            onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}
+            aria-label="Select titles"
+            aria-pressed={selectMode}
+            title="Select titles"
+            className={cn(
+              "focus-ring flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm ring-1 transition-colors sm:min-h-8 sm:min-w-0 sm:justify-start",
+              selectMode
+                ? "bg-brand/15 text-brand ring-brand/40"
+                : "text-muted ring-line hover:text-foreground",
+            )}
+          >
+            <CheckSquare size={15} />
+            <span className="hidden sm:inline">Select</span>
+          </button>
+          {!selectMode && items.length > 0 && (
+            <>
+              <button
+                onClick={surprise}
+                title="Pick something random to watch (prefers your watchlist)"
+                aria-label="Surprise me"
+                className="focus-ring flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground sm:min-h-8 sm:min-w-0 sm:justify-start"
+              >
+                <Dices size={15} />
+                <span className="hidden sm:inline">Surprise</span>
+              </button>
+              <button
+                onClick={() => openShare([])}
+                title="Share your library"
+                aria-label="Share your library"
+                className="focus-ring flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground sm:min-h-8 sm:min-w-0 sm:justify-start"
+              >
+                <Share2 size={15} />
+                <span className="hidden sm:inline">Share</span>
+              </button>
+            </>
+          )}
+          <div className="flex items-center gap-1 rounded-lg bg-surface-2 p-0.5 ring-1 ring-line">
+            <ViewToggle
+              active={view === "grid"}
+              onClick={() => setView("grid")}
+              label="Grid view"
+            >
+              <LayoutGrid size={16} />
+            </ViewToggle>
+            <ViewToggle
+              active={view === "list"}
+              onClick={() => setView("list")}
+              label="List view"
+            >
+              <List size={16} />
+            </ViewToggle>
+          </div>
+        </div>
+
+        {selectMode && filtered.length > 0 && (
+          <div className="flex justify-end">
             <button
               onClick={() =>
                 setSelected(
@@ -468,26 +666,28 @@ export function Library({
                     : new Set(filtered.map((f) => f.id)),
                 )
               }
-              className="focus-ring rounded text-xs font-medium text-brand hover:underline"
+              className="focus-ring flex min-h-11 items-center px-2 sm:min-h-0 rounded text-xs font-medium text-brand hover:underline"
             >
               {selectedIds.length === filtered.length ? "Deselect all" : "Select all"}
             </button>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {/* Results */}
       {filtered.length === 0 ? (
-        <EmptyState hasItems={items.length > 0} />
+        <EmptyState hasItems={items.length > 0} onClear={clearFilters} />
       ) : view === "grid" ? (
-        <div className="grid grid-cols-3 gap-x-4 gap-y-6 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7">
-          {filtered.map((it) => (
+        <div className="grid grid-cols-2 gap-x-4 gap-y-6 min-[480px]:grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7">
+          {filtered.map((it, i) => (
             <TitleCard
               key={it.id}
               item={it}
               selectable={selectMode}
               selected={selected.has(it.id)}
               onToggle={toggle}
+              // LCP: only the first few above-the-fold cards get eager/priority loading.
+              priority={i < 4}
             />
           ))}
         </div>
@@ -564,11 +764,14 @@ function BulkBar({
   return (
     <>
       {dialog}
-      <MotionProvider>
       <AnimatePresence>
       {open && (
         <motion.div
-          className="fixed inset-x-0 bottom-0 z-40 px-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
+          // z-[45]: above the mobile tab bar (nav.tsx, z-40, md:hidden) — selection
+          // mode is a transient modal-ish state that's meant to cover it — but
+          // below dialogs/command palette (z-50) so a confirm dialog or the share
+          // dialog opened from here still renders on top.
+          className="fixed inset-x-0 bottom-0 z-[45] px-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
           initial={{ y: 80, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
           exit={{ y: 80, opacity: 0 }}
@@ -586,7 +789,7 @@ function BulkBar({
                 const v = e.target.value as WatchStatus;
                 if (v) run(() => bulkSetStatus(ids, v), "Updated");
               }}
-              className="w-auto"
+              className="w-auto min-h-11"
             >
               <option value="">Set status…</option>
               {STATUS_ORDER.map((s) => (
@@ -603,7 +806,7 @@ function BulkBar({
                 onChange={(e) => setNewTag(e.target.value)}
                 placeholder="Add tag…"
                 disabled={disabled}
-                className="h-9 w-32"
+                className="h-9 min-h-11 w-32 sm:min-h-0"
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !disabled && newTag.trim()) {
                     run(() => bulkAddTag(ids, newTag.trim()), "Tagged");
@@ -625,6 +828,8 @@ function BulkBar({
                   setNewTag("");
                 }}
                 title="Add this tag to selected"
+                aria-label="Add this tag to selected"
+                className="min-h-11 min-w-11 sm:min-w-0"
               >
                 <TagIcon size={14} />
               </Button>
@@ -637,6 +842,8 @@ function BulkBar({
                   setNewTag("");
                 }}
                 title="Remove this tag from selected"
+                aria-label="Remove this tag from selected"
+                className="min-h-11 min-w-11 sm:min-w-0"
               >
                 <Minus size={14} />
               </Button>
@@ -647,6 +854,7 @@ function BulkBar({
               variant="secondary"
               disabled={disabled}
               onClick={() => run(() => bulkSetFavorite(ids, true), "Favorited")}
+              className="min-h-11"
             >
               <Heart size={14} /> Favorite
             </Button>
@@ -656,11 +864,18 @@ function BulkBar({
               variant="secondary"
               disabled={disabled}
               onClick={() => run(() => bulkSetFavorite(ids, false), "Unfavorited")}
+              className="min-h-11"
             >
               <Heart size={14} className="text-faint" /> Unfavorite
             </Button>
 
-            <Button size="sm" variant="secondary" disabled={disabled} onClick={onShare}>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={disabled}
+              onClick={onShare}
+              className="min-h-11"
+            >
               <Share2 size={14} /> Share
             </Button>
 
@@ -672,7 +887,10 @@ function BulkBar({
                 if (
                   !(await confirm({
                     title: `Remove ${count} ${count === 1 ? "title" : "titles"}?`,
-                    body: "This can't be undone.",
+                    body:
+                      count === 1
+                        ? "This moves it to Trash. You can restore it from there."
+                        : "This moves them to Trash. You can restore them from there.",
                     confirmLabel: "Remove",
                     destructive: true,
                   }))
@@ -680,13 +898,14 @@ function BulkBar({
                   return;
                 run(() => bulkRemoveTitles(ids).then((r) => (onDone(), r)), "Removed");
               }}
+              className="min-h-11"
             >
               <Trash2 size={14} /> Remove
             </Button>
 
             <button
               onClick={onDone}
-              className="focus-ring ml-auto rounded-lg px-2.5 py-1.5 text-sm text-muted hover:text-foreground"
+              className="focus-ring ml-auto flex min-h-11 items-center rounded-lg px-2.5 py-1.5 text-sm text-muted hover:text-foreground sm:min-h-8"
             >
               Done
             </button>
@@ -694,7 +913,6 @@ function BulkBar({
         </motion.div>
       )}
       </AnimatePresence>
-      </MotionProvider>
     </>
   );
 }
@@ -717,7 +935,7 @@ function ViewToggle({
       title={label}
       aria-pressed={active}
       className={cn(
-        "focus-ring flex h-9 w-9 items-center justify-center rounded-md transition-colors sm:h-7 sm:w-7",
+        "focus-ring flex h-11 w-11 items-center justify-center rounded-md transition-colors sm:h-7 sm:w-7",
         active ? "bg-surface text-foreground" : "text-muted hover:text-foreground",
       )}
     >
@@ -747,6 +965,7 @@ function ListRow({
         <Poster
           path={item.posterPath}
           name={item.name}
+          decorative
           mediaType={item.mediaType}
           size="w92"
           sizes="36px"
@@ -775,6 +994,7 @@ function ListRow({
     return (
       <button
         onClick={() => onToggle(item.id)}
+        aria-pressed={selected}
         className={cn(
           "cv-auto focus-ring flex items-center gap-3 px-3 py-2.5 text-left transition-colors",
           selected ? "bg-brand/10" : "bg-surface hover:bg-surface-2/50",
@@ -803,15 +1023,171 @@ function ListRow({
   );
 }
 
-function EmptyState({ hasItems }: { hasItems: boolean }) {
+function EmptyState({ hasItems, onClear }: { hasItems: boolean; onClear: () => void }) {
   return (
     <div className="flex flex-col items-center justify-center gap-3 rounded-[var(--radius-card)] border border-dashed border-line py-20 text-center">
       <p className="text-sm text-muted">
         {hasItems ? "No titles match your filters." : "Your library is empty."}
       </p>
-      <Link href="/add" className="focus-ring rounded text-sm font-medium text-brand hover:underline">
-        {hasItems ? "Try clearing filters" : "Add your first title →"}
-      </Link>
+      {hasItems ? (
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={onClear}
+            className="focus-ring flex min-h-11 items-center justify-center rounded-lg px-2 py-1.5 text-sm font-medium text-brand hover:underline sm:min-h-0"
+          >
+            Try clearing filters
+          </button>
+          <span className="text-faint">·</span>
+          <Link
+            href="/add"
+            className="focus-ring flex min-h-11 items-center justify-center rounded-lg px-2 py-1.5 text-sm text-muted hover:text-foreground sm:min-h-0"
+          >
+            Add a title
+          </Link>
+        </div>
+      ) : (
+        <Link
+          href="/add"
+          className="focus-ring inline-flex min-h-11 items-center rounded text-sm font-medium text-brand hover:underline sm:min-h-0"
+        >
+          Add your first title
+        </Link>
+      )}
+    </div>
+  );
+}
+
+function TrashView({
+  trashed,
+  onExit,
+}: {
+  trashed: TrashedTitle[];
+  onExit: () => void;
+}) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const { confirm, dialog } = useConfirm();
+
+  function restore(item: TrashedTitle) {
+    start(async () => {
+      try {
+        await restoreTitle(item.id);
+        toast.success(`Restored ${item.name}`);
+      } catch (e) {
+        toast.error((e as Error).message);
+      } finally {
+        // Re-sync from the server so a failed action can't leave a stale row.
+        router.refresh();
+      }
+    });
+  }
+
+  async function purge(item: TrashedTitle) {
+    if (
+      !(await confirm({
+        title: `Delete ${item.name} forever?`,
+        body: "This permanently deletes it. No undo.",
+        confirmLabel: "Delete forever",
+        destructive: true,
+      }))
+    )
+      return;
+    start(async () => {
+      try {
+        await purgeTitle(item.id);
+        toast.success(`Deleted ${item.name}`);
+      } catch (e) {
+        toast.error((e as Error).message);
+      } finally {
+        router.refresh();
+      }
+    });
+  }
+
+  return (
+    <>
+      {dialog}
+      <div className="flex flex-col gap-4 pb-24">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <h1 className="text-xl font-semibold tracking-tight">Trash</h1>
+            <span className="shrink-0 text-xs tabular-nums text-muted">
+              {trashed.length} {trashed.length === 1 ? "title" : "titles"}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={onExit}
+            className="focus-ring flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground sm:min-h-8"
+          >
+            <ArrowLeft size={15} /> Back to library
+          </button>
+        </div>
+        <p className="text-sm text-muted">
+          Restore a title to bring it back with your ratings and notes, or delete it forever.
+        </p>
+        {trashed.length === 0 ? (
+          <div className="flex flex-col items-center justify-center gap-3 rounded-[var(--radius-card)] border border-dashed border-line py-20 text-center">
+            <p className="text-sm text-muted">Trash is empty.</p>
+          </div>
+        ) : (
+          <div className="flex flex-col divide-y divide-line overflow-hidden rounded-[var(--radius-card)] ring-1 ring-line">
+            {trashed.map((it) => (
+              <TrashRow
+                key={it.id}
+                item={it}
+                busy={pending}
+                onRestore={() => restore(it)}
+                onPurge={() => purge(it)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function TrashRow({
+  item,
+  busy,
+  onRestore,
+  onPurge,
+}: {
+  item: TrashedTitle;
+  busy: boolean;
+  onRestore: () => void;
+  onPurge: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-3 bg-surface px-3 py-2.5">
+      <div className="w-9 shrink-0">
+        <Poster
+          path={item.posterPath}
+          name={item.name}
+          decorative
+          mediaType={item.mediaType}
+          size="w92"
+          sizes="36px"
+        />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm font-medium">{item.name}</div>
+        <div className="truncate text-xs text-muted">
+          {item.mediaType === "TV" ? "TV" : "Movie"} · Deleted {fullDate(item.deletedAt)}
+        </div>
+      </div>
+      <div className="flex shrink-0 items-center gap-1.5">
+        <Button size="sm" variant="secondary" disabled={busy} onClick={onRestore}>
+          <RotateCcw size={14} /> Restore
+        </Button>
+        <Button size="sm" variant="danger" disabled={busy} onClick={onPurge}>
+          <Trash2 size={14} />
+          <span className="hidden sm:inline">Delete forever</span>
+          <span className="sm:hidden">Delete</span>
+        </Button>
+      </div>
     </div>
   );
 }

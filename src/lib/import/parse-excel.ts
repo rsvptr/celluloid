@@ -53,6 +53,10 @@ export function parseHumanDate(text: string | null): string | null {
   if (!text) return null;
   const cleaned = text.trim();
   if (!cleaned || NO_DATE.has(cleaned.toLowerCase())) return null;
+  // Already-canonical ISO (e.g. cellText serialized a real Excel Date cell to a
+  // UTC yyyy-mm-dd): return as-is. Re-parsing via new Date() + local getters
+  // shifts the day back one in timezones behind UTC, so short-circuit it.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(cleaned)) return cleaned;
   const d = new Date(cleaned);
   if (Number.isNaN(d.getTime())) return null;
   const yyyy = d.getFullYear();

@@ -1,3 +1,4 @@
+import "server-only";
 import { cache } from "react";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
@@ -24,6 +25,6 @@ export async function getOptionalUser() {
 /** Returns the signed-in user's id or throws (for server actions / route handlers). */
 export async function requireUserId(): Promise<string> {
   const session = await getSession();
-  if (!session?.user) throw new Error("Unauthorized");
+  if (!session?.user) throw new Error("You're signed out. Sign in and try again.");
   return session.user.id;
 }

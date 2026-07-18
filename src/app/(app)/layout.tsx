@@ -19,7 +19,14 @@ export default async function AppLayout({
         Skip to content
       </a>
       <Nav userName={user.name} />
-      <main id="main" tabIndex={-1} className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 outline-none">
+      {/* Bottom padding clears the fixed mobile tab bar (~56px + safe-area
+          inset) so the last row of content is never hidden behind it; md+
+          reverts to the original symmetric py-6 since that bar is desktop-hidden. */}
+      <main
+        id="main"
+        tabIndex={-1}
+        className="mx-auto w-full max-w-7xl flex-1 px-4 pt-6 pb-[calc(5rem+env(safe-area-inset-bottom))] outline-none md:pb-6"
+      >
         {children}
       </main>
       <CommandPalette />

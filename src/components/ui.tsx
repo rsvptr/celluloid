@@ -21,8 +21,10 @@ const buttonVariants: Record<ButtonVariant, string> = {
 
 const buttonSizes: Record<ButtonSize, string> = {
   // Taller hit area on touch (mobile); compact on desktop via sm:min-h-0.
-  sm: "h-8 px-3 text-sm min-h-10 sm:min-h-0",
-  md: "h-10 px-4 text-sm",
+  sm: "h-8 px-3 text-sm min-h-11 sm:min-h-0",
+  // min-h (not h-) so content can never overflow the box; sm:min-h-10
+  // reproduces the old fixed h-10 exactly once content fits within it.
+  md: "min-h-11 sm:min-h-10 px-4 text-sm",
 };
 
 export interface ButtonProps
@@ -49,13 +51,13 @@ export function Button({
 // --- Inputs ----------------------------------------------------------------
 
 const fieldBase =
-  "rounded-lg bg-surface-2 px-3 text-sm text-foreground placeholder:text-faint ring-1 ring-line focus:outline-none focus:ring-2 focus:ring-brand/60 transition";
+  "rounded-lg bg-surface-2 px-3 text-base sm:text-sm text-foreground placeholder:text-faint ring-1 ring-line-strong focus:outline-none focus:ring-2 focus:ring-brand/60 transition";
 
 export function Input({
   className,
   ...props
 }: React.InputHTMLAttributes<HTMLInputElement>) {
-  return <input className={cn(fieldBase, "h-10 w-full", className)} {...props} />;
+  return <input className={cn(fieldBase, "h-11 sm:h-10 w-full", className)} {...props} />;
 }
 
 export function Textarea({
@@ -77,7 +79,7 @@ export function Select({
     <select
       className={cn(
         fieldBase,
-        "has-chevron h-9 pr-8 cursor-pointer appearance-none min-h-10 sm:min-h-0",
+        "has-chevron h-9 pr-8 cursor-pointer appearance-none min-h-11 sm:min-h-0",
         className,
       )}
       {...props}
@@ -108,20 +110,31 @@ export function Badge({
 
 // --- Card ------------------------------------------------------------------
 
+type CardVariant = "panel" | "inset" | "plain" | "danger";
+
+const cardVariants: Record<CardVariant, string> = {
+  /** Default surface: elevated bg + hairline ring. Top-level content blocks. */
+  panel: "rounded-[var(--radius-card)] bg-surface ring-1 ring-line",
+  /** Recessed, ringless surface for a control group nested inside a panel. */
+  inset: "rounded-lg bg-surface-2",
+  /** No fill or ring — a section whose grouping reads from spacing alone. */
+  plain: "",
+  /** Low-saturation destructive enclosure for irreversible actions (matches
+   *  the settings danger-zone treatment). No call sites yet. */
+  danger: "rounded-lg bg-rose-500/5 ring-1 ring-rose-500/25",
+};
+
 export function Card({
   className,
+  variant = "panel",
   children,
 }: {
   className?: string;
+  variant?: CardVariant;
   children: React.ReactNode;
 }) {
   return (
-    <div
-      className={cn(
-        "rounded-[var(--radius-card)] bg-surface ring-1 ring-line",
-        className,
-      )}
-    >
+    <div className={cn(cardVariants[variant], className)}>
       {children}
     </div>
   );

@@ -1,5 +1,5 @@
 import { requireUser } from "@/lib/session";
-import { getLibraryItems, getTags } from "@/lib/data";
+import { getLibraryItems, getTags, getTrashedTitles } from "@/lib/data";
 import { filtersToParams, parseLibraryFilters } from "@/lib/library-filters";
 import { Library } from "@/components/library";
 
@@ -9,10 +9,11 @@ export default async function LibraryPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const user = await requireUser();
-  const [sp, items, tags] = await Promise.all([
+  const [sp, items, tags, trashed] = await Promise.all([
     searchParams,
     getLibraryItems(user.id),
     getTags(user.id),
+    getTrashedTitles(user.id),
   ]);
 
   const tagNames = tags.map((t) => t.name);
@@ -35,6 +36,7 @@ export default async function LibraryPage({
       languages={languages}
       tags={tagNames}
       genres={genres}
+      trashed={trashed}
       initialFilters={initialFilters}
     />
   );

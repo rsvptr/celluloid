@@ -27,7 +27,12 @@ export async function GET(request: Request) {
   // Bound the query: nothing legitimate is longer, and it keeps the outbound
   // TMDB request URL sane.
   const q = (new URL(request.url).searchParams.get("q")?.trim() ?? "").slice(0, 100);
-  if (!q) return NextResponse.json({ results: [] });
+  if (!q) {
+    return NextResponse.json(
+      { results: [] },
+      { headers: { "Cache-Control": "private, no-store" } },
+    );
+  }
 
   try {
     const items = await searchMulti(q);
@@ -42,12 +47,15 @@ export async function GET(request: Request) {
       tmdbRating: it.vote_average ?? null,
       language: it.original_language ?? null,
     }));
-    return NextResponse.json({ results });
+    return NextResponse.json(
+      { results },
+      { headers: { "Cache-Control": "private, no-store" } },
+    );
   } catch (err) {
     console.error("TMDB search failed:", err);
     return NextResponse.json(
       { error: "Search is temporarily unavailable. Please try again." },
-      { status: 502 },
+      { status: 502, headers: { "Cache-Control": "private, no-store" } },
     );
   }
 }

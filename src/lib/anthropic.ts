@@ -2,25 +2,40 @@ import Anthropic from "@anthropic-ai/sdk";
 import { prisma } from "@/lib/prisma";
 import { decryptSecret } from "@/lib/crypto";
 
+/** Outcome of resolving a user's Anthropic key, enough to distinguish a normal
+ * "no user key, use the default" from "user has a key but it wouldn't decrypt". */
+export interface ResolvedAnthropicKey {
+  /** The key to use, or null when neither a user key nor a server default exists. */
+  key: string | null;
+  /** True when `key` is the deployment default rather than the user's own key. */
+  usedFallback: boolean;
+  /** True when the user had a stored key (even if it failed to decrypt). */
+  hadUserKey: boolean;
+}
+
 /**
  * Resolve the Anthropic API key for a user: their own encrypted key if set,
- * otherwise the deployment-default ANTHROPIC_API_KEY. Returns null if neither.
+ * otherwise the deployment-default ANTHROPIC_API_KEY. `usedFallback` tells the
+ * caller the returned key is the default; combined with `hadUserKey` it can tell
+ * "user has no key" (normal) from "user key present but undecryptable" (worth a
+ * warning). `key` is null when neither source is available.
  */
-export async function resolveAnthropicKey(userId: string): Promise<string | null> {
+export async function resolveAnthropicKey(userId: string): Promise<ResolvedAnthropicKey> {
   const u = await prisma.user.findUnique({
     where: { id: userId },
     select: { anthropicKeyEnc: true },
   });
+  const hadUserKey = !!u?.anthropicKeyEnc;
   if (u?.anthropicKeyEnc) {
     try {
-      return decryptSecret(u.anthropicKeyEnc);
+      return { key: decryptSecret(u.anthropicKeyEnc), usedFallback: false, hadUserKey };
     } catch (e) {
       // Leave a server-side trail (a stored key that won't decrypt usually means
       // ENCRYPTION_KEY changed) before falling back to the server default.
       console.error(`Failed to decrypt stored Anthropic key for user ${userId}:`, e);
     }
   }
-  return process.env.ANTHROPIC_API_KEY || null;
+  return { key: process.env.ANTHROPIC_API_KEY || null, usedFallback: true, hadUserKey };
 }
 
 export function anthropicClient(apiKey: string): Anthropic {
@@ -55,5 +70,8 @@ export function friendlyAnthropicError(e: unknown): string {
   if (e instanceof Anthropic.APIError) {
     return `AI request failed: ${e.message}`;
   }
-  return `AI request failed: ${(e as Error).message ?? "unknown error"}`;
+  // Unknown, non-SDK error: never surface its raw message (it can carry stack
+  // internals or upstream response text). The caller logs the raw error
+  // server-side (see recommend.ts), so a generic, actionable line is enough here.
+  return "Claude request failed. Try again in a moment.";
 }

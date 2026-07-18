@@ -13,10 +13,13 @@ export default async function RecommendPage() {
     getAccountInfo(user.id),
     getTags(user.id),
     getLibraryFacets(user.id),
-    prisma.title.count({ where: { userId: user.id, watchedAt: { not: null } } }),
+    prisma.title.count({
+      where: { userId: user.id, watchedAt: { not: null }, deletedAt: null },
+    }),
   ]);
   return (
-    <div className="mx-auto max-w-3xl">
+    // Full shell width (D-UI-17 amendment): no per-page cap.
+    <div>
       <RecommendClient
         hasKey={info.hasApiKey || info.hasServerKey}
         model={info.recommendModel ?? DEFAULT_REC_MODEL}

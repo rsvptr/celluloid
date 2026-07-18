@@ -1,24 +1,43 @@
+import "server-only";
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { nextCookies } from "better-auth/next-js";
 import { twoFactor } from "better-auth/plugins";
+import { env } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 
 const trustedOrigins = [
-  process.env.BETTER_AUTH_URL,
-  process.env.NEXT_PUBLIC_SITE_URL,
+  env.BETTER_AUTH_URL,
+  env.NEXT_PUBLIC_SITE_URL,
   // Only trust localhost during development; in production it would widen the
   // origin allowlist for no reason.
   ...(process.env.NODE_ENV !== "production" ? ["http://localhost:3000"] : []),
 ].filter((v): v is string => Boolean(v));
 
-/** Public sign-ups are open by default; set DISABLE_SIGNUPS=true to close them. */
-export const signupsDisabled = process.env.DISABLE_SIGNUPS === "true";
+/**
+ * Public sign-ups are CLOSED by default. Set ALLOW_SIGNUPS=true to open them long
+ * enough to create the owner account on first run, then remove the var to lock the
+ * deployment back down.
+ *
+ * Back-compat (one release only): the previous flag was DISABLE_SIGNUPS, where
+ * DISABLE_SIGNUPS=false meant "open". That single case is still honored and logged
+ * once, server-side, so existing deployments keep working across the rename.
+ */
+const signupsAllowed =
+  process.env.ALLOW_SIGNUPS === "true" || process.env.DISABLE_SIGNUPS === "false";
+
+if (process.env.DISABLE_SIGNUPS === "false") {
+  console.warn(
+    "[celluloid] DISABLE_SIGNUPS is deprecated; rename it to ALLOW_SIGNUPS=true. The old variable will stop being honored in a future release.",
+  );
+}
+
+export const signupsDisabled = !signupsAllowed;
 
 export const auth = betterAuth({
   appName: "Celluloid",
-  secret: process.env.BETTER_AUTH_SECRET,
-  baseURL: process.env.BETTER_AUTH_URL ?? process.env.NEXT_PUBLIC_SITE_URL,
+  secret: env.BETTER_AUTH_SECRET,
+  baseURL: env.BETTER_AUTH_URL,
   database: prismaAdapter(prisma, { provider: "postgresql" }),
 
   emailAndPassword: {

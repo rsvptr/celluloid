@@ -87,12 +87,12 @@ export function TagEditor({
         {tags.map((t) => (
           <span
             key={t.id}
-            className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2.5 py-1 text-xs text-foreground ring-1 ring-line"
+            className="inline-flex min-w-0 items-center gap-1 rounded-full bg-surface-2 px-2.5 py-1 text-xs text-foreground ring-1 ring-line"
           >
-            {t.name}
+            <span className="break-words">{t.name}</span>
             <button
               onClick={() => remove(t)}
-              className="focus-ring rounded text-faint hover:text-rose-300"
+              className="focus-ring -m-1.5 rounded p-1.5 text-faint hover:text-rose-300 sm:m-0 sm:p-0"
               aria-label={`Remove ${t.name}`}
             >
               <X size={12} />
@@ -116,7 +116,8 @@ export function TagEditor({
           onChange={(e) => setInput(e.target.value)}
           placeholder="Add a tag (e.g. Horror night)…"
           list="tag-suggestions"
-          className="h-9"
+          maxLength={50}
+          className="h-11 sm:h-9"
         />
         <datalist id="tag-suggestions">
           {suggestions.map((t) => (
@@ -125,7 +126,7 @@ export function TagEditor({
         </datalist>
         <button
           type="submit"
-          className="focus-ring flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-muted ring-1 ring-line hover:text-foreground"
+          className="focus-ring flex h-9 min-h-11 w-9 min-w-11 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-muted ring-1 ring-line hover:text-foreground sm:min-h-0 sm:min-w-0"
           aria-label="Add tag"
         >
           <Plus size={16} />
@@ -138,7 +139,7 @@ export function TagEditor({
             <button
               key={t.id}
               onClick={() => apply(t)}
-              className="focus-ring rounded-full px-2 py-0.5 text-xs text-muted ring-1 ring-line hover:text-foreground"
+              className="focus-ring flex min-h-11 items-center rounded-full px-2 py-0.5 text-xs text-muted ring-1 ring-line hover:text-foreground sm:min-h-0"
             >
               + {t.name}
             </button>

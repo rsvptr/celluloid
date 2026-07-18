@@ -1,6 +1,7 @@
 import { getSession } from "@/lib/session";
-import { parseUploadedList } from "@/lib/import/parse-upload";
-import { importParsedTitles } from "@/lib/import/run-import";
+import { parseUploadedList, ROW_SCAN_BUFFER } from "@/lib/import/parse-upload";
+import { stageParsedImport } from "@/lib/import-staging";
+import { prisma } from "@/lib/prisma";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
@@ -20,8 +21,21 @@ export async function POST(request: Request) {
 
   // Reject oversized uploads from the declared length BEFORE buffering the body
   // into memory (the file.size check below only runs after a full parse).
-  const declared = Number(request.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > MAX_BYTES + 64 * 1024) {
+  const contentLength = request.headers.get("content-length");
+  if (contentLength === null || !/^\d+$/.test(contentLength.trim())) {
+    return Response.json(
+      { error: "A valid Content-Length header is required for imports." },
+      { status: 411 },
+    );
+  }
+  const declared = Number(contentLength);
+  if (!Number.isSafeInteger(declared) || declared <= 0) {
+    return Response.json(
+      { error: "A valid Content-Length header is required for imports." },
+      { status: 411 },
+    );
+  }
+  if (declared > MAX_BYTES + 64 * 1024) {
     return Response.json(
       { error: "That file is too large. Please upload a file under 2 MB." },
       { status: 413 },
@@ -44,24 +58,69 @@ export async function POST(request: Request) {
     );
   }
 
+  let jobId: string | null = null;
   try {
     const buf = Buffer.from(await file.arrayBuffer());
-    const { titles, error } = await parseUploadedList(buf, file.name);
-    if (error) return Response.json({ error }, { status: 400 });
+    const job = await prisma.importJob.create({
+      data: {
+        userId: session.user.id,
+        filename: file.name.slice(0, 255),
+        status: "PARSING",
+      },
+      select: { id: true },
+    });
+    jobId = job.id;
+    // Pass the row ceiling so parsing stops early instead of materializing an
+    // entire crafted-to-decompress-huge sheet before this route truncates it.
+    const { titles, error, totalRows, scanCapped } = await parseUploadedList(
+      buf,
+      file.name,
+      MAX_ROWS,
+    );
+    if (error) {
+      await prisma.importJob.update({
+        where: { id: job.id },
+        data: { status: "FAILED", summary: { error: "PARSE_FAILED" } },
+      });
+      return Response.json({ error }, { status: 400 });
+    }
     if (titles.length === 0) {
+      await prisma.importJob.update({
+        where: { id: job.id },
+        data: { status: "FAILED", summary: { error: "NO_TITLES" } },
+      });
       return Response.json({ error: "No titles found in the file." }, { status: 400 });
     }
 
     const truncated = titles.length > MAX_ROWS;
     const rows = truncated ? titles.slice(0, MAX_ROWS) : titles;
+    // totalRows is exact unless parsing hit the bounded scan ceiling.
+    const totalInFile = totalRows ?? MAX_ROWS + ROW_SCAN_BUFFER;
+    const totalInFileExact = !scanCapped;
 
-    const result = await importParsedTitles({
+    const staged = await stageParsedImport({
       userId: session.user.id,
+      jobId: job.id,
       parsed: rows,
+      summary: {
+        parsed: rows.length,
+        truncated,
+        totalInFile,
+        totalInFileExact,
+      },
     });
 
-    return Response.json({ ...result, truncated, totalInFile: titles.length });
-  } catch {
+    return Response.json({ job: staged }, { status: 201 });
+  } catch (error) {
+    console.error("Staged import setup failed:", error);
+    if (jobId) {
+      await prisma.importJob
+        .updateMany({
+          where: { id: jobId, userId: session.user.id, status: "PARSING" },
+          data: { status: "FAILED", summary: { error: "STAGING_FAILED" } },
+        })
+        .catch(() => {});
+    }
     return Response.json(
       { error: "Something went wrong importing that file. Please try again." },
       { status: 500 },

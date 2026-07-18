@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Check, Copy, Download, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { Button, Card, Input, Select } from "@/components/ui";
@@ -18,6 +18,14 @@ import {
 } from "@/lib/export/format";
 import { cn } from "@/lib/utils";
 
+const FORMAT_HELP: Record<FormatKey, string> = {
+  ai: "A taste summary and recommendation request ready to paste into an AI assistant.",
+  text: "A readable plain-text copy for notes, email, or quick sharing.",
+  markdown: "A structured Markdown copy for documents and knowledge tools.",
+  json: "A concise machine-readable copy for analysis and personal scripts.",
+  xlsx: "A presentation workbook for browsing in Excel. It is not a full-fidelity Celluloid backup.",
+};
+
 export function ExportPanel({
   rows,
   tags,
@@ -34,6 +42,7 @@ export function ExportPanel({
   const [format, setFormat] = useState<FormatKey>("ai");
   const [count, setCount] = useState(15);
   const [copied, setCopied] = useState(false);
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   // Distinct languages (code → display) and genres present in the library, so
   // the filters only ever offer values that actually match something.
@@ -70,6 +79,21 @@ export function ExportPanel({
     setScope((s) => ({ ...s, [key]: value }));
   }
 
+  function handleFormatKeyDown(
+    event: React.KeyboardEvent<HTMLButtonElement>,
+    index: number,
+  ) {
+    let next = index;
+    if (event.key === "ArrowRight") next = (index + 1) % FORMATS.length;
+    else if (event.key === "ArrowLeft") next = (index - 1 + FORMATS.length) % FORMATS.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = FORMATS.length - 1;
+    else return;
+    event.preventDefault();
+    setFormat(FORMATS[next].key);
+    tabRefs.current[next]?.focus();
+  }
+
   async function copy() {
     try {
       await navigator.clipboard.writeText(content);
@@ -96,12 +120,12 @@ export function ExportPanel({
   }
 
   return (
-    <div className="flex flex-col gap-5">
-      <div>
+    <div className="flex flex-col gap-5 lg:grid lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] lg:items-start">
+      <div className="lg:col-span-2">
         <h1 className="text-xl font-semibold tracking-tight">Export</h1>
         <p className="mt-1 text-sm text-muted">
-          Copy or download your library. It&apos;s formatted to drop straight
-          into an AI for recommendations.
+          Create a filtered copy for recommendations, sharing, or spreadsheets.
+          These formats are exports, not a full-fidelity backup.
         </p>
       </div>
 
@@ -178,34 +202,45 @@ export function ExportPanel({
               <option value="5">5+</option>
             </Select>
           </Labeled>
-          <Labeled label="Released">
+          <fieldset className="flex flex-col gap-1">
+            <legend className="text-xs font-medium text-faint">Released</legend>
             {/* min-h-10 on touch matches every other control's 40px target. */}
             <div className="flex h-10 items-center gap-1.5 sm:h-9">
-              <Input
-                type="number"
-                inputMode="numeric"
-                placeholder="From"
-                value={scope.yearFrom ?? ""}
-                onChange={(e) => {
-                  const n = parseInt(e.target.value, 10);
-                  update("yearFrom", Number.isFinite(n) ? n : null);
-                }}
-                className="h-9 min-h-10 w-20 px-2 sm:min-h-0"
-              />
+              <label>
+                <span className="sr-only">From year</span>
+                <Input
+                  name="release-year-from"
+                  type="number"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  placeholder="From…"
+                  value={scope.yearFrom ?? ""}
+                  onChange={(e) => {
+                    const n = parseInt(e.target.value, 10);
+                    update("yearFrom", Number.isFinite(n) ? n : null);
+                  }}
+                  className="h-9 min-h-10 w-20 px-2 sm:min-h-0"
+                />
+              </label>
               <span className="text-xs text-faint">to</span>
-              <Input
-                type="number"
-                inputMode="numeric"
-                placeholder="To"
-                value={scope.yearTo ?? ""}
-                onChange={(e) => {
-                  const n = parseInt(e.target.value, 10);
-                  update("yearTo", Number.isFinite(n) ? n : null);
-                }}
-                className="h-9 min-h-10 w-20 px-2 sm:min-h-0"
-              />
+              <label>
+                <span className="sr-only">To year</span>
+                <Input
+                  name="release-year-to"
+                  type="number"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  placeholder="To…"
+                  value={scope.yearTo ?? ""}
+                  onChange={(e) => {
+                    const n = parseInt(e.target.value, 10);
+                    update("yearTo", Number.isFinite(n) ? n : null);
+                  }}
+                  className="h-9 min-h-10 w-20 px-2 sm:min-h-0"
+                />
+              </label>
             </div>
-          </Labeled>
+          </fieldset>
           {tags.length > 0 && (
             <Labeled label="Tag">
               <Select
@@ -221,7 +256,7 @@ export function ExportPanel({
               </Select>
             </Labeled>
           )}
-          <label className="flex h-9 items-center gap-2 text-sm text-muted">
+          <label className="flex h-9 min-h-11 items-center gap-2 text-sm text-muted sm:min-h-0">
             <input
               type="checkbox"
               checked={scope.favoritesOnly}
@@ -236,26 +271,44 @@ export function ExportPanel({
         </div>
 
         {/* Format */}
-        <div className="flex flex-wrap gap-1.5">
-          {FORMATS.map((f) => (
-            <button
-              key={f.key}
-              onClick={() => setFormat(f.key)}
-              className={cn(
-                "focus-ring flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm ring-1 transition-colors",
-                format === f.key
-                  ? "bg-surface-2 text-foreground ring-brand/40"
-                  : "text-muted ring-line hover:text-foreground",
-              )}
-            >
-              {f.key === "ai" && <Sparkles size={14} />}
-              {f.label}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center gap-3">
+          <div
+            role="tablist"
+            aria-label="Export format"
+            className="flex flex-wrap gap-1.5"
+          >
+            {FORMATS.map((f, index) => (
+              <button
+                key={f.key}
+                ref={(element) => {
+                  tabRefs.current[index] = element;
+                }}
+                id={`export-tab-${f.key}`}
+                type="button"
+                role="tab"
+                aria-selected={format === f.key}
+                aria-controls="export-preview"
+                aria-describedby="export-format-help"
+                tabIndex={format === f.key ? 0 : -1}
+                onClick={() => setFormat(f.key)}
+                onKeyDown={(event) => handleFormatKeyDown(event, index)}
+                className={cn(
+                  "focus-ring flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm ring-1 transition-colors sm:min-h-0",
+                  format === f.key
+                    ? "bg-surface-2 text-foreground ring-brand/40"
+                    : "text-muted ring-line hover:text-foreground",
+                )}
+              >
+                {f.key === "ai" && <Sparkles size={14} aria-hidden="true" />}
+                {f.label}
+              </button>
+            ))}
+          </div>
           {format === "ai" && (
-            <label className="ml-2 flex items-center gap-2 text-sm text-muted">
+            <label className="flex items-center gap-2 text-sm text-muted">
               Recommend
               <Input
+                name="recommendation-count"
                 type="number"
                 min={1}
                 max={50}
@@ -266,6 +319,9 @@ export function ExportPanel({
             </label>
           )}
         </div>
+        <p id="export-format-help" className="text-xs text-muted">
+          {FORMAT_HELP[format]}
+        </p>
 
         {/* Actions */}
         <div className="flex items-center gap-2">
@@ -274,29 +330,52 @@ export function ExportPanel({
             onClick={copy}
             disabled={format === "xlsx" || filtered.length === 0}
           >
-            {copied ? <Check size={16} /> : <Copy size={16} />}
-            {copied ? "Copied!" : format === "ai" ? "Copy AI prompt" : "Copy"}
+            {copied ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
+            {copied ? "Copied" : format === "ai" ? "Copy AI prompt" : "Copy"}
           </Button>
           <Button onClick={download} disabled={filtered.length === 0}>
-            <Download size={16} />
+            <Download size={16} aria-hidden="true" />
             Download {fmt.ext.toUpperCase()}
           </Button>
         </div>
       </Card>
 
-      {/* Preview */}
-      {format === "xlsx" ? (
-        <Card className="p-8 text-center text-sm text-muted">
-          A styled Excel workbook ({filtered.length} titles) with separate Movies
-          and TV Shows sheets. Click “Download XLSX”.
-        </Card>
-      ) : (
-        <Card className="overflow-hidden">
-          <pre className="max-h-[28rem] overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-xs leading-relaxed text-foreground/90">
-            {content || "Nothing to export with these filters."}
-          </pre>
-        </Card>
-      )}
+      <div className="flex flex-col gap-5">
+        <p role="status" aria-live="polite" className="sr-only">
+          {copied ? "Export copied to the clipboard." : ""}
+        </p>
+
+        {/* Preview */}
+        {format === "xlsx" ? (
+          <div
+            id="export-preview"
+            role="tabpanel"
+            aria-labelledby="export-tab-xlsx"
+            tabIndex={0}
+            className="focus-ring rounded-xl"
+          >
+            <Card className="p-8 text-center text-sm text-muted">
+              A styled presentation workbook ({filtered.length} titles) with separate
+              Movies and TV Shows sheets. It cannot currently restore every Celluloid
+              field, so keep a database backup as the recovery copy.
+            </Card>
+          </div>
+        ) : (
+          <div
+            id="export-preview"
+            role="tabpanel"
+            aria-labelledby={`export-tab-${format}`}
+            tabIndex={0}
+            className="focus-ring rounded-xl"
+          >
+            <Card className="overflow-hidden">
+              <pre className="max-h-[28rem] overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-xs leading-relaxed text-foreground/90">
+                {content || "Nothing to export with these filters."}
+              </pre>
+            </Card>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

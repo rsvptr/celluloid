@@ -30,6 +30,10 @@ model User {
   // Preferred Claude model for AI recommendations (null → server default).
   recommendModel String?
 
+  // Localization preferences.
+  timeZone    String @default("UTC")
+  watchRegion String @default("US") // ISO 3166-1 region for release/provider lookups
+
   twoFactorEnabled Boolean? @default(false)
 
   sessions   Session[]
@@ -37,9 +41,11 @@ model User {
   twofactors TwoFactor[]
 
   // App relations
-  titles     Title[]
-  tags       Tag[]
-  shareLists ShareList[]
+  titles      Title[]
+  tags        Tag[]
+  shareLists  ShareList[]
+  watchEvents WatchEvent[]
+  importJobs  ImportJob[]
 
   @@map("user")
 }
@@ -56,7 +62,16 @@ model ShareList {
   includeNotes Boolean  @default(false)
   // Whole-library shares hide not-yet-watched WATCHLIST titles unless this is set.
   includeWatchlist Boolean @default(false)
-  createdAt    DateTime @default(now())
+
+  // Scope + lifecycle. `titleIds` is retained during the transition to
+  // ShareListItem and will be dropped in a later migration.
+  scope     ShareScope @default(SELECTION)
+  expiresAt DateTime?
+  revokedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  items ShareListItem[]
 
   @@index([userId])
 }
@@ -169,16 +184,26 @@ model Title {
   // Provenance
   source String? // "Movies" | "TV Shows" | "Malayalam" | "tmdb" | "manual"
 
+  // Soft-delete + metadata-sync bookkeeping.
+  deletedAt         DateTime?
+  metadataSyncedAt  DateTime?
+  metadataSyncState MetadataSyncState?
+  metadataLastError String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  seasons Season[]
-  tags    TitleTag[]
+  seasons        Season[]
+  tags           TitleTag[]
+  watchEvents    WatchEvent[]
+  importItems    ImportItem[]
+  shareListItems ShareListItem[]
 
   @@unique([userId, mediaType, tmdbId])
   @@index([userId])
   @@index([userId, status])
   @@index([userId, mediaType])
+  @@index([userId, deletedAt])
 }
 
 model Season {
@@ -216,6 +241,11 @@ model Episode {
   watched   Boolean   @default(false)
   watchedAt DateTime?
 
+  // When this episode row was first materialized (e.g. via TMDB backfill).
+  discoveredAt DateTime @default(now())
+
+  watchEvents WatchEvent[]
+
   @@unique([seasonId, episodeNumber])
   @@index([seasonId])
 }
@@ -244,4 +274,121 @@ model TitleTag {
 
   @@id([titleId, tagId])
   @@index([tagId])
+}
+
+// ---------------------------------------------------------------------------
+// Workflow foundation (MIGRATION-1)
+// ---------------------------------------------------------------------------
+
+enum WatchEventKind {
+  TITLE_COMPLETED
+  EPISODE_WATCHED
+  REWATCH
+}
+
+enum WatchEventSource {
+  MANUAL
+  BULK
+  IMPORT
+  RESTORE
+  BACKFILL
+}
+
+enum MetadataSyncState {
+  OK
+  PARTIAL
+  FAILED
+}
+
+enum ImportJobStatus {
+  PARSING
+  READY_FOR_REVIEW
+  COMMITTING
+  COMPLETED
+  PARTIAL
+  FAILED
+  CANCELLED
+}
+
+enum ImportItemAction {
+  CREATE
+  UPDATE
+  SKIP
+  CONFLICT
+  FAILED
+}
+
+enum ShareScope {
+  WHOLE_LIBRARY
+  SELECTION
+}
+
+// Append-only log of watch activity (completions, episode watches, rewatches).
+model WatchEvent {
+  id         String           @id @default(cuid())
+  userId     String
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  titleId    String
+  title      Title            @relation(fields: [titleId], references: [id], onDelete: Cascade)
+  episodeId  String?
+  episode    Episode?         @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  kind       WatchEventKind
+  occurredAt DateTime
+  source     WatchEventSource @default(MANUAL)
+  note       String?          @db.Text
+  createdAt  DateTime         @default(now())
+
+  @@index([userId, occurredAt])
+  @@index([titleId, occurredAt])
+}
+
+// A staged bulk-import run: parse -> review -> commit.
+model ImportJob {
+  id          String          @id @default(cuid())
+  userId      String
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  filename    String
+  status      ImportJobStatus
+  summary     Json?
+  createdAt   DateTime        @default(now())
+  committedAt DateTime?
+
+  items ImportItem[]
+
+  @@index([userId, createdAt])
+}
+
+// One staged row within an ImportJob.
+model ImportItem {
+  id                String           @id @default(cuid())
+  jobId             String
+  job               ImportJob        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  rowNumber         Int
+  raw               Json
+  normalized        Json
+  proposedTmdbId    Int?
+  proposedMediaType MediaType?
+  matchScore        Float?
+  action            ImportItemAction
+  titleId           String?
+  title             Title?           @relation(fields: [titleId], references: [id], onDelete: SetNull)
+  errorCode         String?
+  warning           String?
+  attempts          Int              @default(0)
+
+  @@unique([jobId, rowNumber])
+  @@index([titleId])
+}
+
+// Explicit, ordered membership of a ShareList (supersedes ShareList.titleIds).
+model ShareListItem {
+  id          String    @id @default(cuid())
+  shareListId String
+  shareList   ShareList @relation(fields: [shareListId], references: [id], onDelete: Cascade)
+  titleId     String
+  title       Title     @relation(fields: [titleId], references: [id], onDelete: Cascade)
+  position    Int
+
+  @@unique([shareListId, titleId])
+  @@index([titleId])
 }

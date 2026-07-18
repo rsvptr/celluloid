@@ -12,9 +12,13 @@
   --color-surface: #111824;
   --color-surface-2: #18202e;
   --color-line: #232c3b;
+  /* Interactive control boundary (inputs/selects/textareas) — >=3:1 against
+     the surfaces those controls sit on (surface, surface-2, background),
+     unlike the ~1.27:1 decorative --color-line hairline used for cards. */
+  --color-line-strong: #5d6f84;
   --color-foreground: #e7eef6;
   --color-muted: #8a97a8;
-  --color-faint: #5b6675;
+  --color-faint: #7c8795;
 
   --color-brand: #2dd4ee;
   --color-brand-cyan: #2dd4ee;
@@ -62,12 +66,20 @@ label {
 }
 
 /* Skip layout/paint for offscreen library LIST rows (a 500-title list renders
-   only what's visible). Deliberately not used on grid cards: paint containment
-   clips their hover ring/lift. The intrinsic size keeps the scrollbar honest
-   before first paint (once painted, `auto` remembers the real size). */
+   only what's visible). The intrinsic size keeps the scrollbar honest before
+   first paint (once painted, `auto` remembers the real size). */
 .cv-auto {
   content-visibility: auto;
   contain-intrinsic-size: auto 61px;
+}
+
+/* Same idea for library GRID cards (poster + title/meta text). The size here
+   is an approximation of a typical rendered card — width/height vary with the
+   grid's column count, but content-visibility only needs a placeholder to
+   avoid scroll-jank before first paint. */
+.cv-auto-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 180px auto 320px;
 }
 
 /* --- Brand helpers --- */
@@ -145,7 +157,7 @@ label {
 
 /* Chevron affordance for native selects (which use appearance-none) */
 .has-chevron {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235b6675' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%237c8795' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 0.6rem center;
   background-size: 1rem;

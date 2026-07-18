@@ -13,7 +13,7 @@ export default function NotFound() {
         </p>
       </div>
       <Link href="/" className="focus-ring rounded text-sm font-medium text-brand hover:underline">
-        Go to your library →
+        Go to library
       </Link>
     </div>
   );

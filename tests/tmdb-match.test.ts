@@ -81,8 +81,19 @@ describe("pickBest", () => {
     assert.equal(pickBest(results, "ഭ്രമയുഗം", 2024), null);
   });
 
-  it("year within one still corroborates the top hit", () => {
+  it("year within one still corroborates the top hit for an unnormalizable query", () => {
+    // Different non-Latin script than the other carve-out cases, and a
+    // one-year (not exact) diff, so this exercises the "<= 1" branch on its
+    // own unnormalizable query.
     const results = [movie(9, "Romanized Name", 2023)];
-    assert.equal(pickBest(results, "completely different script", 2024)?.id, 9);
+    assert.equal(pickBest(results, "另一部电影", 2024)?.id, 9);
+  });
+
+  it("does not let a normal (normalizable) non-matching query ride the carve-out on a close year", () => {
+    // Regression for the carve-out being too broad: a real, normalizable
+    // query with zero name overlap must not hijack TMDB's top hit just
+    // because its year is within one of the target.
+    const results = [movie(9, "Romanized Name", 2023)];
+    assert.equal(pickBest(results, "completely different script", 2024), null);
   });
 });

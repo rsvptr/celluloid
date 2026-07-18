@@ -116,9 +116,22 @@ export function Sparkline({
     return <p className="text-sm text-muted">Not enough data.</p>;
   }
 
+  const min = Math.min(...points);
+  const max = Math.max(...points);
+  const sparkLabel =
+    `Trend across ${points.length} points, ranging from ${min} to ${max}` +
+    (labels ? `, from ${labels[0]} to ${labels[1]}` : "");
+
   return (
     <div>
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" preserveAspectRatio="none" style={{ height }}>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="w-full"
+        preserveAspectRatio="none"
+        style={{ height }}
+        role="img"
+        aria-label={sparkLabel}
+      >
         <defs>
           <linearGradient id="spark-fill" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="#2dd4ee" stopOpacity="0.35" />
@@ -146,7 +159,7 @@ export function Sparkline({
         />
       </svg>
       {labels && (
-        <div className="mt-1 flex justify-between text-[10px] text-faint">
+        <div className="mt-1 flex justify-between text-[10px] tabular-nums text-faint">
           <span>{labels[0]}</span>
           <span>{labels[1]}</span>
         </div>
@@ -165,6 +178,62 @@ const LEVEL_CLASS = [
   "bg-brand",
 ];
 
+/**
+ * Lays out the visible weeks x 7 day grid and aggregates total/max from ONLY
+ * the days inside that window. `activity` can span a user's entire watch
+ * history, so totalling or scaling colors over the raw array would let
+ * history outside the visible weeks inflate the "last year" total and flatten
+ * the color scale. `today` is injectable for deterministic tests; it defaults
+ * to the real current time for the live component.
+ */
+export function windowActivity(
+  activity: { date: string; count: number }[],
+  weeks: number,
+  today: Date = new Date(),
+): {
+  cols: { date: string; count: number; future: boolean }[][];
+  total: number;
+  max: number;
+} {
+  // Use UTC throughout so the grid's own day keys are internally consistent.
+  // `activity` entries come from getStats as "YYYY-MM-DD" strings bucketed in
+  // the owner's time zone (not necessarily UTC); comparing those keys as plain
+  // strings against this UTC-built grid is still correct since both sides use
+  // the same Y-M-D format, but a day may land one cell off from the owner's
+  // real local calendar near their midnight if the server and owner differ in
+  // UTC offset from "now".
+  const todayUtc = new Date(today);
+  todayUtc.setUTCHours(0, 0, 0, 0);
+  // End at the upcoming Saturday so the last column is full.
+  const end = new Date(todayUtc);
+  end.setUTCDate(end.getUTCDate() + (6 - end.getUTCDay()));
+  const start = new Date(end);
+  start.setUTCDate(start.getUTCDate() - (weeks * 7 - 1));
+
+  // Restrict to the visible window before aggregating, so a day outside the
+  // grid (e.g. an old import) cannot skew the total or the color scale.
+  const startKey = start.toISOString().slice(0, 10);
+  const endKey = end.toISOString().slice(0, 10);
+  const visible = activity.filter((a) => a.date >= startKey && a.date <= endKey);
+
+  const map = new Map(visible.map((a) => [a.date, a.count]));
+  const total = visible.reduce((s, a) => s + a.count, 0);
+  const max = Math.max(...visible.map((a) => a.count), 1);
+
+  const cols: { date: string; count: number; future: boolean }[][] = [];
+  const cursor = new Date(start);
+  for (let w = 0; w < weeks; w++) {
+    const col: { date: string; count: number; future: boolean }[] = [];
+    for (let d = 0; d < 7; d++) {
+      const key = cursor.toISOString().slice(0, 10);
+      col.push({ date: key, count: map.get(key) ?? 0, future: cursor > todayUtc });
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+    cols.push(col);
+  }
+  return { cols, total, max };
+}
+
 export function ActivityHeatmap({
   activity,
   weeks = 53,
@@ -172,34 +241,10 @@ export function ActivityHeatmap({
   activity: { date: string; count: number }[];
   weeks?: number;
 }) {
-  const { cols, total, max } = useMemo(() => {
-    const map = new Map(activity.map((a) => [a.date, a.count]));
-    const total = activity.reduce((s, a) => s + a.count, 0);
-    const max = Math.max(...activity.map((a) => a.count), 1);
-
-    // Use UTC throughout so day keys line up with getStats (which buckets by
-    // toISOString date). Avoids cells being off by one near local midnight.
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-    // End at the upcoming Saturday so the last column is full.
-    const end = new Date(today);
-    end.setUTCDate(end.getUTCDate() + (6 - end.getUTCDay()));
-    const start = new Date(end);
-    start.setUTCDate(start.getUTCDate() - (weeks * 7 - 1));
-
-    const cols: { date: string; count: number; future: boolean }[][] = [];
-    const cursor = new Date(start);
-    for (let w = 0; w < weeks; w++) {
-      const col: { date: string; count: number; future: boolean }[] = [];
-      for (let d = 0; d < 7; d++) {
-        const key = cursor.toISOString().slice(0, 10);
-        col.push({ date: key, count: map.get(key) ?? 0, future: cursor > today });
-        cursor.setUTCDate(cursor.getUTCDate() + 1);
-      }
-      cols.push(col);
-    }
-    return { cols, total, max };
-  }, [activity, weeks]);
+  const { cols, total, max } = useMemo(
+    () => windowActivity(activity, weeks),
+    [activity, weeks],
+  );
 
   const level = (c: number) => {
     if (c <= 0) return 0;
@@ -235,7 +280,9 @@ export function ActivityHeatmap({
         </div>
       </div>
       <div className="mt-2 flex items-center justify-between text-[10px] text-faint">
-        <span>{total} watched in the last year</span>
+        <span>
+          <span className="tabular-nums">{total}</span> watched in the last year
+        </span>
         <span className="flex items-center gap-1">
           Less
           {LEVEL_CLASS.map((c) => (

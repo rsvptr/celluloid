@@ -79,7 +79,14 @@ export function pickBest(
   // Keep the wrong-poster protection (a real name overlap is required), but let
   // a transliterated title resolve via TMDB's top hit + a corroborating year.
   const nameOk = best.nameMatch !== "none";
+  // Only a query that failed to normalize at all (non-Latin/transliterated
+  // title) is eligible for the carve-out - otherwise a normal query with no
+  // real name overlap could hijack an unrelated top hit just because the
+  // year happened to land within a year of the target.
   const transliterationOk =
-    best.i === 0 && best.yearDiff != null && best.yearDiff <= 1;
+    target.length === 0 &&
+    best.i === 0 &&
+    best.yearDiff != null &&
+    best.yearDiff <= 1;
   return nameOk || transliterationOk ? best.r : null;
 }

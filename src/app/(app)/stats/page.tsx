@@ -15,7 +15,7 @@ export default async function StatsPage() {
       <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
         <p className="text-sm text-muted">No stats yet. Add a few titles first.</p>
         <Link href="/add" className="focus-ring rounded text-sm font-medium text-brand hover:underline">
-          Add a title →
+          Add a title
         </Link>
       </div>
     );

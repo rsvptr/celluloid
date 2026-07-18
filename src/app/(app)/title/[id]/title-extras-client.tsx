@@ -7,7 +7,7 @@ import { Check, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Spinner } from "@/components/ui";
 import { addFromTmdb } from "@/lib/actions";
-import { setWatchRegion } from "@/lib/region-actions";
+import { saveWatchRegionPreference, setWatchRegion } from "@/lib/region-actions";
 import { regionName, WATCH_REGIONS } from "@/lib/tmdb-extras";
 
 /** One-click add for a "More like this" pick; links to the title once owned. */
@@ -49,14 +49,16 @@ export function QuickAdd({
           const res = await addFromTmdb(tmdbId, mediaType);
           if (res.id) {
             setState({ kind: "done", id: res.id });
-            if (!res.existing) toast.success(`Added ${name} to your watchlist`);
+            if (res.restored)
+              toast.success("Restored from Trash with your old ratings and notes.");
+            else if (!res.existing) toast.success(`Added ${name} to your watchlist`);
           } else {
             setState({ kind: "idle" });
             toast.error(res.error ?? `Couldn't add ${name}. Please try again.`);
           }
         })
       }
-      className="focus-ring inline-flex w-fit items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-muted ring-1 ring-line transition-colors hover:text-foreground disabled:opacity-60"
+      className="focus-ring inline-flex min-h-11 w-fit items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-muted ring-1 ring-line transition-colors hover:text-foreground disabled:opacity-60 sm:min-h-0"
     >
       {state.kind === "adding" ? <Spinner className="h-3 w-3" /> : <Plus size={11} />}
       Watchlist
@@ -79,8 +81,11 @@ export function RegionSelect({ region }: { region: string }) {
           await setWatchRegion(v);
           router.refresh();
         });
+        // Fire-and-forget: syncs the profile default without making the
+        // region switch wait on it. The cookie above is the fast path.
+        saveWatchRegionPreference(v).catch(() => {});
       }}
-      className="has-chevron h-7 cursor-pointer appearance-none rounded-md bg-surface-2 pl-2 pr-7 text-xs text-muted ring-1 ring-line focus:outline-none focus:ring-2 focus:ring-brand/60 disabled:opacity-60"
+      className="has-chevron h-7 min-h-11 cursor-pointer appearance-none rounded-md bg-surface-2 pl-2 pr-7 text-xs text-muted ring-1 ring-line focus:outline-none focus:ring-2 focus:ring-brand/60 disabled:opacity-60 sm:min-h-0"
     >
       {WATCH_REGIONS.map((r) => (
         <option key={r} value={r}>

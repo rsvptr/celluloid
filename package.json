@@ -4,12 +4,12 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "vercel-build": "prisma generate && prisma migrate deploy && next build",
+    "vercel-build": "prisma generate && (if [ \"$VERCEL_ENV\" = \"production\" ]; then prisma migrate deploy; fi) && next build",
     "start": "next start",
     "lint": "eslint",
     "postinstall": "prisma generate",
@@ -40,6 +40,7 @@
     "qrcode": "^1.5.4",
     "react": "19.2.7",
     "react-dom": "19.2.7",
+    "server-only": "^0.0.1",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.6.0",
     "zod": "^4.4.3"

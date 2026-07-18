@@ -9,5 +9,8 @@ export async function GET() {
     return NextResponse.json({ titles: [] }, { status: 401 });
   }
   const titles = await getTitleIndex(session.user.id);
-  return NextResponse.json({ titles });
+  return NextResponse.json(
+    { titles },
+    { headers: { "Cache-Control": "private, no-store" } },
+  );
 }

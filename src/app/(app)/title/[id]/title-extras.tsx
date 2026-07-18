@@ -1,24 +1,17 @@
 import Image from "next/image";
 import { cookies } from "next/headers";
-import { ExternalLink, Play } from "lucide-react";
+import { ExternalLink, Play, UserRound } from "lucide-react";
 import { prisma } from "@/lib/prisma";
-import {
-  getRelatedTitles,
-  getVideos,
-  getWatchProviders,
-  TMDB_IMAGE_BASE,
-  type TmdbSearchItem,
-  type TmdbVideo,
-  type TmdbWatchProviders,
-} from "@/lib/tmdb";
+import { getTitleBundle } from "@/lib/tmdb";
 import {
   DEFAULT_WATCH_REGION,
   isWatchRegion,
   pickTrailer,
   regionWatchInfo,
 } from "@/lib/tmdb-extras";
+import { TMDB_IMAGE_BASE } from "@/lib/images";
 import { yearOf } from "@/lib/tmdb-match";
-import { Card } from "@/components/ui";
+import { Badge, Card } from "@/components/ui";
 import { Poster } from "@/components/poster";
 import { MediaType } from "@/generated/prisma/client";
 import { QuickAdd, RegionSelect } from "./title-extras-client";
@@ -42,23 +35,20 @@ export async function TitleExtras({
   const regionRaw = (await cookies()).get("celluloid-region")?.value;
   const region = isWatchRegion(regionRaw) ? regionRaw : DEFAULT_WATCH_REGION;
 
-  let providers: TmdbWatchProviders | null = null;
-  let related: TmdbSearchItem[] = [];
-  let videos: TmdbVideo[] = [];
-  try {
-    // Independent lookups — one round trip's latency, not three.
-    [providers, related, videos] = await Promise.all([
-      getWatchProviders(kind, tmdbId).catch(() => null),
-      getRelatedTitles(kind, tmdbId).catch(() => []),
-      getVideos(kind, tmdbId).catch(() => []),
-    ]);
-  } catch {
-    return null;
-  }
+  // One append_to_response request carries everything below — down from
+  // three separate round trips. The region localizes the certification badge
+  // alongside the watch providers it sits next to.
+  const bundle = await getTitleBundle(kind, tmdbId, region).catch(() => null);
+  if (!bundle) return null;
 
-  const watch = regionWatchInfo(providers?.results, region);
-  const trailer = pickTrailer(videos);
-  const picks = related.slice(0, 6);
+  const watch = regionWatchInfo(bundle.providersResults, region);
+  const trailer = pickTrailer(bundle.videos);
+  const picks = bundle.related.slice(0, 6);
+  const crewLine = bundle.directors.length
+    ? `Directed by ${bundle.directors.join(", ")}`
+    : bundle.creators.length
+      ? `Created by ${bundle.creators.join(", ")}`
+      : null;
 
   // Mark related titles already in the library so they deep-link instead of
   // offering a duplicate add.
@@ -69,20 +59,39 @@ export async function TitleExtras({
         userId,
         mediaType,
         tmdbId: { in: picks.map((p) => p.id) },
+        deletedAt: null,
       },
       select: { id: true, tmdbId: true },
     });
     for (const t of owned) if (t.tmdbId != null) ownedByTmdbId.set(t.tmdbId, t.id);
   }
 
-  if (watch.groups.length === 0 && !trailer && picks.length === 0) return null;
+  if (
+    watch.groups.length === 0 &&
+    !trailer &&
+    picks.length === 0 &&
+    !bundle.certification &&
+    bundle.topCast.length === 0 &&
+    !bundle.imdbUrl
+  ) {
+    return null;
+  }
 
   return (
     <>
       <Card className="p-5">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold">Where to watch</h2>
-          <div className="flex items-center gap-2">
+        {/* Below sm the actions (trailer/IMDb/region) drop to their own
+            full-width line and wrap; sm+ keeps the single justified row. */}
+        <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-sm font-semibold">Where to watch</h2>
+            {bundle.certification && (
+              <Badge className="bg-surface-2 text-muted ring-line">
+                {bundle.certification}
+              </Badge>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
             {trailer && (
               <a
                 href={trailer.url}
@@ -91,6 +100,16 @@ export async function TitleExtras({
                 className="focus-ring inline-flex items-center gap-1.5 rounded-md bg-surface-2 px-2.5 py-1 text-xs font-medium text-foreground/90 ring-1 ring-line transition-colors hover:text-foreground"
               >
                 <Play size={11} aria-hidden /> Watch trailer
+              </a>
+            )}
+            {bundle.imdbUrl && (
+              <a
+                href={bundle.imdbUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="focus-ring inline-flex items-center gap-1.5 rounded-md bg-surface-2 px-2.5 py-1 text-xs font-medium text-foreground/90 ring-1 ring-line transition-colors hover:text-foreground"
+              >
+                View on IMDb <ExternalLink size={11} aria-hidden />
               </a>
             )}
             <RegionSelect region={region} />
@@ -109,7 +128,7 @@ export async function TitleExtras({
                   rel="noreferrer"
                   className="focus-ring rounded font-medium text-brand hover:underline"
                 >
-                  Check JustWatch →
+                  Check JustWatch
                 </a>
               </>
             )}
@@ -157,23 +176,75 @@ export async function TitleExtras({
                 rel="noreferrer"
                 className="focus-ring inline-flex items-center gap-0.5 rounded hover:text-muted"
               >
-                open <ExternalLink size={10} aria-hidden />
+                Open <ExternalLink size={10} aria-hidden />
               </a>
             </>
           )}
         </p>
       </Card>
 
+      {bundle.topCast.length > 0 && (
+        <Card className="p-5">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold">Cast</h2>
+            {crewLine && <p className="text-xs text-faint">{crewLine}</p>}
+          </div>
+          {/* Below sm: horizontal snap-scroll rail (pure CSS — this is a server
+              component). sm+: the multi-column grid. Fixed-width, shrink-0 items
+              let the next one peek in as a scroll affordance. */}
+          <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2 sm:grid sm:grid-cols-8 sm:gap-x-3 sm:gap-y-4 sm:overflow-visible sm:pb-0">
+            {bundle.topCast.map((c, i) => (
+              <div
+                key={`${c.name}-${i}`}
+                className="flex w-[72px] shrink-0 snap-start flex-col items-center gap-1.5 text-center sm:w-full sm:min-w-0"
+              >
+                <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-full bg-surface-2 ring-1 ring-line">
+                  {c.profilePath ? (
+                    <Image
+                      src={`${TMDB_IMAGE_BASE}w185${c.profilePath}`}
+                      alt={c.name}
+                      fill
+                      sizes="56px"
+                      className="object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center" aria-hidden>
+                      <UserRound className="text-faint" size={20} />
+                    </div>
+                  )}
+                </div>
+                <div className="w-full min-w-0">
+                  <p className="truncate text-[11px] font-medium" title={c.name}>
+                    {c.name}
+                  </p>
+                  {c.character && (
+                    <p className="truncate text-[10px] text-faint" title={c.character}>
+                      {c.character}
+                    </p>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
       {picks.length > 0 && (
         <Card className="p-5">
           <h2 className="mb-3 text-sm font-semibold">More like this</h2>
-          <div className="grid grid-cols-3 gap-x-3 gap-y-4 sm:grid-cols-6">
+          {/* Below sm: horizontal snap-scroll rail (pure CSS). Items are a touch
+              wider than the cast rail so the poster + Watchlist action sit
+              comfortably without overflowing. sm+: the grid. */}
+          <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2 sm:grid sm:grid-cols-6 sm:gap-x-3 sm:gap-y-4 sm:overflow-visible sm:pb-0">
             {picks.map((p) => {
               const name = p.title ?? p.name ?? "Untitled";
               const year = yearOf(p);
               const existingId = ownedByTmdbId.get(p.id);
               return (
-                <div key={p.id} className="flex flex-col gap-1.5">
+                <div
+                  key={p.id}
+                  className="flex w-[92px] shrink-0 snap-start flex-col gap-1.5 sm:w-full sm:min-w-0"
+                >
                   <a
                     href={`https://www.themoviedb.org/${kind}/${p.id}`}
                     target="_blank"
@@ -184,13 +255,14 @@ export async function TitleExtras({
                     <Poster
                       path={p.poster_path}
                       name={name}
+                      decorative
                       mediaType={mediaType}
                       size="w185"
-                      sizes="(max-width: 640px) 30vw, 110px"
+                      sizes="(max-width: 640px) 92px, 110px"
                       className="ring-1 ring-line transition hover:ring-brand/50"
                     />
                   </a>
-                  <div className="min-w-0">
+                  <div className="w-full min-w-0">
                     <p className="truncate text-xs font-medium" title={name}>
                       {name}
                     </p>

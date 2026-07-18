@@ -16,9 +16,9 @@ export { AnimatePresence, LayoutGroup, motion, useReducedMotion };
 export const EASE_OUT = [0.16, 1, 0.3, 1] as const;
 
 /**
- * Wraps a subtree so motion animations honor the OS "reduce motion" setting.
- * Needed because motion drives animations via JS (not CSS transitions), so the
- * `prefers-reduced-motion` rule in globals.css does not reach them on its own.
+ * Mounted once by RootLayout so every Motion animation honors the OS "reduce
+ * motion" setting. Motion drives animations via JS, so the CSS media query in
+ * globals.css cannot provide this guarantee on its own.
  */
 export function MotionProvider({ children }: { children: React.ReactNode }) {
   return <MotionConfig reducedMotion="user">{children}</MotionConfig>;

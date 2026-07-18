@@ -5,7 +5,7 @@ export default function manifest(): MetadataRoute.Manifest {
     name: "Celluloid",
     short_name: "Celluloid",
     description:
-      "Your personal film and TV library. Track what you've watched and export it for anything.",
+      "Your personal film & TV library. Track what you've watched and export it for anything.",
     start_url: "/",
     display: "standalone",
     background_color: "#0a0e14",
@@ -23,12 +23,9 @@ export default function manifest(): MetadataRoute.Manifest {
         type: "image/png",
         purpose: "any",
       },
-      {
-        src: "/icon-192.png",
-        sizes: "192x192",
-        type: "image/png",
-        purpose: "maskable",
-      },
+      // No padded maskable asset exists yet — reusing the full-bleed "any"
+      // icon with purpose:"maskable" gets clipped by Android's safe-zone
+      // mask on install, so we omit a maskable entry until one is designed.
     ],
   };
 }

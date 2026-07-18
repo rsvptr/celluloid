@@ -1,28 +1,42 @@
 import { getSession } from "@/lib/session";
 import {
   runRecommendationStream,
-  type RecommendBasis,
   type RecStreamEvent,
 } from "@/lib/recommend";
-import { isRecEra } from "@/lib/models";
+import { isRecEra, isRecModel } from "@/lib/models";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
+import { z } from "zod";
 
-/** Validate the optional recommendation basis; unknown shapes fall back to the whole library. */
-function parseBasis(raw: unknown): RecommendBasis | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-  const b = raw as Record<string, unknown>;
-  if (b.mode === "recent") {
-    const n = typeof b.recentCount === "number" ? b.recentCount : 20;
-    return { mode: "recent", recentCount: n };
-  }
-  if (b.mode === "pick") {
-    const ids = Array.isArray(b.ids)
-      ? b.ids.filter((x): x is string => typeof x === "string").slice(0, 200)
-      : [];
-    return { mode: "pick", ids };
-  }
-  return undefined;
-}
+const boundedId = z.string().min(1).max(64);
+const recentCountSchema = z.union([z.literal(10), z.literal(20), z.literal(50)]);
+
+export const recommendRequestSchema = z
+  .object({
+    count: z.number().int().min(1).max(30).optional(),
+    type: z.enum(["all", "movie", "tv"]).default("all"),
+    focus: z.string().trim().max(280).optional(),
+    model: z.string().refine(isRecModel, "Unknown recommendation model").optional(),
+    basis: z
+      .discriminatedUnion("mode", [
+        z.object({ mode: z.literal("recent"), recentCount: recentCountSchema }),
+        z.object({ mode: z.literal("pick"), ids: z.array(boundedId).max(200) }),
+      ])
+      .optional(),
+    exclude: z
+      .array(z.string().min(1).max(200))
+      .transform((titles) => titles.slice(0, 100))
+      .optional(),
+    language: z
+      .string()
+      .trim()
+      .min(2)
+      .max(12)
+      .regex(/^[A-Za-z]{2,3}(?:-[A-Za-z]{2})?$/, "Invalid language code")
+      .optional(),
+    genre: z.string().trim().min(1).max(40).optional(),
+    era: z.string().refine(isRecEra, "Unknown era").optional(),
+  })
+  .strict();
 
 export const runtime = "nodejs";
 export const maxDuration = 60; // Claude + TMDB enrichment can take a while
@@ -40,51 +54,42 @@ export async function POST(request: Request) {
   const rl = rateLimit(`rec:${session.user.id}`, 10, 60_000);
   if (!rl.ok) return tooManyRequests(rl.retryAfter);
 
-  let body: {
-    count?: unknown;
-    type?: unknown;
-    focus?: unknown;
-    model?: unknown;
-    basis?: unknown;
-    exclude?: unknown;
-    language?: unknown;
-    genre?: unknown;
-    era?: unknown;
-  } = {};
+  let rawBody: unknown = {};
   try {
-    body = await request.json();
+    const text = await request.text();
+    rawBody = text.trim() ? JSON.parse(text) : {};
   } catch {
-    // empty body is fine
+    return Response.json(
+      { error: "Invalid JSON request body." },
+      { status: 400 },
+    );
   }
 
-  const exclude = Array.isArray(body.exclude)
-    ? body.exclude
-        .filter((x): x is string => typeof x === "string")
-        .map((x) => x.slice(0, 200)) // bound each entry, not just the count
-        .slice(0, 100)
-    : undefined;
+  const parsed = recommendRequestSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    return Response.json(
+      {
+        error: "Invalid recommendation request.",
+        issues: parsed.error.issues.map((issue) => ({
+          path: issue.path.join("."),
+          message: issue.message,
+        })),
+      },
+      { status: 400 },
+    );
+  }
 
+  const body = parsed.data;
   const opts = {
-    count: typeof body.count === "number" ? body.count : undefined,
-    type: (body.type === "movie" || body.type === "tv" ? body.type : "all") as
-      | "movie"
-      | "tv"
-      | "all",
-    // Bound the free-text focus so it can't bloat the prompt / token spend.
-    focus: typeof body.focus === "string" ? body.focus.slice(0, 280) : undefined,
-    model: typeof body.model === "string" ? body.model : undefined,
-    basis: parseBasis(body.basis),
-    exclude,
-    // Short, bounded preference hints (language is an ISO code; genre a name).
-    language:
-      typeof body.language === "string" && body.language
-        ? body.language.slice(0, 12)
-        : undefined,
-    genre:
-      typeof body.genre === "string" && body.genre
-        ? body.genre.slice(0, 40)
-        : undefined,
-    era: typeof body.era === "string" && isRecEra(body.era) ? body.era : undefined,
+    count: body.count,
+    type: body.type,
+    focus: body.focus || undefined,
+    model: body.model,
+    basis: body.basis,
+    exclude: body.exclude,
+    language: body.language,
+    genre: body.genre,
+    era: body.era,
   };
 
   const encoder = new TextEncoder();
@@ -102,7 +107,7 @@ export async function POST(request: Request) {
         await runRecommendationStream(userId, opts, emit, request.signal);
       } catch (err) {
         console.error("Recommendation stream crashed:", err);
-        emit({ type: "error", error: "Something went wrong. Please try again." });
+        emit({ type: "error", error: "Recommendations failed to start. Try again in a moment." });
       } finally {
         try {
           controller.close();

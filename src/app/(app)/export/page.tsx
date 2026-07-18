@@ -33,7 +33,8 @@ export default async function ExportPage({
   };
 
   return (
-    <div className="mx-auto max-w-3xl">
+    // Full shell width (D-UI-17 amendment): no per-page cap.
+    <div>
       <ExportPanel
         rows={rows}
         tags={tags.map((t) => t.name)}

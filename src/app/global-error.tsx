@@ -1,14 +1,19 @@
 "use client";
 
+import Link from "next/link";
+
 // Replaces the root layout when an error happens above it, so it must render its
 // own <html>/<body> and can't rely on globals.css — styles are inlined.
 export default function GlobalError({ reset }: { reset: () => void }) {
   return (
     <html lang="en">
+      <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+      </head>
       <body
         style={{
           margin: 0,
-          minHeight: "100vh",
+          minHeight: "100dvh",
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
@@ -33,6 +38,7 @@ export default function GlobalError({ reset }: { reset: () => void }) {
             cursor: "pointer",
             borderRadius: "0.5rem",
             border: "none",
+            minHeight: "44px",
             padding: "0.5rem 1rem",
             fontSize: "0.875rem",
             fontWeight: 600,
@@ -42,6 +48,19 @@ export default function GlobalError({ reset }: { reset: () => void }) {
         >
           Try again
         </button>
+        <Link
+          href="/"
+          style={{
+            minHeight: "44px",
+            display: "inline-flex",
+            alignItems: "center",
+            color: "#a8dff1",
+            fontSize: "0.875rem",
+            textUnderlineOffset: "0.2em",
+          }}
+        >
+          Go to library
+        </Link>
       </body>
     </html>
   );
