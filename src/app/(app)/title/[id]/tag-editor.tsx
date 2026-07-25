@@ -67,14 +67,26 @@ export function TagEditor({
       return;
     }
     startTransition(async () => {
+      // No optimistic chip here, unlike apply/remove: a brand-new tag has no id
+      // until the server mints one, so there is nothing to render — and nothing
+      // to roll back — until both calls land. The two are reported separately
+      // because creating the tag can succeed while linking it to this title
+      // fails, and the chip must not appear for a link that was never made.
+      let id: string;
       try {
-        const id = await createTag(trimmed);
-        setTags((t) => [...t, { id, name: trimmed }]);
-        await toggleTitleTag(titleId, id, true);
-        router.refresh();
+        id = await createTag(trimmed);
       } catch {
         toast.error(`Couldn't create “${trimmed}”. Please try again.`);
+        return;
       }
+      try {
+        await toggleTitleTag(titleId, id, true);
+      } catch {
+        toast.error(`Couldn't add “${trimmed}”. Please try again.`);
+        return;
+      }
+      setTags((t) => [...t, { id, name: trimmed }]);
+      router.refresh();
     });
   }
 

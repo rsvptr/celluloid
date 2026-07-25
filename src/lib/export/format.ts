@@ -22,6 +22,13 @@ export interface ExportRow {
   genres: string[];
   totalEpisodes: number | null;
   watchedEpisodes: number;
+  /**
+   * Logged completions of this title: the TITLE_COMPLETED and REWATCH events on
+   * the watch log, so a title watched four times can be told apart from one
+   * watched once. An imported backlog carries no events, so 0 means "nothing
+   * logged", not "never watched".
+   */
+  watchCount: number;
   favorite: boolean;
   notes: string | null;
   tags: string[];
@@ -174,6 +181,10 @@ function compactLine(r: ExportRow, withRating = true): string {
   const title = r.year ? `${r.name} (${r.year})` : r.name;
   const parts = [r.favorite ? `★ ${title}` : title];
   if (withRating && r.myRating != null) parts.push(`${r.myRating}/10`);
+  // Going back to something is the strongest preference a tracker can observe,
+  // so it sits next to the rating rather than at the end of the line where a
+  // long genre/tag tail could bury it.
+  if (r.watchCount >= 2) parts.push(`watched ${r.watchCount}×`);
   const p = progress(r);
   if (p) parts.push(p);
   if (r.genres.length) parts.push(r.genres.slice(0, 3).join("/"));
@@ -313,6 +324,12 @@ export function tasteSummary(
     opts?.abandoned ?? rows.filter((r) => r.statusKey === "DROPPED")
   ).slice(0, 30);
   const watching = rows.filter((r) => r.statusKey === "WATCHING").slice(0, 25);
+  // ON_HOLD is one of five watch states, but the brief used to describe only
+  // four — an unrated paused title appeared in no block at all, so the model
+  // never learned it existed and could recommend it back. "Paused" is also a
+  // distinct signal from both "watching" and "dropped": interest without
+  // momentum, which is worth stating rather than collapsing into either.
+  const onHold = rows.filter((r) => r.statusKey === "ON_HOLD").slice(0, 25);
   const watchlist = (
     opts?.watchlist ?? rows.filter((r) => r.statusKey === "WATCHLIST")
   ).slice(0, 40);
@@ -345,6 +362,18 @@ export function tasteSummary(
     out.push(`I mostly watch in these languages: ${topLangs.join(", ")}.`, "");
   }
 
+  // The brief used to carry rewatches only as an unexplained count on a line,
+  // or not at all, so a film I returned to four times read exactly like any
+  // other 9/10. Say what the marker means and where it ranks, once, and only
+  // when the library actually contains a rewatch — an unused legend is a line
+  // of prompt that displaces a real title.
+  if (rows.some((r) => r.watchCount >= 2)) {
+    out.push(
+      'Signal strength, strongest first: titles I went back to (marked "watched N×" — the strongest signal I have, above any rating), then what I rated highly, then favorites (marked ★).',
+      "",
+    );
+  }
+
   const block = (heading: string, list: ExportRow[], withRating = true) => {
     if (!list.length) return;
     out.push(heading);
@@ -366,6 +395,10 @@ export function tasteSummary(
     block("RECENTLY WATCHED (reflects my current mood, weight these):", recent);
   }
   block("CURRENTLY WATCHING:", watching, false);
+  block(
+    "ON HOLD (started, paused for now — don't recommend these, and note I stalled on them):",
+    onHold,
+  );
   block("ABANDONED / didn't finish (do NOT recommend things like these):", abandoned);
   block(
     "ON MY WATCHLIST (already planned, so do NOT recommend these, and don't repeat anything above):",

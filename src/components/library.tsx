@@ -12,6 +12,7 @@ import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   CheckSquare,
+  ChevronDown,
   Dices,
   Download,
   Heart,
@@ -48,9 +49,11 @@ import {
   bulkRemoveTitles,
   bulkSetFavorite,
   bulkSetStatus,
+  emptyTrash,
   purgeTitle,
   restoreTitle,
 } from "@/lib/actions";
+import { tagChipClass } from "@/lib/tag-colors";
 import { cn } from "@/lib/utils";
 
 const SORTS: { key: SortKey; label: string }[] = [
@@ -73,6 +76,18 @@ const TYPE_OPTIONS: { value: TypeFilter; label: string }[] = [
 // Primary CTA rendered as a real anchor (Link to /add). Mirrors
 // <Button variant="primary" size="md"> from ui.tsx — that primitive can't take
 // an href, and ui.tsx is out of this task's scope, so its classes are inlined.
+/**
+ * Case- and diacritic-insensitive fold for search. A library that leans
+ * international is full of titles the owner will type unaccented — "amelie" for
+ * "Amélie", "rashomon" for "Rashōmon" — and a raw `toLowerCase().includes()`
+ * silently returns nothing for those, which reads as "I don't own this".
+ * NFD splits base characters from their combining marks so the marks can be
+ * dropped; \p{Diacritic} needs the `u` flag.
+ */
+function fold(value: string): string {
+  return value.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
+}
+
 const addTitleButtonClass =
   "inline-flex min-h-11 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg brand-gradient px-4 text-sm font-semibold text-[#04121c] shadow-sm shadow-brand/20 transition-colors hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/60 sm:min-h-10";
 
@@ -80,6 +95,7 @@ export function Library({
   items,
   languages,
   tags,
+  tagColors,
   genres,
   trashed,
   initialFilters,
@@ -87,6 +103,12 @@ export function Library({
   items: LibraryItem[];
   languages: string[];
   tags: string[];
+  /**
+   * Tag name -> stored colour, for rendering a title's tags in the colour the
+   * owner picked in Settings. Optional because a caller that has only the names
+   * still renders correct (neutral) chips.
+   */
+  tagColors?: Record<string, string | null>;
   genres: string[];
   trashed: TrashedTitle[];
   initialFilters: LibraryFilters;
@@ -191,8 +213,16 @@ export function Library({
     });
   const advancedCount = facetChips.length;
 
+  // Folded search text per title, computed once per library rather than once per
+  // keystroke per title. Keyed by id so the map survives unrelated re-renders.
+  const searchIndex = useMemo(() => {
+    const index = new Map<string, string>();
+    for (const it of items) index.set(it.id, fold(it.name));
+    return index;
+  }, [items]);
+
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = fold(query.trim());
     let list = items.filter((it) => {
       if (type !== "all" && it.mediaType !== type) return false;
       if (status !== "all" && it.status !== status) return false;
@@ -204,7 +234,7 @@ export function Library({
         if (it.rating == null || it.rating < Number(rating)) return false;
       }
       if (onlyUnmatched && it.tmdbId != null) return false;
-      if (q && !it.name.toLowerCase().includes(q)) return false;
+      if (q && !(searchIndex.get(it.id) ?? fold(it.name)).includes(q)) return false;
       return true;
     });
     list = [...list].sort((a, b) => {
@@ -225,7 +255,19 @@ export function Library({
       }
     });
     return list;
-  }, [items, query, type, status, language, tag, genre, rating, sort, onlyUnmatched]);
+  }, [
+    items,
+    searchIndex,
+    query,
+    type,
+    status,
+    language,
+    tag,
+    genre,
+    rating,
+    sort,
+    onlyUnmatched,
+  ]);
 
   // The authoritative selection for actions: visible AND selected, in view order.
   // Deriving the intersection here (instead of pruning `selected` in an effect)
@@ -697,6 +739,7 @@ export function Library({
             <ListRow
               key={it.id}
               item={it}
+              tagColors={tagColors}
               selectMode={selectMode}
               selected={selected.has(it.id)}
               onToggle={toggle}
@@ -744,8 +787,28 @@ function BulkBar({
   const router = useRouter();
   const [pending, start] = useTransition();
   const [newTag, setNewTag] = useState("");
+  // Phone-width disclosure for the secondary actions. The bar used to pack
+  // every control into one line: below sm it wrapped to four or five rows and
+  // swallowed ~40% of the viewport, and from sm to lg the nowrap scroller cut
+  // off everything past the fold — including Remove and Done, because `ml-auto`
+  // resolves to zero inside an overflowing flex container, so the exit and the
+  // destructive action were both off-screen with nothing to hint at a scroll.
+  // Now the bar wraps at every width (no scroller), and on phones only the
+  // count, the status select, Remove and Done stay out; the rest lives here.
+  const [showMore, setShowMore] = useState(false);
+  // Tracks the `open` value last reconciled against showMore, so the
+  // render-time adjustment below runs once per actual change (same pattern the
+  // Trash count uses above) rather than looping.
+  const [reconciledOpen, setReconciledOpen] = useState(open);
   const { confirm, dialog } = useConfirm();
   const disabled = pending || count === 0;
+
+  // Leaving select mode closes the disclosure, so the next selection starts from
+  // the same compact bar rather than whatever the last one was left expanded to.
+  if (open !== reconciledOpen) {
+    setReconciledOpen(open);
+    if (!open) setShowMore(false);
+  }
 
   function run(fn: () => Promise<{ count: number } | { count: number; tag: string }>, verb: string) {
     start(async () => {
@@ -777,8 +840,10 @@ function BulkBar({
           exit={{ y: 80, opacity: 0 }}
           transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
         >
-          <div className="mx-auto flex max-w-4xl flex-wrap items-center gap-2 rounded-2xl bg-surface/95 p-2.5 shadow-xl ring-1 ring-line backdrop-blur-md sm:flex-nowrap sm:overflow-x-auto sm:[&>*]:shrink-0">
-            <span className="px-2 text-sm font-medium tabular-nums">
+          {/* max-w-5xl (was 4xl): the full control set measures ~930px, so the
+              wider cap is what lets a desktop still show it on a single row. */}
+          <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-2 rounded-2xl bg-surface/95 p-2.5 shadow-xl ring-1 ring-line backdrop-blur-md">
+            <span className="shrink-0 px-2 text-sm font-medium tabular-nums">
               {count} selected
             </span>
 
@@ -789,7 +854,7 @@ function BulkBar({
                 const v = e.target.value as WatchStatus;
                 if (v) run(() => bulkSetStatus(ids, v), "Updated");
               }}
-              className="w-auto min-h-11"
+              className="w-auto min-h-11 shrink-0"
             >
               <option value="">Set status…</option>
               {STATUS_ORDER.map((s) => (
@@ -799,116 +864,153 @@ function BulkBar({
               ))}
             </Select>
 
-            <div className="flex items-center gap-1">
-              <Input
-                list="bulk-tags"
-                value={newTag}
-                onChange={(e) => setNewTag(e.target.value)}
-                placeholder="Add tag…"
-                disabled={disabled}
-                className="h-9 min-h-11 w-32 sm:min-h-0"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !disabled && newTag.trim()) {
+            <button
+              type="button"
+              onClick={() => setShowMore((v) => !v)}
+              aria-expanded={showMore}
+              aria-controls="bulk-more-actions"
+              className="focus-ring flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground sm:hidden"
+            >
+              More
+              <ChevronDown
+                size={14}
+                aria-hidden
+                className={cn("transition-transform", showMore && "rotate-180")}
+              />
+            </button>
+
+            {/* Secondary actions. Below sm this is the disclosure: a full-width
+                row that wraps directly under the More button controlling it. It
+                used to be pulled below Remove/Done with `order-last` so those two
+                never moved, but that left tab order and screen-reader order
+                disagreeing with the screen — the panel was read before the two
+                buttons it appeared underneath. Sitting next to its trigger costs
+                Remove/Done one row while the panel is open, and is where a
+                disclosure's content belongs anyway. Rules on both edges keep it
+                legible as its own block between the two rows. From sm up the
+                breakpoint utilities win outright, so it sits inline whatever the
+                disclosure was last left at. */}
+            <div
+              id="bulk-more-actions"
+              className={cn(
+                "w-full flex-wrap items-center gap-2 border-y border-line py-2.5 sm:w-auto sm:border-0 sm:py-0",
+                showMore ? "flex" : "hidden sm:flex",
+              )}
+            >
+              <div className="flex items-center gap-1">
+                <Input
+                  list="bulk-tags"
+                  value={newTag}
+                  onChange={(e) => setNewTag(e.target.value)}
+                  placeholder="Add tag…"
+                  disabled={disabled}
+                  aria-label="Tag to add or remove"
+                  className="h-9 min-h-11 w-32 sm:min-h-0"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !disabled && newTag.trim()) {
+                      run(() => bulkAddTag(ids, newTag.trim()), "Tagged");
+                      setNewTag("");
+                    }
+                  }}
+                />
+                <datalist id="bulk-tags">
+                  {tags.map((t) => (
+                    <option key={t} value={t} />
+                  ))}
+                </datalist>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={disabled || !newTag.trim()}
+                  onClick={() => {
                     run(() => bulkAddTag(ids, newTag.trim()), "Tagged");
                     setNewTag("");
-                  }
-                }}
-              />
-              <datalist id="bulk-tags">
-                {tags.map((t) => (
-                  <option key={t} value={t} />
-                ))}
-              </datalist>
+                  }}
+                  title="Add this tag to selected"
+                  aria-label="Add this tag to selected"
+                  className="min-h-11 min-w-11 sm:min-w-0"
+                >
+                  <TagIcon size={14} />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={disabled || !newTag.trim()}
+                  onClick={() => {
+                    run(() => bulkRemoveTag(ids, newTag.trim()), "Untagged");
+                    setNewTag("");
+                  }}
+                  title="Remove this tag from selected"
+                  aria-label="Remove this tag from selected"
+                  className="min-h-11 min-w-11 sm:min-w-0"
+                >
+                  <Minus size={14} />
+                </Button>
+              </div>
+
               <Button
                 size="sm"
                 variant="secondary"
-                disabled={disabled || !newTag.trim()}
-                onClick={() => {
-                  run(() => bulkAddTag(ids, newTag.trim()), "Tagged");
-                  setNewTag("");
-                }}
-                title="Add this tag to selected"
-                aria-label="Add this tag to selected"
-                className="min-h-11 min-w-11 sm:min-w-0"
+                disabled={disabled}
+                onClick={() => run(() => bulkSetFavorite(ids, true), "Favorited")}
+                className="min-h-11"
               >
-                <TagIcon size={14} />
+                <Heart size={14} /> Favorite
               </Button>
+
               <Button
                 size="sm"
                 variant="secondary"
-                disabled={disabled || !newTag.trim()}
-                onClick={() => {
-                  run(() => bulkRemoveTag(ids, newTag.trim()), "Untagged");
-                  setNewTag("");
-                }}
-                title="Remove this tag from selected"
-                aria-label="Remove this tag from selected"
-                className="min-h-11 min-w-11 sm:min-w-0"
+                disabled={disabled}
+                onClick={() => run(() => bulkSetFavorite(ids, false), "Unfavorited")}
+                className="min-h-11"
               >
-                <Minus size={14} />
+                <Heart size={14} className="text-faint" /> Unfavorite
+              </Button>
+
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={disabled}
+                onClick={onShare}
+                className="min-h-11"
+              >
+                <Share2 size={14} /> Share
               </Button>
             </div>
 
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={disabled}
-              onClick={() => run(() => bulkSetFavorite(ids, true), "Favorited")}
-              className="min-h-11"
-            >
-              <Heart size={14} /> Favorite
-            </Button>
+            <div className="ml-auto flex shrink-0 items-center gap-2">
+              <Button
+                size="sm"
+                variant="danger"
+                disabled={disabled}
+                onClick={async () => {
+                  if (
+                    !(await confirm({
+                      title: `Remove ${count} ${count === 1 ? "title" : "titles"}?`,
+                      body:
+                        count === 1
+                          ? "This moves it to Trash. You can restore it from there."
+                          : "This moves them to Trash. You can restore them from there.",
+                      confirmLabel: "Remove",
+                      destructive: true,
+                    }))
+                  )
+                    return;
+                  run(() => bulkRemoveTitles(ids).then((r) => (onDone(), r)), "Removed");
+                }}
+                className="min-h-11"
+              >
+                <Trash2 size={14} /> Remove
+              </Button>
 
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={disabled}
-              onClick={() => run(() => bulkSetFavorite(ids, false), "Unfavorited")}
-              className="min-h-11"
-            >
-              <Heart size={14} className="text-faint" /> Unfavorite
-            </Button>
-
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={disabled}
-              onClick={onShare}
-              className="min-h-11"
-            >
-              <Share2 size={14} /> Share
-            </Button>
-
-            <Button
-              size="sm"
-              variant="danger"
-              disabled={disabled}
-              onClick={async () => {
-                if (
-                  !(await confirm({
-                    title: `Remove ${count} ${count === 1 ? "title" : "titles"}?`,
-                    body:
-                      count === 1
-                        ? "This moves it to Trash. You can restore it from there."
-                        : "This moves them to Trash. You can restore them from there.",
-                    confirmLabel: "Remove",
-                    destructive: true,
-                  }))
-                )
-                  return;
-                run(() => bulkRemoveTitles(ids).then((r) => (onDone(), r)), "Removed");
-              }}
-              className="min-h-11"
-            >
-              <Trash2 size={14} /> Remove
-            </Button>
-
-            <button
-              onClick={onDone}
-              className="focus-ring ml-auto flex min-h-11 items-center rounded-lg px-2.5 py-1.5 text-sm text-muted hover:text-foreground sm:min-h-8"
-            >
-              Done
-            </button>
+              <button
+                onClick={onDone}
+                className="focus-ring flex min-h-11 items-center rounded-lg px-2.5 py-1.5 text-sm text-muted hover:text-foreground sm:min-h-8"
+              >
+                Done
+              </button>
+            </div>
           </div>
         </motion.div>
       )}
@@ -944,13 +1046,18 @@ function ViewToggle({
   );
 }
 
+/** Tags shown inline on a row before the rest collapse into a "+n" count. */
+const ROW_TAG_LIMIT = 3;
+
 function ListRow({
   item,
+  tagColors,
   selectMode,
   selected,
   onToggle,
 }: {
   item: LibraryItem;
+  tagColors?: Record<string, string | null>;
   selectMode: boolean;
   selected: boolean;
   onToggle: (id: string) => void;
@@ -958,6 +1065,12 @@ function ListRow({
   const status = STATUS_META[item.status];
   const isTv = item.mediaType === "TV";
   const pct = isTv ? progressPct(item.watchedEpisodes, item.totalEpisodes) : 0;
+  // Tags were stored, filtered on and never shown, so the only way to see what a
+  // title was tagged with was to open it. Shown here in the colour set in
+  // Settings, and capped so a heavily tagged title can't push the row's own
+  // identity out of view.
+  const shownTags = item.tags.slice(0, ROW_TAG_LIMIT);
+  const hiddenTagCount = item.tags.length - shownTags.length;
 
   const inner = (
     <>
@@ -982,6 +1095,28 @@ function ListRow({
           {item.language ? ` · ${languageName(item.language)}` : ""}
           {item.rating ? ` · ★ ${item.rating}` : ""}
         </div>
+        {shownTags.length > 0 && (
+          <div className="mt-1 flex flex-wrap items-center gap-1">
+            {shownTags.map((t) => (
+              <span
+                key={t}
+                className={cn(
+                  // inline-block, not inline-flex: `truncate` needs a block
+                  // formatting context for its ellipsis to actually render.
+                  "inline-block max-w-32 truncate rounded-full px-2 py-0.5 align-middle text-[11px] font-medium ring-1 ring-inset",
+                  tagChipClass(tagColors?.[t]),
+                )}
+              >
+                {t}
+              </span>
+            ))}
+            {hiddenTagCount > 0 && (
+              <span className="text-[11px] tabular-nums text-faint">
+                +{hiddenTagCount}
+              </span>
+            )}
+          </div>
+        )}
       </div>
       <Badge className={status.badge}>
         <span className={cn("h-1.5 w-1.5 rounded-full", status.dot)} />
@@ -1105,6 +1240,31 @@ function TrashView({
     });
   }
 
+  async function purgeAll() {
+    const n = trashed.length;
+    if (
+      !(await confirm({
+        title: `Delete all ${n} ${n === 1 ? "title" : "titles"} forever?`,
+        body: "This permanently deletes everything in Trash, with all its ratings, notes and episode progress. No undo.",
+        confirmLabel: "Delete all forever",
+        destructive: true,
+      }))
+    )
+      return;
+    start(async () => {
+      try {
+        const res = await emptyTrash();
+        toast.success(
+          `Deleted ${res.count} ${res.count === 1 ? "title" : "titles"}`,
+        );
+      } catch (e) {
+        toast.error((e as Error).message);
+      } finally {
+        router.refresh();
+      }
+    });
+  }
+
   return (
     <>
       {dialog}
@@ -1124,9 +1284,22 @@ function TrashView({
             <ArrowLeft size={15} /> Back to library
           </button>
         </div>
-        <p className="text-sm text-muted">
-          Restore a title to bring it back with your ratings and notes, or delete it forever.
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-muted">
+            Restore a title to bring it back with your ratings and notes, or delete it forever.
+          </p>
+          {trashed.length > 1 && (
+            <Button
+              size="sm"
+              variant="danger"
+              disabled={pending}
+              onClick={purgeAll}
+              className="shrink-0"
+            >
+              <Trash2 size={14} /> Empty trash
+            </Button>
+          )}
+        </div>
         {trashed.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-3 rounded-[var(--radius-card)] border border-dashed border-line py-20 text-center">
             <p className="text-sm text-muted">Trash is empty.</p>

@@ -1,11 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { WatchEventKind } from "@/generated/prisma/client";
-import { Card } from "@/components/ui";
-import { fullDate } from "@/lib/format";
-
-function kindLabel(kind: WatchEventKind): string {
-  return kind === WatchEventKind.REWATCH ? "Rewatched" : "Watched";
-}
+import { WatchHistoryList, type WatchEventVM } from "./watch-history-client";
 
 /**
  * D-F9: a quiet log of past viewings for a title, surfacing the note captured
@@ -44,26 +39,14 @@ export async function WatchHistory({
   });
   if (events.length === 0) return null;
 
-  return (
-    <Card variant="inset" className="flex flex-col gap-3 p-4">
-      <h2 className="text-xs font-medium uppercase tracking-wide text-faint">
-        History
-      </h2>
-      <ul className="flex flex-col gap-3">
-        {events.map((e) => (
-          <li key={e.id} className="text-sm">
-            <p className="text-foreground/90">
-              {fullDate(e.occurredAt)} · {kindLabel(e.kind)}
-            </p>
-            {e.note && <p className="mt-0.5 text-xs text-muted">{e.note}</p>}
-          </li>
-        ))}
-      </ul>
-      {total > 6 && (
-        <p className="border-t border-line pt-3 text-xs text-faint">
-          {total} watches total
-        </p>
-      )}
-    </Card>
-  );
+  // Serialize to plain props for the client boundary: Date and the Prisma enum
+  // don't cross it, and the date input needs the ISO string anyway.
+  const items: WatchEventVM[] = events.map((e) => ({
+    id: e.id,
+    kind: e.kind === WatchEventKind.REWATCH ? "REWATCH" : "TITLE_COMPLETED",
+    occurredAt: e.occurredAt.toISOString(),
+    note: e.note,
+  }));
+
+  return <WatchHistoryList events={items} total={total} />;
 }

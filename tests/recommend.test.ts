@@ -75,6 +75,7 @@ function row(overrides: Partial<ExportRow> = {}): ExportRow {
     genres: [],
     totalEpisodes: null,
     watchedEpisodes: 0,
+    watchCount: 0,
     favorite: false,
     notes: null,
     tags: [],

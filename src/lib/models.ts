@@ -2,21 +2,21 @@
 // engine (server) and the recommend page controls (client).
 
 export const REC_MODELS = [
-  { id: "claude-opus-4-8", label: "Claude Opus 4.8", note: "Most capable · default" },
+  { id: "claude-opus-5", label: "Claude Opus 5", note: "Most capable · default" },
   { id: "claude-sonnet-5", label: "Claude Sonnet 5", note: "Near-Opus quality, faster" },
   { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", note: "Fastest, cheapest" },
 ] as const;
 
 export type RecModelId = (typeof REC_MODELS)[number]["id"];
 
-export const DEFAULT_REC_MODEL: RecModelId = "claude-opus-4-8";
+export const DEFAULT_REC_MODEL: RecModelId = "claude-opus-5";
 
 export function isRecModel(id: string | null | undefined): id is RecModelId {
   return !!id && REC_MODELS.some((m) => m.id === id);
 }
 
 export function recModelLabel(id: string | null | undefined): string {
-  return REC_MODELS.find((m) => m.id === id)?.label ?? "Claude Opus 4.8";
+  return REC_MODELS.find((m) => m.id === id)?.label ?? "Claude Opus 5";
 }
 
 // Era choices for the recommendation "Era" preference. The clause is what gets
@@ -42,15 +42,28 @@ export function eraById(id: RecEraId) {
   return REC_ERAS.find((e) => e.id === id)!;
 }
 
-// Per-model request-surface capabilities. Opus 4.8 / Sonnet 5 take adaptive
+// Per-model request-surface capabilities. Opus 5 / Sonnet 5 take adaptive
 // thinking + the `effort` knob; Haiku 4.5 rejects `effort` (400) and has no
-// adaptive thinking, so we omit both for it. (A user whose saved default was
-// the retired Sonnet 4.6 entry simply falls back to the default model.)
+// adaptive thinking, so we omit both for it. (A user whose saved default is a
+// retired entry simply falls back to the default model — isRecModel rejects
+// the stale id and the engine drops through to DEFAULT_REC_MODEL.)
 export const MODEL_CAPS: Record<
   RecModelId,
   { effort: boolean; adaptiveThinking: boolean }
 > = {
-  "claude-opus-4-8": { effort: true, adaptiveThinking: true },
+  "claude-opus-5": { effort: true, adaptiveThinking: true },
   "claude-sonnet-5": { effort: true, adaptiveThinking: true },
   "claude-haiku-4-5": { effort: false, adaptiveThinking: false },
+};
+
+// Shortest prefix Anthropic will actually cache, in tokens. A cache_control
+// breakpoint on anything shorter is accepted and then silently ignored — no
+// error, no field in the response to notice — so the recommend engine only
+// attaches one when the prefix plausibly clears the model's bar. These are not
+// monotonic across generations (Opus 5 halved Opus 4.8's 1024), so a model
+// swap has to revisit this map rather than assume the newer number is lower.
+export const MODEL_CACHE_MIN_TOKENS: Record<RecModelId, number> = {
+  "claude-opus-5": 512,
+  "claude-sonnet-5": 1024,
+  "claude-haiku-4-5": 4096,
 };

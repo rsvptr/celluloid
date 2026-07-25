@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   BarChart3,
+  CalendarClock,
   Command as CommandIcon,
   Download,
   Film,
@@ -30,14 +31,17 @@ const subscribeNoop = () => () => {};
 const LINKS = [
   { href: "/", label: "Library", icon: Film },
   { href: "/add", label: "Add", icon: Plus },
+  // "Airing", not "Airing soon": this label also renders in the mobile tab bar,
+  // where five targets share a 320px row and the longest one sets the squeeze.
+  { href: "/upcoming", label: "Airing", icon: CalendarClock },
   { href: "/recommend", label: "Recommend", icon: Sparkles },
   { href: "/stats", label: "Stats", icon: BarChart3 },
   { href: "/export", label: "Export", icon: Download },
 ];
 
-// The fixed mobile tab bar surfaces only the four primary destinations —
-// Export moves into the "More" popover alongside Settings/Sign out so the
-// bar never has to squeeze a fifth target into a 320px-wide screen.
+// The fixed mobile tab bar surfaces the primary destinations — Export moves
+// into the "More" popover alongside Settings/Sign out, since it is the one
+// entry that is a task rather than a place you check.
 const BOTTOM_LINKS = LINKS.filter((l) => l.href !== "/export");
 
 export function Nav({ userName }: { userName?: string | null }) {

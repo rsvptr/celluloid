@@ -197,8 +197,9 @@ export async function importParsedTitles(opts: {
       limit(async () => {
         try {
           const kind = p.mediaType;
-          const results = await searchByType(kind, p.name);
-          const best = pickBest(results, p.name, yearOf(p.releaseDate));
+          const year = yearOf(p.releaseDate);
+          const results = await searchByType(kind, p.name, 1, { year });
+          const best = pickBest(results, p.name, year);
           return { parsed: p, tmdb: best };
         } catch (err) {
           log(`  ! search failed for "${p.name}": ${(err as Error).message}`);
@@ -264,10 +265,16 @@ export async function importParsedTitles(opts: {
       if (item.kind === "fetch-failed") throw item.error;
       if (item.kind === "unmatched") {
         result.unmatched.push(`${item.p.name} (${item.p.source})`);
-        const created = await upsertUnmatched(userId, item.p, item.mediaType, item.status);
+        const { created, restored } = await upsertUnmatched(
+          userId,
+          item.p,
+          item.mediaType,
+          item.status,
+        );
         if (created) result.created++;
         else result.updated++;
         log(`  ? no TMDB match: "${item.p.name}", added with workbook data only`);
+        if (restored) log(`  ~ restored from trash: ${item.p.name}`);
         continue;
       }
       // Count as matched only AFTER the write succeeds: the web path passes no
@@ -296,13 +303,17 @@ export async function importParsedTitles(opts: {
   return result;
 }
 
-/** Returns true if a new row was created, false if an existing row was updated. */
+/**
+ * Persist a row that TMDB couldn't match, from workbook data alone.
+ * `created` is true when a new row was inserted; `restored` is true when an
+ * adopted row had been in Trash and was brought back.
+ */
 async function upsertUnmatched(
   userId: string,
   p: ParsedTitle,
   mediaType: MediaType,
   status: WatchStatus,
-): Promise<boolean> {
+): Promise<{ created: boolean; restored: boolean }> {
   const releaseDate = toDate(p.releaseDate);
   const data = {
     name: p.name,
@@ -317,13 +328,22 @@ async function upsertUnmatched(
   const candidates = await prisma.title.findMany({
     where: { userId, mediaType, name: p.name, tmdbId: null, releaseDate },
     take: 2,
+    select: { id: true, deletedAt: true },
   });
   if (candidates.length === 1) {
-    await prisma.title.update({ where: { id: candidates[0].id }, data });
-    return false;
+    // Match the matched-title paths (writeMovie / writeTv): adopting a trashed
+    // row must also bring it back. Without this the run reported "updated: 1"
+    // while the title stayed hidden in Trash — a green success and an empty
+    // library, with nothing pointing at where the row actually went.
+    const restored = candidates[0].deletedAt != null;
+    await prisma.title.update({
+      where: { id: candidates[0].id },
+      data: restored ? { ...data, deletedAt: null } : data,
+    });
+    return { created: false, restored };
   }
   await prisma.title.create({ data: { ...data, userId, status } });
-  return true;
+  return { created: true, restored: false };
 }
 
 async function writeMovie(

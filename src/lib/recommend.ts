@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { MediaType } from "@/generated/prisma/client";
 import { getExportRows } from "@/lib/data";
 import { tasteSummary, type ExportRow } from "@/lib/export/format";
-import { searchByType, type TmdbSearchItem } from "@/lib/tmdb";
+import { searchByType, type SearchOptions, type TmdbSearchItem } from "@/lib/tmdb";
 import { norm, yearOf, pickBest, nameYearKey } from "@/lib/tmdb-match";
 import {
   anthropicClient,
@@ -14,6 +14,7 @@ import {
   DEFAULT_REC_MODEL,
   eraById,
   isRecModel,
+  MODEL_CACHE_MIN_TOKENS,
   MODEL_CAPS,
   type RecEraId,
 } from "@/lib/models";
@@ -29,6 +30,27 @@ export interface Recommendation {
   posterPath?: string | null;
   /** ISO-639-1 original language: TMDB-confirmed when matched, else the model's claim. */
   language?: string | null;
+}
+
+/** One row of the owner's durable "not interested" list. */
+export interface SuppressionRow {
+  tmdbId: number | null;
+  mediaType: MediaType;
+  name: string;
+  year: number | null;
+}
+
+/**
+ * The "not interested" list in the two shapes a run needs: lookup sets to filter
+ * suggestions against, and the most recent names to warn the model off up front.
+ */
+export interface SuppressionContext {
+  /** `<MediaType>:<tmdbId>` for suppressions that resolved to a TMDB entry. */
+  tmdbKeys: Set<string>;
+  /** nameYearKey() for every suppression, TMDB-resolved or not. */
+  nameKeys: Set<string>;
+  /** Suppressed names, most recent first, for the prompt's exclusion clause. */
+  recentNames: string[];
 }
 
 export interface RecommendBasis {
@@ -111,6 +133,13 @@ function buildBriefBlock(summary: string): string {
   return `${summary}`;
 }
 
+/**
+ * How many titles the "do NOT suggest these" clause carries. Naming the cap
+ * lets mergeExcludeNames fill it deliberately instead of guessing at the slice
+ * below.
+ */
+export const PROMPT_EXCLUDE_CAP = 80;
+
 /** The volatile part of the user turn: this run's specific ask. */
 export function buildRequestBlock(
   count: number,
@@ -132,7 +161,7 @@ export function buildRequestBlock(
     : "";
   const excludeClause =
     exclude && exclude.length
-      ? ` I have already been shown these, so do NOT suggest any of them again: ${exclude.slice(0, 80).join(", ")}.`
+      ? ` I have already been shown these, so do NOT suggest any of them again: ${exclude.slice(0, PROMPT_EXCLUDE_CAP).join(", ")}.`
       : "";
   const prefClause = [
     language ? `originally in ${languageName(language)}` : "",
@@ -145,6 +174,109 @@ export function buildRequestBlock(
     ? ` Hard requirement: every suggestion must be ${prefClause}.`
     : "";
   return `Based on my taste brief above, recommend ${count} titles I have NOT seen and that are NOT already on my watchlist.${focusClause}${preferClause}${excludeClause} ${typeClause} Strongly prefer titles that match what I rated highly; avoid obvious blockbusters unless they genuinely fit. Return the full ${count} suggestions: when you run out of strong fits, include lower-confidence picks and label their confidence honestly rather than shortening the list.`;
+}
+
+/**
+ * The durable identity of a suppressed suggestion. A suggestion that resolved to
+ * TMDB keys on that id; everything else keys on normalized name + year, because
+ * a regional title often never resolves at all and those are exactly the ones
+ * worth remembering a refusal for. Both shapes are built from `norm`, the same
+ * normalization the run-time de-duplication uses, so the stored key and the
+ * filter can't drift apart.
+ */
+export function suppressionMatchKey(input: {
+  mediaType: "movie" | "tv";
+  tmdbId?: number | null;
+  name: string;
+  year?: number | null;
+}): string {
+  const mt = input.mediaType === "tv" ? MediaType.TV : MediaType.MOVIE;
+  if (input.tmdbId != null) return `tmdb:${mt}:${input.tmdbId}`;
+  return `name:${input.mediaType}:${norm(input.name)}|${input.year ?? "?"}`;
+}
+
+/** Build the run-time lookup sets from suppression rows. */
+export function suppressionContext(rows: SuppressionRow[]): SuppressionContext {
+  const tmdbKeys = new Set<string>();
+  const nameKeys = new Set<string>();
+  const recentNames: string[] = [];
+  for (const row of rows) {
+    if (row.tmdbId != null) tmdbKeys.add(`${row.mediaType}:${row.tmdbId}`);
+    // Indexed by name as well as id: a suggestion is name-checked before the
+    // TMDB lookup, so a suppressed title usually never costs a search at all.
+    nameKeys.add(
+      nameYearKey(row.mediaType === MediaType.TV ? "tv" : "movie", row.name, row.year),
+    );
+    recentNames.push(row.name);
+  }
+  return { tmdbKeys, nameKeys, recentNames };
+}
+
+/**
+ * Ceiling on suppressions pulled into one run. This is a resource guard for a
+ * list that only ever grows; the newest refusals are the ones most likely to
+ * come back around, so an owner past the ceiling still gets the ones that matter.
+ */
+const MAX_SUPPRESSIONS_LOADED = 2000;
+
+/** Load the owner's "not interested" list, newest first. */
+export async function loadSuppressions(userId: string): Promise<SuppressionContext> {
+  const rows = await prisma.suppression.findMany({
+    where: { userId },
+    orderBy: { createdAt: "desc" },
+    take: MAX_SUPPRESSIONS_LOADED,
+    select: { tmdbId: true, mediaType: true, name: true, year: true },
+  });
+  return suppressionContext(rows);
+}
+
+/**
+ * Does this suggestion match something the owner turned down? A suppression
+ * stored without a year matches that name in any year — the year is precisely
+ * what we don't know about it — while a suppression that has a year matches only
+ * that year, so refusing the 2011 remake doesn't also bury the 1982 original.
+ */
+export function isSuppressedByName(
+  suppressed: SuppressionContext | undefined,
+  mediaType: "movie" | "tv",
+  title: string,
+  year: number | null | undefined,
+): boolean {
+  if (!suppressed) return false;
+  return (
+    suppressed.nameKeys.has(nameYearKey(mediaType, title, year)) ||
+    suppressed.nameKeys.has(nameYearKey(mediaType, title, null))
+  );
+}
+
+/**
+ * Slots the exclusion clause reserves for durable rejections. Without a reserve,
+ * a long browsing session's "already shown" titles would fill the clause and the
+ * model would keep re-proposing titles the owner explicitly refused — which is
+ * the expensive case, since filtering those out costs a TMDB lookup each.
+ */
+const SUPPRESSED_NAME_SLOTS = 30;
+
+/**
+ * Fold this session's shown titles and the durable rejections into the single
+ * exclusion clause the prompt has room for. Session titles go first (they carry
+ * the "show me different ones" intent), suppressions take their reserved slots,
+ * and any slots the suppressions don't use go back to the session titles.
+ */
+export function mergeExcludeNames(seen: string[], suppressedNames: string[]): string[] {
+  const out: string[] = [];
+  const taken = new Set<string>();
+  const push = (title: string) => {
+    const key = norm(title);
+    if (!key || taken.has(key) || out.length >= PROMPT_EXCLUDE_CAP) return;
+    taken.add(key);
+    out.push(title);
+  };
+  const reserved = Math.min(SUPPRESSED_NAME_SLOTS, suppressedNames.length);
+  for (const title of seen.slice(0, PROMPT_EXCLUDE_CAP - reserved)) push(title);
+  for (const title of suppressedNames) push(title);
+  for (const title of seen) push(title);
+  return out;
 }
 
 /**
@@ -181,34 +313,50 @@ export interface StreamContext {
   libNameYear: Set<string>;
   excludeSet: Set<string>;
   seenKeys: Set<string>;
+  /**
+   * The owner's "not interested" list. Optional so a context assembled without a
+   * suppression load behaves exactly as it did before this layer existed.
+   */
+  suppressed?: SuppressionContext;
 }
 
 /** The TMDB lookup enrichRec depends on; injectable so it can be stubbed in tests. */
 type TitleSearch = (
   mediaType: "movie" | "tv",
   title: string,
+  page?: number,
+  opts?: SearchOptions,
 ) => Promise<TmdbSearchItem[]>;
 
 /**
  * Try to enrich one model suggestion with its TMDB match. Returns null when the
  * suggestion turns out to already be in the library; returns the (possibly
  * unenriched) rec otherwise. `search` defaults to the real TMDB client and is
- * only overridden in tests.
+ * only overridden in tests. `signal` is the run's abort signal, so a stopped
+ * run cancels TMDB lookups already in flight instead of paying them out.
  */
 export async function enrichRec(
   r: Recommendation,
   ctx: StreamContext,
   search: TitleSearch = searchByType,
+  signal?: AbortSignal,
 ): Promise<Recommendation | null> {
   try {
-    const results = await search(r.mediaType, r.title);
+    // The model's year narrows the search: without it a regional title
+    // resolves to whichever entry TMDB ranks most popular, not the one asked for.
+    const results = await search(r.mediaType, r.title, 1, { year: r.year, signal });
     const best = pickBest(results, r.title, r.year);
     if (!best) return r;
     const mt = r.mediaType === "tv" ? MediaType.TV : MediaType.MOVIE;
     if (ctx.existingSet.has(`${mt}:${best.id}`)) return null; // already in library
+    // The refusal may have been recorded against a TMDB id, in which case only
+    // the resolved match can see it — a name the model spelled differently, or
+    // a year it got wrong, would have slipped past the name check upstream.
+    if (ctx.suppressed?.tmdbKeys.has(`${mt}:${best.id}`)) return null;
     const resolvedYear = r.year ?? yearOf(best);
     // TMDB may supply a year the model omitted; re-check ownership with it.
     if (ctx.libNameYear.has(nameYearKey(r.mediaType, r.title, resolvedYear))) return null;
+    if (isSuppressedByName(ctx.suppressed, r.mediaType, r.title, resolvedYear)) return null;
     return {
       ...r,
       tmdbId: best.id,
@@ -227,10 +375,15 @@ export async function enrichRec(
 // plus adaptive thinking can't be rejected or silently truncated. A model with
 // no entry falls back to the smallest ceiling.
 const MODEL_OUTPUT_CEILING: Record<string, number> = {
-  "claude-opus-4-8": 128000,
+  "claude-opus-5": 128000,
   "claude-sonnet-5": 128000,
   "claude-haiku-4-5": 64000,
 };
+
+// ~4 characters per token is close enough for English prose, and the taste
+// brief is title names and short notes. Only used to decide whether to attach
+// the prompt-cache breakpoint, so erring low costs at most one missed cache.
+const APPROX_CHARS_PER_TOKEN = 4;
 
 /**
  * Run one recommendation request end to end, emitting events as results become
@@ -322,6 +475,12 @@ export async function runRecommendationStream(
   const baseAsk = type === "all" ? count * 2 : count * 3 + 10;
   const askCount = Math.min(50, hasPref ? baseAsk + 10 : baseAsk);
 
+  // The durable "not interested" list. It goes into the volatile request block
+  // and the run-time filters only — never into the brief, whose bytes have to
+  // stay identical run to run for the prompt-cache breakpoint below to hit.
+  const suppressed = await loadSuppressions(userId);
+  if (signal?.aborted) return;
+
   const brief = buildBriefBlock(
     tasteSummary(basisRows, { watchlist: fullWatchlist, abandoned: fullAbandoned }),
   );
@@ -329,7 +488,9 @@ export async function runRecommendationStream(
     askCount,
     type,
     opts.focus,
-    opts.exclude,
+    // Naming refused titles up front is cheaper than filtering them afterwards:
+    // every suppressed suggestion that still comes back costs a TMDB lookup.
+    mergeExcludeNames(opts.exclude ?? [], suppressed.recentNames),
     opts.language,
     opts.genre,
     opts.era,
@@ -349,26 +510,40 @@ export async function runRecommendationStream(
     libNameYear: new Set(rows.map((r) => nameYearKey(r.mediaType, r.name, r.year))),
     excludeSet: new Set((opts.exclude ?? []).map((t) => norm(t))),
     seenKeys: new Set(),
+    suppressed,
   };
 
   // Scale the output budget with the ask so a large batch (askCount up to 50)
-  // plus adaptive thinking — which draws from the same ceiling — can't truncate
-  // mid-JSON. The base (~the old flat budget) covers thinking + the JSON
-  // envelope; the per-item budget covers each suggestion and its share of
-  // thinking. Capped a safe margin under the model's streaming ceiling. This is a
-  // ceiling, not a target: generation is aborted once `count` are accepted, so
-  // the headroom only prevents truncation, it never costs tokens.
+  // plus adaptive thinking — max_tokens is a single cap covering thinking AND
+  // response text — can't truncate mid-JSON. The base (~the old flat budget)
+  // covers thinking + the JSON envelope; the per-item budget covers each
+  // suggestion and its share of thinking. Capped a safe margin under the
+  // model's streaming ceiling. This is a ceiling, not a target: generation is
+  // aborted once `count` are accepted, so the headroom only prevents
+  // truncation, it never costs tokens.
   const outputCeiling = MODEL_OUTPUT_CEILING[model] ?? 64000;
   const maxTokens = Math.min(outputCeiling - 8000, 16000 + askCount * 800);
+
+  // The cacheable prefix is system + brief, so both count toward the model's
+  // minimum. Under it the breakpoint is silently ignored and we'd pay the
+  // cache-write premium for nothing, so leave it off.
+  const cacheMinTokens = MODEL_CACHE_MIN_TOKENS[model] ?? 4096;
+  const briefIsCacheable =
+    (SYSTEM_PROMPT.length + brief.length) / APPROX_CHARS_PER_TOKEN >= cacheMinTokens;
 
   const client = anthropicClient(key);
   const stream = client.messages.stream({
     model,
     max_tokens: maxTokens,
-    // Opus / Sonnet take adaptive thinking; Haiku 4.5 doesn't.
+    // Opus / Sonnet take adaptive thinking; Haiku 4.5 doesn't. Opus 5 thinks
+    // adaptively even with the field omitted, but sending it keeps the request
+    // shape identical across the models that support it.
     ...(caps.adaptiveThinking ? { thinking: { type: "adaptive" as const } } : {}),
     output_config: {
-      // `effort` 400s on Haiku 4.5 — only send it where supported.
+      // `effort` 400s on Haiku 4.5 — only send it where supported. Opus 5 takes
+      // the full low|medium|high|xhigh|max ladder; "medium" stays deliberate
+      // here because this is an interactive stream and the higher rungs buy
+      // depth we don't need at the cost of time-to-first-card.
       ...(caps.effort ? { effort: "medium" as const } : {}),
       format: { type: "json_schema", schema: REC_SCHEMA },
     },
@@ -383,8 +558,9 @@ export async function runRecommendationStream(
             // Cache breakpoint AFTER the brief: system + brief form a stable
             // prefix, so "Show different" and preset re-runs within the TTL
             // reprocess only the short run request below (~90% cheaper, faster
-            // time-to-first-suggestion).
-            cache_control: { type: "ephemeral" },
+            // time-to-first-suggestion). Attached only for a library big enough
+            // to clear the model's minimum — see briefIsCacheable above.
+            ...(briefIsCacheable ? { cache_control: { type: "ephemeral" as const } } : {}),
           },
           { type: "text", text: request },
         ],
@@ -401,9 +577,21 @@ export async function runRecommendationStream(
 
   const extractor = createRecExtractor();
   let accepted = 0;
+  // Slots claimed by in-flight enrichments. `accepted` alone can't gate the
+  // lanes: it is incremented AFTER `await enrichRec`, so several lanes could
+  // pass an `accepted < count` check concurrently and every one of them would
+  // then emit — returning up to (lanes - 1) more suggestions than asked for and
+  // burning that many extra TMDB searches. Reserving up front makes `count` a
+  // hard ceiling on both.
+  let reserved = 0;
   let statusSent: "thinking" | "generating" | null = null;
   let stopped = false; // no further emits once set (enough results, or a failure)
   let hitMaxTokens = false; // model ran into the output ceiling (budget exhausted)
+  // Prompt-cache counters, read off the opening usage. They are settled by
+  // message_start, so they survive the abort we fire once enough suggestions
+  // land — which is the normal path, and one that leaves no final message.
+  let cacheCreated: number | null = null;
+  let cacheRead: number | null = null;
   // Round-robin lanes bound enrichment concurrency: a model that bursts out 40
   // suggestions can't burst-fire 40 TMDB searches at once.
   const lanes: Promise<void>[] = Array.from({ length: 5 }, () => Promise.resolve());
@@ -420,27 +608,41 @@ export async function runRecommendationStream(
     // Already shown this session, or already in the library by name+year?
     if (ctx.excludeSet.has(norm(rec.title))) return;
     if (ctx.libNameYear.has(k)) return;
+    // Turned down in an earlier session — drop it here, before the TMDB lookup.
+    if (isSuppressedByName(ctx.suppressed, rec.mediaType, rec.title, rec.year)) return;
     if (opts.type && opts.type !== "all" && rec.mediaType !== opts.type) return;
 
     // Enrich concurrently with parsing; emit the moment each one resolves.
     const lane = nextLane++ % lanes.length;
     lanes[lane] = lanes[lane].then(async () => {
-      if (stopped || accepted >= count) return;
-      const r = await enrichRec(rec, ctx);
-      if (!r || stopped || accepted >= count) return;
-      accepted++;
-      emit({ type: "rec", rec: r });
-      if (accepted >= count) {
-        // Enough accepted — stop the model mid-generation to save tokens.
-        stopped = true;
-        stream.abort();
+      if (stopped || reserved >= count) return;
+      reserved++; // claim the slot BEFORE the await
+      let used = false;
+      try {
+        const r = await enrichRec(rec, ctx, searchByType, signal);
+        // enrichRec returns null when the suggestion turns out to be in the
+        // library already; that consumed no slot, so release it below.
+        if (!r || stopped) return;
+        used = true;
+        accepted++;
+        emit({ type: "rec", rec: r });
+        if (accepted >= count) {
+          // Enough accepted — stop the model mid-generation to save tokens.
+          stopped = true;
+          stream.abort();
+        }
+      } finally {
+        if (!used) reserved--;
       }
     });
   };
 
   try {
     for await (const event of stream) {
-      if (event.type === "content_block_start") {
+      if (event.type === "message_start") {
+        cacheCreated = event.message.usage.cache_creation_input_tokens;
+        cacheRead = event.message.usage.cache_read_input_tokens;
+      } else if (event.type === "content_block_start") {
         if (event.content_block.type === "thinking" && statusSent === null) {
           statusSent = "thinking";
           emit({ type: "status", phase: "thinking" });
@@ -474,6 +676,13 @@ export async function runRecommendationStream(
   }
 
   await Promise.allSettled(lanes);
+  // Whether the breakpoint actually cached is otherwise invisible — a prefix
+  // under the model's minimum is ignored without any error — so leave a trail.
+  if (cacheCreated !== null || cacheRead !== null) {
+    console.debug(
+      `Recommend prompt cache (${model}): written=${cacheCreated ?? 0}, read=${cacheRead ?? 0}`,
+    );
+  }
   if (accepted === 0) {
     emit({
       type: "error",

@@ -4,8 +4,14 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Command } from "cmdk";
 import { Title as DialogTitle } from "@radix-ui/react-dialog";
+import { toast } from "sonner";
 import {
+  ArrowLeft,
   BarChart3,
+  Bookmark,
+  CalendarClock,
+  CalendarPlus,
+  Check,
   Download,
   Film,
   Plus,
@@ -15,21 +21,87 @@ import {
   Tv,
 } from "lucide-react";
 import type { TitleIndexEntry } from "@/lib/data";
+import type { WatchStatus } from "@/generated/prisma/client";
+import { logWatch, updateTitle } from "@/lib/actions";
 
 const NAV = [
   { href: "/", label: "Library", icon: Film },
   { href: "/add", label: "Add a title", icon: Plus },
+  // "Airing soon" rather than the nav's "Airing": the short label there exists
+  // only because five tab-bar targets share a 320px row, and this list has room
+  // for the page's own name.
+  { href: "/upcoming", label: "Airing soon", icon: CalendarClock },
   { href: "/recommend", label: "Recommendations", icon: Sparkles },
   { href: "/stats", label: "Stats", icon: BarChart3 },
   { href: "/export", label: "Export", icon: Download },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
+/**
+ * Things the palette can do TO a title, rather than navigate to.
+ *
+ * The palette already held the whole title index but could only ever push a
+ * route, so the quickest way to mark last night's film watched was still: open
+ * the palette, open the title, wait for the page, change the status. Each entry
+ * here is a two-step flow — pick the verb, then pick the title — which keeps the
+ * root list short and unambiguous instead of multiplying every title by three.
+ */
+type ActionKind = "watched" | "watchlist" | "log";
+
+const ACTIONS: {
+  kind: ActionKind;
+  label: string;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  /** Heading shown on the title-picking step. */
+  prompt: string;
+  placeholder: string;
+}[] = [
+  {
+    kind: "watched",
+    label: "Mark a title watched",
+    icon: Check,
+    prompt: "Mark watched",
+    placeholder: "Which title did you finish?",
+  },
+  {
+    kind: "log",
+    label: "Log a watch (today)",
+    icon: CalendarPlus,
+    prompt: "Log a watch today",
+    placeholder: "Which title did you watch?",
+  },
+  {
+    kind: "watchlist",
+    label: "Add a title to your watchlist",
+    icon: Bookmark,
+    prompt: "Move to watchlist",
+    placeholder: "Which title?",
+  },
+];
+
+const groupClass =
+  "[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-faint";
+
+const itemClass =
+  "flex min-h-11 cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-foreground/90 data-[selected=true]:bg-surface-2 data-[selected=true]:text-foreground sm:min-h-0";
+
+/** Today as yyyy-mm-dd in the viewer's local time, matching the log-watch dialog. */
+function todayLocalDate(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate(),
+  ).padStart(2, "0")}`;
+}
+
 export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry[] }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [titles, setTitles] = useState<TitleIndexEntry[]>(seed);
   const [loaded, setLoaded] = useState(false);
+  const [search, setSearch] = useState("");
+  // null = the root list. Non-null = picking a title for that action.
+  const [action, setAction] = useState<ActionKind | null>(null);
+  const [running, setRunning] = useState(false);
   // Remember what was focused so we can restore it when the palette closes.
   const opener = useRef<HTMLElement | null>(null);
 
@@ -75,18 +147,78 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
     };
   }, [open]);
 
-  function go(href: string) {
+  function close() {
     setOpen(false);
+  }
+
+  function go(href: string) {
+    close();
     router.push(href);
   }
+
+  /** Back out of an action to the root list, clearing the filter with it. */
+  function backToRoot() {
+    setAction(null);
+    setSearch("");
+  }
+
+  function startAction(kind: ActionKind) {
+    setAction(kind);
+    setSearch("");
+  }
+
+  async function runAction(kind: ActionKind, title: TitleIndexEntry) {
+    if (running) return;
+    setRunning(true);
+    try {
+      if (kind === "log") {
+        const res = await logWatch(title.id, { occurredAt: todayLocalDate() });
+        if (res.error) {
+          toast.error(res.error);
+          return;
+        }
+        const n = res.watchCount ?? 1;
+        toast.success(`Logged ${title.name}. Watched ${n} ${n === 1 ? "time" : "times"}.`);
+      } else {
+        const status: WatchStatus = kind === "watched" ? "WATCHED" : "WATCHLIST";
+        await updateTitle(title.id, { status });
+        toast.success(
+          kind === "watched"
+            ? `Marked ${title.name} watched`
+            : `Moved ${title.name} to your watchlist`,
+        );
+      }
+      close();
+      router.refresh();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  const activeAction = ACTIONS.find((a) => a.kind === action) ?? null;
 
   return (
     <Command.Dialog
       open={open}
       onOpenChange={(o) => {
         setOpen(o);
-        // Controlled dialog has no Radix trigger, so restore focus ourselves.
-        if (!o) requestAnimationFrame(() => opener.current?.focus());
+        if (!o) {
+          // Always reopen on the root list rather than mid-action.
+          setAction(null);
+          setSearch("");
+          // Controlled dialog has no Radix trigger, so restore focus ourselves.
+          requestAnimationFrame(() => opener.current?.focus());
+        }
+      }}
+      onKeyDown={(e) => {
+        // Backspace on an empty query steps back out of an action — the same
+        // gesture that clears the last character, so the flow stays keyboard-only.
+        if (e.key === "Backspace" && !search && action) {
+          e.preventDefault();
+          backToRoot();
+        }
       }}
       label="Command menu"
       overlayClassName="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm"
@@ -94,10 +226,26 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
     >
       <DialogTitle className="sr-only">Command menu</DialogTitle>
       <div className="flex items-center gap-2 border-b border-line px-4">
-        <Search size={16} className="text-faint" />
+        {activeAction ? (
+          <button
+            type="button"
+            onClick={backToRoot}
+            aria-label="Back to all commands"
+            className="focus-ring -ml-1 flex shrink-0 items-center gap-1.5 rounded-md py-1 pr-1.5 pl-1 text-xs font-medium text-brand"
+          >
+            <ArrowLeft size={14} aria-hidden />
+            {activeAction.prompt}
+          </button>
+        ) : (
+          <Search size={16} className="text-faint" />
+        )}
         <Command.Input
           autoFocus
-          placeholder="Search titles or jump to a page…"
+          value={search}
+          onValueChange={setSearch}
+          placeholder={
+            activeAction ? activeAction.placeholder : "Search titles or jump to a page…"
+          }
           className="h-12 w-full bg-transparent text-base text-foreground outline-none placeholder:text-faint sm:text-sm"
         />
       </div>
@@ -106,39 +254,17 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
           {loaded || titles.length > 0 ? "No matches." : "Loading your titles…"}
         </Command.Empty>
 
-        <Command.Group
-          heading="Go to"
-          className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-faint"
-        >
-          {NAV.map((n) => {
-            const Icon = n.icon;
-            return (
-              <Command.Item
-                key={n.href}
-                value={`go ${n.label}`}
-                onSelect={() => go(n.href)}
-                className="flex min-h-11 cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-foreground/90 data-[selected=true]:bg-surface-2 data-[selected=true]:text-foreground sm:min-h-0"
-              >
-                <Icon size={15} className="text-muted" />
-                {n.label}
-              </Command.Item>
-            );
-          })}
-        </Command.Group>
-
-        {titles.length > 0 && (
-          <Command.Group
-            heading="Titles"
-            className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-faint"
-          >
+        {activeAction ? (
+          <Command.Group heading={activeAction.prompt} className={groupClass}>
             {titles.map((t) => {
               const Icon = t.mediaType === "TV" ? Tv : Film;
               return (
                 <Command.Item
                   key={t.id}
                   value={`${t.name} ${t.year ?? ""}`}
-                  onSelect={() => go(`/title/${t.id}`)}
-                  className="flex min-h-11 cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-foreground/90 data-[selected=true]:bg-surface-2 data-[selected=true]:text-foreground sm:min-h-0"
+                  disabled={running}
+                  onSelect={() => runAction(activeAction.kind, t)}
+                  className={itemClass}
                 >
                   <Icon size={15} className="text-muted" />
                   <span className="min-w-0 flex-1 truncate">{t.name}</span>
@@ -149,6 +275,65 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
               );
             })}
           </Command.Group>
+        ) : (
+          <>
+            <Command.Group heading="Do" className={groupClass}>
+              {ACTIONS.map((a) => {
+                const Icon = a.icon;
+                return (
+                  <Command.Item
+                    key={a.kind}
+                    value={`do ${a.label}`}
+                    onSelect={() => startAction(a.kind)}
+                    className={itemClass}
+                  >
+                    <Icon size={15} className="text-brand" />
+                    <span className="min-w-0 flex-1 truncate">{a.label}</span>
+                    <span className="shrink-0 text-xs text-faint">Pick a title</span>
+                  </Command.Item>
+                );
+              })}
+            </Command.Group>
+
+            <Command.Group heading="Go to" className={groupClass}>
+              {NAV.map((n) => {
+                const Icon = n.icon;
+                return (
+                  <Command.Item
+                    key={n.href}
+                    value={`go ${n.label}`}
+                    onSelect={() => go(n.href)}
+                    className={itemClass}
+                  >
+                    <Icon size={15} className="text-muted" />
+                    {n.label}
+                  </Command.Item>
+                );
+              })}
+            </Command.Group>
+
+            {titles.length > 0 && (
+              <Command.Group heading="Open a title" className={groupClass}>
+                {titles.map((t) => {
+                  const Icon = t.mediaType === "TV" ? Tv : Film;
+                  return (
+                    <Command.Item
+                      key={t.id}
+                      value={`${t.name} ${t.year ?? ""}`}
+                      onSelect={() => go(`/title/${t.id}`)}
+                      className={itemClass}
+                    >
+                      <Icon size={15} className="text-muted" />
+                      <span className="min-w-0 flex-1 truncate">{t.name}</span>
+                      {t.year ? (
+                        <span className="shrink-0 text-xs text-faint">{t.year}</span>
+                      ) : null}
+                    </Command.Item>
+                  );
+                })}
+              </Command.Group>
+            )}
+          </>
         )}
       </Command.List>
     </Command.Dialog>

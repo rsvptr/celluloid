@@ -1,6 +1,6 @@
 import { getSession } from "@/lib/session";
 import { parseUploadedList, ROW_SCAN_BUFFER } from "@/lib/import/parse-upload";
-import { stageParsedImport } from "@/lib/import-staging";
+import { IMPORT_STAGING_BUDGET_MS, stageParsedImport } from "@/lib/import-staging";
 import { prisma } from "@/lib/prisma";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 
@@ -11,6 +11,9 @@ const MAX_ROWS = 250; // bound per-upload work to stay within the function timeo
 const MAX_BYTES = 2 * 1024 * 1024; // 2 MB — reject before buffering to avoid OOM
 
 export async function POST(request: Request) {
+  // Matching is deadlined from here, not from where it starts, so the time this
+  // request spends reading and parsing the file comes out of the same budget.
+  const startedAt = Date.now();
   const session = await getSession();
   if (!session?.user) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
@@ -72,7 +75,7 @@ export async function POST(request: Request) {
     jobId = job.id;
     // Pass the row ceiling so parsing stops early instead of materializing an
     // entire crafted-to-decompress-huge sheet before this route truncates it.
-    const { titles, error, totalRows, scanCapped } = await parseUploadedList(
+    const { titles, error, totalRows, scanCapped, notes } = await parseUploadedList(
       buf,
       file.name,
       MAX_ROWS,
@@ -102,11 +105,20 @@ export async function POST(request: Request) {
       userId: session.user.id,
       jobId: job.id,
       parsed: rows,
+      deadlineAt: startedAt + IMPORT_STAGING_BUDGET_MS,
       summary: {
         parsed: rows.length,
         truncated,
         totalInFile,
         totalInFileExact,
+        // What the parser had to INFER rather than read: which column it treated
+        // as a viewing date, whether a rating scale could be determined, and so
+        // on. A spreadsheet cannot state its own conventions, so these guesses
+        // decide real personal data — a Letterboxd watchlist and its watched
+        // export are header-identical, and reading one as the other would invent
+        // a watch history. Carrying the notes to the review screen is what makes
+        // a wrong guess correctable before anything is committed.
+        ...(notes && notes.length > 0 ? { notes } : {}),
       },
     });
 

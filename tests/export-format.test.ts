@@ -29,6 +29,7 @@ function row(over: Partial<ExportRow> = {}): ExportRow {
     genres: ["Drama"],
     totalEpisodes: null,
     watchedEpisodes: 0,
+    watchCount: 0,
     favorite: false,
     notes: null,
     tags: [],
@@ -185,6 +186,39 @@ describe("tasteSummary", () => {
     const s = tasteSummary(rows);
     assert.ok(s.includes("I mostly watch in these languages: Malayalam"));
     assert.ok(!s.includes("French,"));
+  });
+
+  it("marks a rewatched title in the strongest block and ranks the signal", () => {
+    const rows = [
+      row({ name: "Returned To", myRating: 8, watchCount: 4 }),
+      row({ name: "Seen Once", myRating: 9, watchCount: 1 }),
+    ];
+    const s = tasteSummary(rows);
+    const topBlock = s.slice(
+      s.indexOf("WATCHED & RATED"),
+      s.indexOf("WATCHED (not yet rated)"),
+    );
+    assert.ok(topBlock.includes("Returned To (2020) · 8/10 · watched 4×"));
+    // A single logged watch is not a rewatch, so it carries no marker.
+    assert.ok(topBlock.includes("Seen Once"));
+    assert.ok(!topBlock.includes("watched 1×"));
+    assert.ok(s.includes('Signal strength, strongest first: titles I went back to (marked "watched N×"'));
+    // The ranking has to be stated before the blocks it applies to.
+    assert.ok(s.indexOf("Signal strength") < s.indexOf("WATCHED & RATED"));
+  });
+
+  it("leaves the signal ranking out when nothing was rewatched", () => {
+    const s = tasteSummary([row({ name: "Seen Once", myRating: 9, watchCount: 1 })]);
+    assert.ok(!s.includes("Signal strength"));
+    assert.ok(!s.includes("×"));
+  });
+
+  it("is byte-identical for identical input, so the cached prefix holds", () => {
+    const rows = [
+      row({ name: "Returned To", myRating: 8, watchCount: 3 }),
+      row({ name: "Dropped It", statusKey: "DROPPED", status: "Dropped" }),
+    ];
+    assert.equal(tasteSummary(rows), tasteSummary(rows));
   });
 
   it("honors the watchlist override so scoped exports keep the guardrail", () => {

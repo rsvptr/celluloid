@@ -3,11 +3,21 @@ import { norm } from "@/lib/tmdb-match";
 import type { ParsedTitle } from "@/lib/import/parse-excel";
 import type { TmdbSearchItem } from "@/lib/tmdb";
 
-export const IMPORT_COMMIT_BATCH_SIZE = 5;
+/**
+ * Rows committed per request. This is also the resume granularity — a batch
+ * that dies is re-run from its first row — so it trades restart cost against
+ * round trips. Five meant a 250-row import spent 50 requests, each re-reading
+ * the whole job, to write what one request's worth of TMDB work could cover.
+ */
+export const IMPORT_COMMIT_BATCH_SIZE = 20;
 export const IMPORT_MAX_ATTEMPTS = 3;
 export const INVALID_STAGED_ROW_ERROR = "INVALID_STAGED_ROW";
 export const INVALID_STAGED_ROW_WARNING =
   "This row contains invalid or oversized data. Choose a match or exclude it.";
+/** Marks a row the staging deadline reached before it could be matched. */
+export const MATCH_TIMED_OUT_ERROR = "IMPORT_MATCH_TIMED_OUT";
+export const MATCH_TIMED_OUT_WARNING =
+  "Matching ran out of time before this row. Choose a match or exclude it.";
 
 export const parsedTitleSchema = z
   .object({
@@ -21,6 +31,21 @@ export const parsedTitleSchema = z
       .nullable(),
     status: z.enum(["WATCHED", "PARTIALLY_WATCHED", "UNWATCHED"]),
     languageHint: z.string().min(2).max(24).nullable(),
+    // Spreadsheet extras. Optional so the legacy workbook's rows — which carry
+    // none of them — still validate against the same schema.
+    rating: z.number().min(0.5).max(10).nullable().optional(),
+    ratingText: z.string().max(40).nullable().optional(),
+    watchedAt: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .nullable()
+      .optional(),
+    imdbId: z
+      .string()
+      .regex(/^tt\d{5,12}$/)
+      .nullable()
+      .optional(),
+    tmdbId: z.number().int().positive().nullable().optional(),
     tv: z
       .object({
         finalSeasonText: z.string().max(500).nullable(),
@@ -102,6 +127,19 @@ export function safeStagedNormalized(
     typeof languageValue === "string" && languageValue.trim().length >= 2
       ? languageValue.trim().slice(0, 24)
       : null;
+  // Salvage the owner-supplied extras on the same terms as the fields above:
+  // keep each one only when it is individually well-formed, so a row corrupted
+  // elsewhere doesn't cost a rating or a watch date the file really carried.
+  const ratingValue = parsedRecord.rating;
+  const rating =
+    typeof ratingValue === "number" && ratingValue >= 0.5 && ratingValue <= 10
+      ? ratingValue
+      : null;
+  const watchedAtValue = parsedRecord.watchedAt;
+  const watchedAt =
+    typeof watchedAtValue === "string" && /^\d{4}-\d{2}-\d{2}$/.test(watchedAtValue)
+      ? watchedAtValue
+      : null;
 
   const fallback = stagedNormalizedSchema.parse({
     parsed: {
@@ -112,6 +150,9 @@ export function safeStagedNormalized(
       releaseDate,
       status,
       languageHint,
+      rating,
+      ratingText: boundedText(parsedRecord.ratingText, 40) || null,
+      watchedAt,
     },
     proposed: null,
   });

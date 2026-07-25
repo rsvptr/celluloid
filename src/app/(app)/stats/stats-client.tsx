@@ -1,17 +1,20 @@
 import Link from "next/link";
 import { Flame } from "lucide-react";
-import type { LibraryStats } from "@/lib/data";
+import type { ActivityDay, LibraryStats } from "@/lib/data";
+import { ESTIMATED_EPISODE_MINUTES } from "@/lib/data";
 import { Card } from "@/components/ui";
-import {
-  ActivityHeatmap,
-  BarRow,
-  ColumnChart,
-  Sparkline,
-} from "@/components/charts";
+import { BarRow, ColumnChart, Sparkline } from "@/components/charts";
+import { ActivityCalendar } from "./activity-calendar";
 import { STATUS_META, STATUS_ORDER, languageName } from "@/lib/format";
 import type { WatchStatus } from "@/generated/prisma/client";
 
-export function StatsClient({ stats }: { stats: LibraryStats }) {
+export function StatsClient({
+  stats,
+  activityDays,
+}: {
+  stats: LibraryStats;
+  activityDays: ActivityDay[];
+}) {
   const hours = Math.round(stats.watchTimeMinutes / 60);
   const days = Math.floor(hours / 24);
   const watchTime = days > 0 ? `${days}d ${hours % 24}h` : `${hours}h`;
@@ -67,14 +70,41 @@ export function StatsClient({ stats }: { stats: LibraryStats }) {
             <Kpi label="Movies" value={stats.movies} />
             <Kpi label="TV shows" value={stats.tv} />
             <Kpi label="Movies watched" value={stats.watchedMovies} />
-            <Kpi label="Episodes watched" value={stats.watchedEpisodes} />
-            <Kpi label="Est. watch time" value={watchTime} />
+            <Kpi
+              label="Episodes watched"
+              value={stats.watchedEpisodes}
+              hint={
+                stats.episodesTotal > 0
+                  ? `of ${stats.episodesTotal} tracked`
+                  : undefined
+              }
+            />
+            {/* "Est." only when something actually was estimated. With every
+                watched episode's runtime known the figure is a sum, and the
+                hedge would contradict the (correspondingly absent) note below. */}
+            <Kpi
+              label={
+                stats.watchTimeEstimatedEpisodes > 0
+                  ? "Est. watch time"
+                  : "Watch time"
+              }
+              value={watchTime}
+            />
             <Kpi label="Rewatches" value={stats.totalRewatches} />
           </div>
-          {stats.watchedEpisodes > 0 && (
+          {/* The caveat used to run whenever any episode was watched, which
+              stopped being true once episode runtimes were summed for real:
+              with every runtime known the total is the sum, not a guess. Say
+              how much of it is estimated, and say nothing when none of it is. */}
+          {stats.watchTimeEstimatedEpisodes > 0 && (
             <p className="-mt-3 text-xs text-faint">
-              Watch time is an estimate; episodes without a known runtime
-              count as about 42 minutes each.
+              Watch time counts{" "}
+              <span className="tabular-nums">
+                {stats.watchTimeEstimatedEpisodes}
+              </span>{" "}
+              watched episode
+              {stats.watchTimeEstimatedEpisodes === 1 ? "" : "s"} with no known
+              runtime at about {ESTIMATED_EPISODE_MINUTES} minutes each.
             </p>
           )}
 
@@ -102,7 +132,10 @@ export function StatsClient({ stats }: { stats: LibraryStats }) {
                     </span>
                   </div>
                 </div>
-                <ActivityHeatmap activity={stats.activity} />
+                <ActivityCalendar
+                  activity={stats.activity}
+                  days={activityDays}
+                />
               </Card>
             )}
 
@@ -265,13 +298,22 @@ export function StatsClient({ stats }: { stats: LibraryStats }) {
   );
 }
 
-function Kpi({ label, value }: { label: string; value: number | string }) {
+function Kpi({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: number | string;
+  hint?: string;
+}) {
   return (
     <Card variant="inset" className="p-4">
       <div className="text-2xl font-bold tracking-tight tabular-nums text-foreground">
         {value}
       </div>
       <div className="mt-1 text-xs text-muted">{label}</div>
+      {hint && <div className="text-xs tabular-nums text-faint">{hint}</div>}
     </Card>
   );
 }

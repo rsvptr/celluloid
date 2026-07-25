@@ -589,6 +589,19 @@ export function mergeBackupTitle(
   }
   tags.sort((a, b) => a.localeCompare(b));
 
+  // The denormalized counters must describe the season/episode rows this merge
+  // will actually persist, not whichever side happened to be non-null first.
+  // `fillNullable` used to keep the EXISTING totals here, so restoring a backup
+  // that adds a season left the title claiming its pre-restore episode count
+  // while twice as many Episode rows existed — a permanently wrong progress bar
+  // and a wrong `episodesTotal` in stats. Deriving them from `seasons` also
+  // makes the plan-time preview agree with what apply writes (planRestoreTitles
+  // calls this same function), so the confirmation dialog stops reporting
+  // phantom updates for titles whose only "change" was a recount.
+  const mergedEpisodes = seasons.flatMap((season) => season.episodes);
+  const hasEpisodeRows = mergedEpisodes.length > 0;
+  const mergedWatchedEpisodes = mergedEpisodes.filter((e) => e.watched).length;
+
   return {
     ...existing,
     tmdbId: fillNullable(existing.tmdbId, incoming.tmdbId),
@@ -615,10 +628,25 @@ export function mergeBackupTitle(
         ? incoming.watchedAt
         : fillNullable(existing.watchedAt, incoming.watchedAt),
     favorite: mode === "replace-personal" ? incoming.favorite : existing.favorite,
-    totalSeasons: fillNullable(existing.totalSeasons, incoming.totalSeasons),
-    totalEpisodes: fillNullable(existing.totalEpisodes, incoming.totalEpisodes),
-    watchedEpisodes:
-      mode === "replace-personal"
+    // Never understate the season count once rows exist. TMDB's own
+    // `number_of_seasons` can legitimately exceed the seasons we materialize
+    // (specials are skipped), so take the larger of the two rather than
+    // clobbering a known-good total with a row count.
+    totalSeasons:
+      seasons.length > 0
+        ? Math.max(
+            seasons.length,
+            fillNullable(existing.totalSeasons, incoming.totalSeasons) ?? 0,
+          )
+        : fillNullable(existing.totalSeasons, incoming.totalSeasons),
+    // Episode totals are exact: every episode row this merge persists is in
+    // `seasons`, and recomputeProgress counts those same rows.
+    totalEpisodes: hasEpisodeRows
+      ? mergedEpisodes.length
+      : fillNullable(existing.totalEpisodes, incoming.totalEpisodes),
+    watchedEpisodes: hasEpisodeRows
+      ? mergedWatchedEpisodes
+      : mode === "replace-personal"
         ? incoming.watchedEpisodes
         : existing.watchedEpisodes,
     source: fillNullable(existing.source, incoming.source),

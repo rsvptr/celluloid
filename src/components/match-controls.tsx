@@ -26,6 +26,9 @@ export function MatchControls({
   const [pending, start] = useTransition();
   const [refreshing, startRefresh] = useTransition();
   const opener = useRef<HTMLElement | null>(null);
+  // A title with no tmdbId has never been matched, so every string here has to
+  // read as a first match rather than a correction.
+  const unmatched = tmdbId == null;
 
   function pick(r: SearchResult) {
     if (pending) return; // one rematch at a time; a second pick would race it
@@ -45,7 +48,7 @@ export function MatchControls({
         );
         return;
       }
-      toast.success("Match updated");
+      toast.success(unmatched ? "Match saved" : "Match updated");
       setOpen(false);
       router.refresh();
     });
@@ -78,9 +81,9 @@ export function MatchControls({
         }}
       >
         <Replace size={14} />
-        {tmdbId == null ? "Match to TMDB" : "Change match"}
+        {unmatched ? "Match to TMDB" : "Change match"}
       </Button>
-      {tmdbId != null && (
+      {!unmatched && (
         <Button variant="ghost" size="sm" disabled={refreshing} onClick={refresh}>
           {refreshing ? <Spinner /> : <RefreshCw size={14} />}
           Refresh metadata
@@ -106,11 +109,12 @@ export function MatchControls({
               <X size={18} />
             </Dialog.Close>
             <Dialog.Title className="text-sm font-semibold">
-              Change match for “{name}”
+              {unmatched ? "Find a match for" : "Change match for"} “{name}”
             </Dialog.Title>
             <Dialog.Description className="mt-0.5 text-xs text-muted">
-              Pick the correct title. Your status, rating, notes, tags, and watch
-              progress all stay put.
+              {unmatched
+                ? "Pick the matching title to pull in its poster, cast, and episode list. Your status, rating, notes, tags, and watch progress all stay put."
+                : "Pick the correct title. Your status, rating, notes, tags, and watch progress all stay put."}
             </Dialog.Description>
             <div
               className={
@@ -122,12 +126,14 @@ export function MatchControls({
               <TmdbSearch
                 autoFocus
                 onPick={pick}
-                placeholder="Search the correct title…"
+                placeholder={
+                  unmatched ? "Search for this title…" : "Search the correct title…"
+                }
               />
             </div>
             {pending && (
               <p className="mt-3 flex items-center gap-2 text-sm text-muted">
-                <Spinner /> Updating match…
+                <Spinner /> {unmatched ? "Saving match…" : "Updating match…"}
               </p>
             )}
           </Dialog.Content>

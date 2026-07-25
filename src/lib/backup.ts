@@ -340,6 +340,9 @@ async function createTitle(
         data: season.episodes.map((episode) => ({
           seasonId: createdSeason.id,
           ...episodeScalars(episode),
+          // See the restore path: a recovered episode is not a newly aired one,
+          // so it must not trip the "New episodes" badge.
+          discoveredAt: new Date(title.createdAt),
         })),
       });
     }
@@ -383,65 +386,136 @@ async function updateTitle(
     });
   }
 
-  for (const season of merged.seasons) {
-    const existingSeason = await tx.season.findUnique({
-      where: {
-        titleId_seasonNumber: {
-          titleId: current.id,
-          seasonNumber: season.seasonNumber,
-        },
-      },
-      select: { id: true },
-    });
-    const seasonId = existingSeason
-      ? (
-          await tx.season.update({
-            where: { id: existingSeason.id },
-            data: seasonScalars(season),
-            select: { id: true },
-          })
-        ).id
-      : (
-          await tx.season.create({
-            data: { titleId: current.id, ...seasonScalars(season) },
-            select: { id: true },
-          })
-        ).id;
+  // Season/episode reconciliation is SET-BASED. The previous implementation did
+  // two sequential round trips per episode (a findUnique then an update/create),
+  // so a 450-episode show cost ~900 queries and a full library restore ran to
+  // tens of thousands — comfortably past this route's maxDuration, which killed
+  // the request mid-write with no resume cursor. Now: one read for all seasons,
+  // one read for all episodes, a single createMany for what's missing, and an
+  // update only for rows whose scalars actually differ. Restoring a backup onto
+  // an unchanged library issues almost no writes at all.
+  const existingSeasons = await tx.season.findMany({
+    where: { titleId: current.id },
+    select: { id: true, seasonNumber: true },
+  });
+  const seasonIdByNumber = new Map(
+    existingSeasons.map((season) => [season.seasonNumber, season.id]),
+  );
 
-    for (const episode of season.episodes) {
-      const existingEpisode = await tx.episode.findUnique({
-        where: {
-          seasonId_episodeNumber: {
-            seasonId,
-            episodeNumber: episode.episodeNumber,
-          },
-        },
+  for (const season of merged.seasons) {
+    const existingId = seasonIdByNumber.get(season.seasonNumber);
+    if (existingId) {
+      await tx.season.update({ where: { id: existingId }, data: seasonScalars(season) });
+    } else {
+      const createdSeason = await tx.season.create({
+        data: { titleId: current.id, ...seasonScalars(season) },
         select: { id: true },
       });
-      if (existingEpisode) {
-        await tx.episode.update({
-          where: { id: existingEpisode.id },
-          data: episodeScalars(episode),
-        });
-      } else {
-        await tx.episode.create({
-          data: { seasonId, ...episodeScalars(episode) },
-        });
-      }
+      seasonIdByNumber.set(season.seasonNumber, createdSeason.id);
     }
   }
 
+  const existingEpisodes = await tx.episode.findMany({
+    where: { season: { titleId: current.id } },
+    select: {
+      id: true,
+      seasonId: true,
+      tmdbId: true,
+      episodeNumber: true,
+      name: true,
+      overview: true,
+      airDate: true,
+      runtime: true,
+      stillPath: true,
+      watched: true,
+      watchedAt: true,
+    },
+  });
+  const episodeByKey = new Map(
+    existingEpisodes.map((episode) => [
+      `${episode.seasonId}:${episode.episodeNumber}`,
+      episode,
+    ]),
+  );
+
+  const episodeCreates: Prisma.EpisodeCreateManyInput[] = [];
+  for (const season of merged.seasons) {
+    const seasonId = seasonIdByNumber.get(season.seasonNumber);
+    if (!seasonId) continue; // unreachable: every merged season was upserted above
+    for (const episode of season.episodes) {
+      const scalars = episodeScalars(episode);
+      const existingEpisode = episodeByKey.get(`${seasonId}:${episode.episodeNumber}`);
+      if (!existingEpisode) {
+        episodeCreates.push({
+          seasonId,
+          ...scalars,
+          // Don't let a restore fire the "New episodes" badge. discoveredAt means
+          // "TMDB gained this episode since you last looked", which a restore is
+          // not — so materialize recovered rows as old as the title itself
+          // rather than taking the schema's now() default.
+          discoveredAt: new Date(merged.createdAt),
+        });
+      } else if (!sameEpisodeScalars(existingEpisode, scalars)) {
+        await tx.episode.update({ where: { id: existingEpisode.id }, data: scalars });
+      }
+    }
+  }
+  if (episodeCreates.length > 0) {
+    await tx.episode.createMany({ data: episodeCreates, skipDuplicates: true });
+  }
+
   if (merged.mediaType === "TV") {
-    const watchedEpisodes = await tx.episode.count({
-      where: { season: { titleId: current.id }, watched: true },
-    });
+    // Re-derive BOTH counters from the rows that now exist. mergeBackupTitle
+    // already computes them, but recounting here keeps the denormalized cache
+    // authoritative even if a concurrent write slipped in under the row lock.
+    const [watchedEpisodes, totalEpisodes] = await Promise.all([
+      tx.episode.count({ where: { season: { titleId: current.id }, watched: true } }),
+      tx.episode.count({ where: { season: { titleId: current.id } } }),
+    ]);
     await tx.title.update({
       where: { id: current.id },
-      data: { watchedEpisodes },
+      data: {
+        watchedEpisodes,
+        // Only adopt the row count when rows exist, so a movie-shaped or
+        // episodeless title keeps whatever total the merge decided on.
+        ...(totalEpisodes > 0 ? { totalEpisodes } : {}),
+      },
     });
   }
 
   return current.id;
+}
+
+/**
+ * True when a stored episode row already matches the scalars a restore would
+ * write, so the update can be skipped. Dates are compared by instant (the row
+ * holds Date objects, the backup yields freshly parsed ones).
+ */
+function sameEpisodeScalars(
+  existing: {
+    tmdbId: number | null;
+    name: string | null;
+    overview: string | null;
+    airDate: Date | null;
+    runtime: number | null;
+    stillPath: string | null;
+    watched: boolean;
+    watchedAt: Date | null;
+  },
+  next: ReturnType<typeof episodeScalars>,
+): boolean {
+  const sameDate = (a: Date | null, b: Date | null) =>
+    a === null || b === null ? a === b : a.getTime() === b.getTime();
+  return (
+    existing.tmdbId === next.tmdbId &&
+    existing.name === next.name &&
+    existing.overview === next.overview &&
+    sameDate(existing.airDate, next.airDate) &&
+    existing.runtime === next.runtime &&
+    existing.stillPath === next.stillPath &&
+    existing.watched === next.watched &&
+    sameDate(existing.watchedAt, next.watchedAt)
+  );
 }
 
 function chunks<T>(values: T[], size: number): T[][] {

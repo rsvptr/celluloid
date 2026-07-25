@@ -12,11 +12,26 @@ const optionalString = z.preprocess(
 // guard and fires only on real production deploys.
 const isProductionDeployment = process.env.VERCEL_ENV === "production";
 
+/**
+ * Floor for anything used as key material. 32 characters is what the documented
+ * generators (`npx auth@latest secret`, `openssl rand -base64 32`) produce, and
+ * BETTER_AUTH_SECRET is not just a session signing key: outside production it is
+ * also the fallback input to the AES-256-GCM key derivation in lib/crypto, so a
+ * short value silently weakens secrets at rest too.
+ */
+const MIN_SECRET_LENGTH = 32;
+
 const rawEnvSchema = z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
     DATABASE_URL: z.string().trim().min(1),
-    BETTER_AUTH_SECRET: z.string().trim().min(1),
+    BETTER_AUTH_SECRET: z
+      .string()
+      .trim()
+      .min(
+        MIN_SECRET_LENGTH,
+        `must be at least ${MIN_SECRET_LENGTH} characters — generate one with: npx auth@latest secret`,
+      ),
     BETTER_AUTH_URL: optionalString,
     NEXT_PUBLIC_SITE_URL: optionalString,
     ENCRYPTION_KEY: optionalString,
@@ -61,6 +76,14 @@ const rawEnvSchema = z
           code: "custom",
           path: ["ENCRYPTION_KEY"],
           message: "is required in production and cannot fall back to BETTER_AUTH_SECRET",
+        });
+      } else if (value.ENCRYPTION_KEY.length < MIN_SECRET_LENGTH) {
+        // Presence alone is not enough: this value is the sole input to the
+        // key derivation for secrets at rest, so a weak one is as bad as none.
+        ctx.addIssue({
+          code: "custom",
+          path: ["ENCRYPTION_KEY"],
+          message: `must be at least ${MIN_SECRET_LENGTH} characters in production — generate one with: openssl rand -base64 32`,
         });
       }
     }

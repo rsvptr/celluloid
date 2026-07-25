@@ -35,6 +35,7 @@ Most trackers are good at storing what you watched and bad at the only question 
 - [What it does](#what-it-does)
 - [The recommendation engine](#the-recommendation-engine)
 - [Tracking your watch history](#tracking-your-watch-history)
+- [Keeping metadata current](#keeping-metadata-current)
 - [The library](#the-library)
 - [Stats](#stats)
 - [Exports](#exports)
@@ -59,18 +60,21 @@ Most trackers are good at storing what you watched and bad at the only question 
 - Every matched title shows where to stream, rent, or buy it (region-aware, via JustWatch data), a trailer link, and a "More like this" row you can add from in one click
 - Half star ratings from 0.5 to 10, private notes, favorites, and free form tags
 - Per episode and per season tracking for shows, with a progress bar, quick "mark season" and "mark show" actions, and a quiet "New" badge once a watching show has an aired episode you have not logged yet
-- Every viewing is logged to a private watch history, with an optional note. Logging again on a title you already finished counts as a rewatch instead of overwriting the first watch
+- A nightly job re-reads TMDB for the shows you are still watching, so a new season appears in the library on its own instead of waiting for you to refresh the title by hand
+- Every viewing is logged to a private watch history, with an optional note. Logging again on a title you already finished counts as a rewatch instead of overwriting the first watch. A viewing logged on the wrong day, or twice, can be edited or deleted from the title page
 - Five watch states that map to a real backlog: watchlist, watching, watched, on hold, dropped
 - AI recommendations from Claude, based on a detailed picture of your taste, with mood presets, language, genre, and era preferences, and the option to base them on your whole library, your recent watches, or a hand picked set
+- A suggestion you turn down stays turned down: "not interested" is stored, so it is excluded from every future run, with a list you can review and undo from
 - A "copy as AI prompt" export, so the same brief works in any chat assistant
-- Search, rich filtering, two layouts, and bulk editing across a large library
-- Soft delete: removing a title moves it to Trash with every piece of personal data intact, ready to restore or delete forever
-- Uploading a spreadsheet stages a review: Celluloid proposes a TMDB match for every row, you fix or exclude what is wrong, then commit in resumable batches you can leave and pick back up later
+- Search, rich filtering, two layouts, and bulk editing across a large library. Search ignores accents, so "amelie" finds "Amélie"
+- Soft delete: removing a title moves it to Trash with every piece of personal data intact, ready to restore, delete forever, or empty in one action
+- Uploading a spreadsheet stages a review: Celluloid proposes a TMDB match for every row, you fix or exclude what is wrong, then commit in resumable batches you can leave and pick back up later. Ratings, watch dates, and IMDb or TMDB ids come across if your sheet has them
+- Free form tags you can rename and give one of five colors, from the title page or Settings
 - A surprise picker that pulls something random off your watchlist when you cannot decide
-- Stats built from real activity: a heatmap and streaks, rating distribution, taste and totals by genre, and your most rewatched titles
-- Public, read only share links for a list or your whole library, with an optional expiry and a revoke switch that pulls access without deleting the link's record
-- A full JSON backup you can restore with a preview first, so nothing writes to your library until you confirm exactly what will change
-- Time zone and a default watch region in Settings, used for stats day boundaries and for which region's streaming and rental info you see
+- Stats built from real activity: a heatmap whose days open to show what you watched, streaks, rating distribution, taste and totals by genre, and your most rewatched titles
+- Public, read only share links for a list or your whole library, with an optional expiry, a revoke switch that pulls access without deleting the link's record, and a per link view of exactly which titles a visitor sees
+- A full JSON backup you can restore with a preview first, so nothing writes to your library until you confirm exactly what will change, and a note in Settings of when you last took one
+- Time zone and a default watch region in Settings. The time zone sets stats day boundaries; the region decides whose streaming, rental, and certification info you see, and a per device selector on a title page can override it
 - Exports to plain text, Markdown, JSON, and a styled Excel workbook, scoped as finely as language, genre, minimum rating, and release years, with filenames that say what is inside
 - Accounts with email and password, optional two factor, and a switch to close public sign ups
 
@@ -83,7 +87,7 @@ This is the reason the app exists. When you ask for suggestions, Celluloid does 
 ```mermaid
 flowchart TD
     A["Your library"] --> B{"Sort by signal strength"}
-    B --> C["Watched and rated high<br/>(your strongest signal)"]
+    B --> C["Watched and rated high<br/>(rewatches marked, your strongest signal)"]
     B --> D["Rated low<br/>(an explicit avoid signal)"]
     B --> E["Watched, not yet rated"]
     B --> F["Recently watched<br/>(your current mood)"]
@@ -100,15 +104,18 @@ flowchart TD
     J --> K["Claude (structured JSON output)"]
     K --> L["Dedupe by TMDB id and by name plus year"]
     L --> M["Drop anything already in your library or watchlist"]
-    M --> N["Re match to TMDB for posters and a one click add"]
+    M --> P["Drop anything on your not interested list"]
+    P --> N["Re match to TMDB for posters and a one click add"]
     N --> O["Sort by confidence, then trim to the count you asked for"]
 ```
 
 A few details that make the output better:
 
 - **High and low both count.** Titles you rated highly drive the positive direction. Titles you rated low get their own block that tells Claude to avoid similar things, so half of your signal is not wasted.
+- **Rewatches outrank ratings.** A title you logged more than once is marked with how many times you watched it, and the brief states the ranking plainly: going back to something says more than any single score. The marker only appears once your history actually contains a rewatch, so it never spends prompt space on a legend nothing uses.
+- **Turn downs stick.** Dismissing a suggestion as "not interested" records it against your account, not just the open page. It is filtered out of every later run, and it is named in the brief's exclusion clause so the model spends its picks elsewhere. The Not interested list on the recommend page shows what you have turned down and puts any of it back.
 - **Language lean is computed, not assumed.** The brief states the languages you actually rate and favorite, so a model does not default to English language picks when your taste runs elsewhere.
-- **Recency reflects mood.** Titles you finished in the app recently are weighted as your current direction. Imported titles that never had a real watch date stay quiet, so the app never fakes recency.
+- **Recency reflects mood.** Titles you finished recently are weighted as your current direction. That includes a watch date an imported sheet supplied, because it is a real date; what the app will not do is invent one for a row that arrived without it.
 - **No repeats.** Suggestions are checked against your whole library by TMDB id and by a normalized name plus year, which also catches regional titles that were never matched to TMDB.
 - **Honest confidence.** Each pick comes back with a confidence level, and the list is sorted high to low before it is trimmed, so a strong pick is never dropped in favor of a weak one.
 
@@ -124,7 +131,7 @@ You can steer a run with a free text focus ("cozy mysteries", "something like Br
 
 **Results stream in live.** The app doesn't wait for the whole batch: Claude's response is parsed as it streams, each suggestion is validated, deduplicated, and matched to TMDB the moment it completes, and cards appear one by one with a status line ("thinking", "curating picks", a running count) and a Stop button. Once enough suggestions have been accepted, generation is aborted server-side, so you never pay for output past what you asked for.
 
-**Models.** Claude Opus is the default. Sonnet and Haiku are selectable per run from the recommend page. The app adapts the request to each model: Opus 4.8 and Sonnet 5 use adaptive thinking and an effort setting, Haiku skips the options it does not support. Output is constrained to a JSON schema, and the taste brief carries an Anthropic prompt-cache breakpoint, so once your library is large enough to clear the cache minimum, a "Show different" re-run a few minutes later reprocesses only the short request block instead of your whole taste brief.
+**Models.** Claude Opus 5 is the default. Claude Sonnet 5 and Claude Haiku 4.5 are selectable per run from the recommend page. The app adapts the request to each model: Opus 5 and Sonnet 5 get adaptive thinking and an effort setting, while Haiku 4.5 skips both options because it rejects them. Output is constrained to a JSON schema, and the taste brief carries an Anthropic prompt-cache breakpoint, so once your library is large enough to clear the chosen model's cache minimum, a "Show different" re-run a few minutes later reprocesses only the short request block instead of your whole taste brief. That minimum differs per model and is not lower on newer ones, so the breakpoint is attached only when the brief plausibly clears the bar for the model you picked.
 
 **Bring your own key.** Add an Anthropic key in settings and it is encrypted at rest with AES 256 GCM before it touches the database. A deployment wide key can also be set as a fallback.
 
@@ -142,8 +149,25 @@ Every title carries personal tracking on top of its TMDB metadata.
 
 - **Half star ratings** run from 0.5 to 10. Click the left or right half of a star, or use the keyboard (arrow keys nudge by half or whole steps, 0 clears).
 - **Notes** are private and double as context for the AI. Favorites and tags layer on top, and tags also work as a recommendation lens.
-- **TV is tracked properly.** Shows expand into seasons and episodes. Tick a single episode, a whole season, or the whole show. Progress is denormalized for a fast bar on the card, and finishing a show stamps a watch date so it counts toward recency and stats. Once you are watching a show, an aired episode you have not logged shows a small "New" badge on its card.
+- **Tags are editable.** Rename a tag anywhere it appears and every title follows, or give it one of five colors so it reads as a category at a glance. Settings lists every tag with how many live titles carry it, which is also where a tag is deleted.
+- **TV is tracked properly.** Shows expand into seasons and episodes. Tick a single episode, a whole season, or the whole show. Progress is denormalized for a fast bar on the card, and finishing a show stamps a watch date so it counts toward recency and stats. An episode that turned up after you added the show, has aired, and is not ticked off puts a small "New" badge on its card, on any show except one you have dropped.
 - **Log watch** records a dated viewing with an optional note, from the title page. The first log on a title stamps its watch date; logging again on an already watched title is recorded as a rewatch and adds to the running count on that title and on the stats page, without disturbing the original watch date.
+- **History is correctable.** The watch log is append only by design, since stats and streaks are built from it, but a viewing logged on the wrong day or logged twice by a double tap can be edited or deleted from the History list on the title page. Either way the title's watch date is re-derived from the log on the server, so the two cannot drift apart.
+
+## Keeping metadata current
+
+A title used to be frozen at whatever TMDB said on the day you added it, so a show that came back for another season stayed at its old episode count until you refreshed it by hand. A scheduled job closes that gap.
+
+`vercel.json` registers one cron entry, `/api/cron/sync`, which runs daily at 07:00 UTC. For each account it takes the fifty least recently synced shows, oldest (and never synced) first, and re-reads them from TMDB. It skips dropped shows, and shows TMDB reports as ended or cancelled once they have been synced at least once, so the budget goes to series that can still change.
+
+- Episodes are matched by season and episode number and updated in place, never deleted and recreated. That is what keeps the "New" badge meaningful: the badge keys on when an episode row first appeared, so rewriting every row nightly would mark the whole library as new and destroy the signal.
+- An episode the sync stores for the first time only counts as newly discovered if it aired in the last month or has yet to air. A show added with some of its seasons missing gets them filled in eventually, and that back catalogue is dated to the title rather than to the night it arrived, so a season from 2015 does not turn up wearing a "New" badge.
+- Rows are never removed. TMDB occasionally drops or renumbers an episode for a day, and deleting on that basis would take your watched flag with it.
+- Each run records the show's TMDB status, the air date of its next episode, and when the title was last synced along with the last error if there was one. It also caches which services carry the show in your Settings watch region, which nothing reads yet (see [Notes and limitations](#notes-and-limitations)).
+- One title's failure is recorded against that title and the run continues. Whatever the run does not reach keeps its place at the front of the queue and goes first the next day.
+- The run has a wall clock budget, and a title in flight when it runs out stops fetching rather than finishing at its own pace, since one show with hundreds of episodes could otherwise start just under the wire and overrun the function limit. A title dropped that way is not marked as failed; it stays at the front of the queue. With more than one account the remaining budget is split evenly between the accounts still to go, so a later account cannot be starved by an earlier one.
+
+The endpoint accepts no input other than its credential. It requires `Authorization: Bearer $CRON_SECRET` and compares the header in constant time; if `CRON_SECRET` is not set it refuses every request rather than falling back to running unauthenticated. Vercel sends that header for scheduled invocations once the variable is set on the project. Without it the app works exactly as before, just without the nightly refresh.
 
 ## The library
 
@@ -175,14 +199,14 @@ On phones the filters collapse behind a single toggle and lay out as a clean two
 
 The stats page reads your activity rather than just counting rows.
 
-- Totals for titles, movies, shows, movies watched, episodes watched, and rewatches
-- An estimated watch time, with an honest note that episodes without a known runtime are estimated at about 42 minutes each
-- A watch activity heatmap and current and longest streaks, built from real in app watch dates
+- Totals for titles, movies, shows, movies watched, episodes watched out of episodes tracked, and rewatches
+- A watch time built from real per episode runtimes. Episodes with no known runtime count as about 42 minutes each, and the page says how many of them there were. When every watched episode has a runtime, there is nothing to qualify and the note does not appear
+- A watch activity heatmap and current and longest streaks, built from real in app watch dates. Selecting a day opens what you watched that day, with a link to each title; the arrow keys move between days
 - Titles by release year as a sparkline, a rating distribution histogram, and a by decade breakdown
 - Your top rated titles, your most rewatched titles, and a by status and by language breakdown
 - Taste by genre: your average rating per genre, for genres with at least two rated titles, alongside a top genres count by how often each appears in your library
 
-Because the imported backlog starts without watch dates, the activity views begin empty and fill in as you mark things watched in the app. The page says so plainly rather than showing a misleading blank.
+Because the activity views are built from logged watch events, and an import never writes one, they begin empty for an imported backlog and fill in as you mark things watched in the app. The page says so plainly rather than showing a misleading blank.
 
 ## Exports
 
@@ -196,13 +220,15 @@ Everything in your library can leave in the shape you need. Pick a scope (type, 
 | JSON | `.json` | Feeding another tool |
 | Excel | `.xlsx` | A styled workbook with separate Movies and TV sheets |
 
-The AI prompt export uses the exact same taste brief as the in app engine. Even when you scope the export down, the "do not recommend these" guardrails are still drawn from your full watchlist and dropped lists, so a scoped prompt never contradicts itself.
+The AI prompt export uses the exact same taste brief as the in app engine, rewatch markers and all. Even when you scope the export down, the "do not recommend these" guardrails are still drawn from your full watchlist and dropped lists, so a scoped prompt never contradicts itself.
 
-Every download gets a unique, descriptive filename, for example `celluloid-library-movie-malayalam-8plus-1990-1999-20260613-101500.xlsx`, so repeated exports never overwrite each other and a saved file tells you what it holds at a glance.
+Every download gets a unique, descriptive filename, for example `celluloid-library-movie-ml-8plus-1990-1999-20260613-101500.xlsx`, so repeated exports never overwrite each other and a saved file tells you what it holds at a glance. The language segment is the ISO code the filter uses (`ml` for Malayalam), which keeps the whole name safe to put in a download header.
 
 ## Backups and recovery
 
-Celluloid has an application-level backup for the personal data that would be painful to rebuild. In **Settings > Backup**, choose **Download backup** to save a versioned JSON file. The current v2 format contains movie and TV metadata, soft-deleted titles, status, ratings, favorites, notes, watch dates and watch-event history, full season and episode progress, tags and their title joins, owner timezone/region preferences, and ordered shared-list settings including expiry and revocation. Restore also accepts v1 files through an explicit compatibility upgrade, for files up to 4 MB. Backups deliberately exclude passwords, sessions, two-factor secrets and backup codes, encrypted API keys, and share slugs. A restored shared list receives a new unguessable link instead of reviving an old bearer token.
+Celluloid has an application-level backup for the personal data that would be painful to rebuild. In **Settings > Backup**, choose **Download backup** to save a versioned JSON file. The current v2 format contains movie and TV metadata, soft-deleted titles, status, ratings, favorites, notes, watch dates and watch-event history, full season and episode progress, tags with their colors and their title joins, owner timezone/region preferences, and ordered shared-list settings including expiry and revocation. Restore also accepts v1 files through an explicit compatibility upgrade, for files up to 4 MB. Backups deliberately exclude passwords, sessions, two-factor secrets and backup codes, encrypted API keys, and share slugs. They also leave out the working state that is cheap to rebuild: your "not interested" list and any staged spreadsheet import. A restored shared list receives a new unguessable link instead of reviving an old bearer token.
+
+Settings records when you last downloaded a backup, so the button tells you how stale your off-site copy is instead of giving no feedback at all. The stamp is written as the file starts streaming; whether it reached your disk is not something the server can see.
 
 To restore, select the JSON file and a mode, then choose **Preview restore**. The preview reports how many titles will be created, updated, left unchanged, or skipped as conflicts. Nothing is written until you approve the confirmation dialog.
 
@@ -224,7 +250,14 @@ These steps are manual owner responsibilities, not actions the application perfo
 
 ## Sharing
 
-You can publish a read only view of your library, or an ordered selection, at an unguessable link under `/s/`. Shared pages need no login and are marked no index. Notes are hidden unless you opt in, and a whole library share hides your not yet watched watchlist by default so you are not broadcasting your plans. Links can be permanent or expire after 7, 30, or 90 days. Every link remains listed in settings, where you can copy it, revoke access without losing its record, or delete it permanently.
+You can publish a read only view of your library, or an ordered selection, at an unguessable link under `/s/`. Shared pages need no login and are marked no index. Notes are hidden unless you opt in, and a whole library share hides your not yet watched watchlist by default so you are not broadcasting your plans. Links can be permanent or expire after 7, 30, or 90 days.
+
+Every link stays listed in Settings, and a published link is not a thing you have to remember the contents of:
+
+- **See what it publishes.** Open a link's title list to read exactly what a visitor sees, in the order the public page renders it, with the same watchlist hiding applied. Notes are never returned to this view, since the question is which titles are exposed. This matters most for a whole library link, which quietly grows to cover every title you add after creating it.
+- **Rename it,** or clear the name back to untitled.
+- **Change the expiry** to 7, 30, or 90 days from now, or clear it so the link never expires. The new window is measured from now, so the same control brings an already expired link back.
+- **Revoke and restore.** Revoking pulls access without deleting the record; restoring puts the original URL back, which is the point when a link was shared by hand and revoked in haste. Deleting is still the permanent option.
 
 ## Privacy and security
 
@@ -236,6 +269,7 @@ This is your data on your infrastructure.
 - Accounts use email and password through Better Auth, with optional time based two factor (an authenticator app, with backup codes and a manual setup key). Sessions are stored in the database, and deleting your account requires your password, not just a live session.
 - Sign in, sign up, password change, and two factor verification are rate limited against brute force, and the AI, search, import, and export routes are rate limited per user to keep a runaway loop from draining your API budget.
 - Public sign ups are closed by default. Set `ALLOW_SIGNUPS=true` only long enough to create your own account, then remove it, which is the recommended locked down state for a personal deployment.
+- The one unauthenticated endpoint, the scheduled sync, is gated on a bearer token compared in constant time, and refuses to run at all when that secret is not configured rather than falling back to open access.
 - Security headers are set for every response: frame denial, no sniff, a strict referrer policy, a content security policy covering framing, plugins, base tags, and form targets, a permissions policy that turns off browser capabilities the app never uses, and HSTS on the production domain.
 - Server side input validation bounds every free text field, and `npm audit` runs clean with pinned overrides for transitive advisories.
 
@@ -274,7 +308,7 @@ Reads and simple mutations go through server components and server actions. The 
 
 ## Data model
 
-A user owns titles, tags, and share lists. A title can be a movie or a show. Shows own seasons, seasons own episodes. Every logged viewing appends a `WatchEvent`, an append-only record separate from the title's own `status`/`rating`/`watchedAt` fields. Tags attach to titles through a join table. Auth tables (sessions, accounts, two factor) hang off the user as well.
+A user owns titles, tags, and share lists. A title can be a movie or a show. Shows own seasons, seasons own episodes. Every logged viewing appends a `WatchEvent`, a record separate from the title's own `status`/`rating`/`watchedAt` fields, which the app only ever writes to, corrects, or deletes one row at a time. Tags attach to titles through a join table. Auth tables (sessions, accounts, two factor) hang off the user as well.
 
 ```mermaid
 erDiagram
@@ -314,7 +348,9 @@ erDiagram
     }
 ```
 
-Titles are unique per user by media type and TMDB id, and the denormalized `watchedEpisodes` count keeps the progress bar fast without walking every episode on each render. A staged spreadsheet upload gets its own short-lived `ImportJob` and per-row `ImportItem` rows (see [Bringing in your library](#bringing-in-your-library)); they hold no personal library data and are not part of the core model above.
+Titles are unique per user by media type and TMDB id, and the denormalized `watchedEpisodes` count keeps the progress bar fast without walking every episode on each render. A title also carries what the nightly sync learned about it: TMDB's own lifecycle string, the next episode's air date, when it was last synced, and a cache of the streaming providers for a region that is filled ahead of the view that will read it.
+
+Two side tables hang off the user without being part of the core model above. A `Suppression` records one suggestion you turned down, keyed so a title that resolved to TMDB is matched by id and one that did not is matched by normalized name and year. A staged spreadsheet upload gets its own short-lived `ImportJob` and per-row `ImportItem` rows (see [Bringing in your library](#bringing-in-your-library)); they hold no personal library data.
 
 ## Tech stack
 
@@ -376,12 +412,17 @@ Copy `.env.example` to `.env`. Never commit `.env`; it is already ignored.
 | `DATABASE_URL` | Yes | Neon pooled connection string (host contains `-pooler`). Used at runtime. |
 | `DIRECT_URL` | For migrations | Neon direct connection string (no pooler). Used only for migrations. Falls back to `DATABASE_URL` if unset. |
 | `TMDB_ACCESS_TOKEN` | Yes | The TMDB v4 API Read Access Token (the long token starting with `eyJ`). Server side only. |
-| `BETTER_AUTH_SECRET` | Yes | A long random secret for signing sessions. |
+| `BETTER_AUTH_SECRET` | Yes | Signs sessions. At least 32 characters; generate with `npx auth@latest secret`. |
 | `BETTER_AUTH_URL` | Yes | The app base URL. Local is `http://localhost:3000`, production is your deployed URL. |
 | `NEXT_PUBLIC_SITE_URL` | Yes | Public base URL for metadata and the auth client. Match `BETTER_AUTH_URL`. |
-| `ENCRYPTION_KEY` | Required in production (dev/test may fall back to `BETTER_AUTH_SECRET`) | Key for encrypting per user Anthropic keys at rest. |
+| `ENCRYPTION_KEY` | Required in production (dev/test may fall back to `BETTER_AUTH_SECRET`) | Encrypts per user Anthropic keys at rest. At least 32 characters; generate with `openssl rand -base64 32`. |
 | `ANTHROPIC_API_KEY` | Optional | A deployment wide Claude key, used when a user has not added their own. |
 | `ALLOW_SIGNUPS` | Optional | Public sign ups are closed unless this is `true`. Set it to bootstrap your account, then remove it. Existing users can always sign in. |
+| `CRON_SECRET` | For the scheduled sync | Bearer token the daily `/api/cron/sync` job must present. Generate with `openssl rand -base64 32`. Unset means the sync never runs; the endpoint refuses every request rather than running unauthenticated. |
+| `OWNER_EMAIL` | For `npm run import` | The email of the account the legacy workbook import writes into. The script exits if it is unset, or if no account with that email exists yet. Not read by the running app. |
+| `IMPORT_FILE` | Optional | Path to the workbook `npm run import` reads. Defaults to `data/watched.xlsx`. Not read by the running app. |
+
+`BETTER_AUTH_SECRET` and, in production, `ENCRYPTION_KEY` must be at least 32 characters; the app refuses to start otherwise, since both are key material rather than plain identifiers.
 
 The old `DISABLE_SIGNUPS` flag is deprecated. For one release, `DISABLE_SIGNUPS=false` is still honored as `ALLOW_SIGNUPS=true` and the server logs a one time warning. Move to `ALLOW_SIGNUPS` and drop the old variable.
 
@@ -390,7 +431,7 @@ The old `DISABLE_SIGNUPS` flag is deprecated. For one release, `DISABLE_SIGNUPS=
 There are three ways to get titles in, and they all enrich from TMDB (posters, seasons, episodes, genres, runtime, original language).
 
 1. **Search and add.** The fastest path for a handful of titles. Search TMDB inside the app and add with one click.
-2. **Upload a sheet.** The in app importer on the Add page accepts an `.xlsx` or `.csv` file with a Title column, up to 2 MB and 250 rows.
+2. **Upload a sheet.** The in app importer on the Add page accepts an `.xlsx` or `.csv` file with a Title column, up to 2 MB and 250 rows. Year, Type, Status, a rating, a watch date, and an IMDb or TMDB id are all optional extras it will use if your file has them.
 3. **Import the legacy workbook.** If you are coming from a "Movies and TV Shows Watched" style spreadsheet with separate sheets, drop it at `data/watched.xlsx` and run the importer.
 
 **Uploading a sheet stages a review before anything touches your library.** Celluloid proposes a TMDB match for each row and shows a confidence label. From there you can:
@@ -399,9 +440,16 @@ There are three ways to get titles in, and they all enrich from TMDB (posters, s
 - Search TMDB yourself and pick the exact match if the proposal is wrong or missing
 - Commit once you are happy, which runs in small resumable batches rather than one long request
 
+**Column handling.** Header matching is case insensitive and ignores punctuation, so the real column names in a Letterboxd, IMDb, or Trakt export are recognized as they are written.
+
+- **Ids beat names.** A row carrying a TMDB or IMDb id is resolved through that id and skips the fuzzy name search entirely, which is the single biggest accuracy win on a large export where "Drishyam" or "The Office" otherwise resolves by popularity. A dead id quietly falls back to searching by name.
+- **Rating scales are read from the heading first.** A five star column is doubled onto Celluloid's 0.5 to 10 scale and a ten point column is taken as is. A column headed only "Rating" names no scale, so the values get one look for the single thing they can prove: any score above 5 means the column must be out of ten, and the whole column is read that way. Below that the two are genuinely indistinguishable, since a Letterboxd file where nothing scored above 2.5 looks exactly like an IMDb file where nothing scored above 5, so the rating is not imported at all rather than halved or doubled, and review says so on the row.
+- **A watch date has to come from a column that says so.** "Watched Date", "Date Watched", and "Date Rated" mark a row as watched and set its watch date. A column headed just "Date" never does: Letterboxd's watchlist and watched exports carry identical headers, and reading the first as the second would turn a list of films you have not seen into a watch history you cannot tell apart from a real one afterwards. A bare "Date" is used as a release hint, or as the viewing date for rows the file has already said are watched.
+- **The review screen states what was assumed.** Which column was taken as a viewing date, whether a rating scale could be determined, whether status was inferred rather than read: all of it appears above the rows, before anything is written, so a wrong guess is something you correct rather than discover later.
+
 Nothing is written until you commit, and committing itself is safe to interrupt: leave the page mid-batch and the same job is offered for resume the next time you open Add, picking up right where it left off. Cancelling abandons whatever has not committed yet, but keeps anything already saved. A row that keeps failing can be retried up to a fixed number of attempts before it needs a manual match.
 
-Imported titles never get an invented watch date or a fabricated history entry, since the sheet does not carry one. A row marked watched creates the title with its status set but no `WatchEvent`, so the recommendation engine's recency signal and the stats activity views stay quiet for it until you actually watch or log it in the app.
+Imported titles still get no fabricated history entry. A rating and a watch date are facts you supplied, so they are written where the file provides them, but a row marked watched creates no `WatchEvent`: a date says when something was finished, not how many times it was watched. So an imported watch date counts toward the recommendation engine's recency signal, which is what a real date is for, while the stats activity heatmap, streaks, and rewatch counts stay quiet for that title until you watch or log it in the app.
 
 ```bash
 npm run import
@@ -421,7 +469,8 @@ The legacy workbook importer bypasses the review step entirely (it is meant for 
 | `npm run db:deploy` | Apply migrations to the database |
 | `npm run db:migrate` | Create and apply a new migration in development |
 | `npm run db:generate` | Regenerate the Prisma client |
-| `npm run db:push` | Push the schema straight to the database, no migration file. For prototyping only; use `db:migrate` for a real change |
+| `npm run db:push` | Push the schema straight to the database, no migration file, then create the indexes a push does not. For prototyping only; use `db:migrate` for a real change |
+| `npm run db:indexes` | Re-apply the one index that migration SQL defines but `schema.prisma` cannot express (the case-insensitive unique index on tag names), which `db:push` would otherwise drop. Idempotent; `db:migrate` and `db:deploy` do not need it |
 | `npm run db:studio` | Open Prisma Studio to browse the data |
 | `npm run db:seed` | Prisma's seed hook, wired to the same legacy workbook import as `npm run import` |
 | `npm run import` | Import the legacy Excel workbook from `data/watched.xlsx` |
@@ -441,6 +490,7 @@ A short checklist for a clean first deploy:
 - [ ] Both `BETTER_AUTH_URL` and `NEXT_PUBLIC_SITE_URL` point at the production URL.
 - [ ] `DATABASE_URL` is the pooled string and `DIRECT_URL` is the direct one.
 - [ ] Set `ALLOW_SIGNUPS=true` for the first deploy, create your account on the live site, then remove it and redeploy.
+- [ ] Set `CRON_SECRET` if you want the nightly metadata sync. `vercel.json` registers the schedule; without the variable the endpoint refuses to run.
 
 ## Project structure
 
@@ -454,21 +504,23 @@ celluloid/
 │   └── icon-192.png
 ├── scripts/
 │   ├── import-excel.ts        importer for the legacy workbook
+│   ├── ensure-indexes.mjs     re-applies indexes that `db:push` would drop
 │   └── db-check.mjs, db-dump.mjs   ad hoc, read only maintenance scripts (run manually before a migration)
 ├── src/
 │   ├── app/
-│   │   ├── (app)/             signed in pages: library, add, title, recommend, export, stats, settings
-│   │   ├── api/               route handlers: recommend, search, titles, import (upload + staged jobs), backup, export/xlsx, auth
+│   │   ├── (app)/             signed in pages: library, add, title, recommend, upcoming, export, stats, settings
+│   │   ├── api/               route handlers: recommend, search, titles, import (upload + staged jobs), backup, export/xlsx, cron/sync, auth
 │   │   ├── login/
 │   │   ├── s/[slug]/          public read only shared lists
 │   │   ├── layout.tsx, globals.css, manifest.ts, robots.ts
 │   │   └── error.tsx, not-found.tsx, global-error.tsx
 │   ├── components/            library, cards, charts, dialogs, import review, command palette, rating stars, nav
 │   ├── generated/prisma/      generated Prisma client (not committed)
-│   ├── lib/                   auth, prisma, tmdb, recommend, export, import (legacy + staged review), backup, share, region and settings actions, data, actions, crypto, rate limiting
+│   ├── lib/                   auth, prisma, tmdb, recommend, suppressions, export, import (legacy + staged review), backup, metadata sync, share, region and settings actions, data, actions, crypto, rate limiting
 │   └── proxy.ts               Next 16 request proxy (this version uses proxy, not middleware; also sets the nonce-based CSP)
-├── tests/                     pure logic tests: matching, export scope, filenames, prompt, crypto, backup, staged import, rate limiting
+├── tests/                     pure logic tests: matching, export scope, filenames, prompt, crypto, backup, staged import, stats, suppressions, rate limiting
 ├── next.config.ts             security headers and the TMDB image allowlist
+├── vercel.json                the daily metadata sync schedule
 ├── prisma.config.ts
 ├── .env.example
 └── package.json
@@ -478,6 +530,7 @@ celluloid/
 
 - A command palette opens from the header (⌘K on Mac, Ctrl+K elsewhere; the hint matches your platform) for fast navigation to any title or page.
 - The star rating is fully operable from the keyboard: arrow keys nudge by half or whole steps, Home and End jump to the ends, and 0 clears.
+- The stats activity heatmap is one tab stop, not a year of them. Arrow keys move between days, up and down within a week and left and right across weeks, Home and End jump to the ends of the window, and Enter opens the selected day.
 - Every interactive control has a visible focus ring, icon only buttons carry labels, and toggles report their pressed state to screen readers.
 - The card hover lift and other motion respect the system "reduce motion" setting.
 
@@ -487,4 +540,6 @@ celluloid/
 - An imported backlog has no ratings or watch dates at first, so the recommendation quality and the activity stats both improve as you rate titles and mark things watched. The "unrated" filter is the quick way to work through that.
 - TMDB matching is automatic and usually right, but a transliterated or regional title can occasionally match the wrong entry. The "needs match" filter and the per title "change match" control are there to fix those by hand.
 - The in memory rate limiter bounds bursts per server instance. For a single user deployment that is plenty; a busy multi user instance would want a shared store.
-- Starting a new spreadsheet upload while an earlier one was left mid-review (never committed or cancelled) leaves that earlier job orphaned. Only the most recent active job is offered for resume, and there is no scheduled cleanup for the ones left behind yet.
+- Starting a new spreadsheet upload while an earlier one was left mid-review (never committed or cancelled) leaves that earlier job behind. Only the most recent job awaiting review or commit is offered for resume, and there is no scheduled cleanup for the older ones. Jobs killed during the parse are handled: a job still parsing after five minutes is retired as failed and never offered for resume, since a parse only lives for the length of its own upload request.
+- The nightly metadata sync refreshes up to fifty shows per account per run and stops after about 45 seconds, to stay inside the 60 second function limit every Vercel plan allows without configuration. A library with more shows than that catches up over several nights rather than in one.
+- The sync caches which services carry each show, and there is a column for the services you subscribe to, but nothing reads either yet. The "what can I watch tonight" view they are for has not been built; the title page still asks TMDB directly for what it shows. The sync fills the cache because the data rides along on a request it already makes.

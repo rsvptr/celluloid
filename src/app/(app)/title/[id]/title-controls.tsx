@@ -87,6 +87,7 @@ export function TitleControls({
     });
   }
 
+  const statusId = useId();
   const [localStatus, setLocalStatus] = useState(status);
   const [localRating, setLocalRating] = useState(rating);
   const [localFav, setLocalFav] = useState(favorite);
@@ -421,8 +422,9 @@ export function TitleControls({
         </Dialog.Portal>
       </Dialog.Root>
       <Card className="flex flex-col gap-5 p-5">
-      <Field label="Status">
+      <Field label="Status" htmlFor={statusId}>
         <Select
+          id={statusId}
           value={localStatus}
           onChange={(e) => {
             const v = e.target.value as WatchStatus;
@@ -582,22 +584,32 @@ function todayLocalDate(): string {
   ).padStart(2, "0")}`;
 }
 
+const fieldLabelClass = "text-xs font-medium uppercase tracking-wide text-faint";
+
 function Field({
   label,
+  htmlFor,
   children,
 }: {
   label: string;
+  /** Id of the control this field wraps. Pass it whenever the field holds a
+   *  single native control: naming the group does not name the control inside
+   *  it, so without this the control reaches assistive tech unlabelled. */
+  htmlFor?: string;
   children: React.ReactNode;
 }) {
   const labelId = useId();
   return (
     <div role="group" aria-labelledby={labelId} className="flex flex-col gap-2">
-      <span
-        id={labelId}
-        className="text-xs font-medium uppercase tracking-wide text-faint"
-      >
-        {label}
-      </span>
+      {htmlFor ? (
+        <label id={labelId} htmlFor={htmlFor} className={fieldLabelClass}>
+          {label}
+        </label>
+      ) : (
+        <span id={labelId} className={fieldLabelClass}>
+          {label}
+        </span>
+      )}
       {children}
     </div>
   );

@@ -172,7 +172,13 @@ export function TmdbSearch({
         </p>
       )}
 
-      <div className="grid grid-cols-1 gap-2 @3xl:grid-cols-2" aria-label="TMDB search results">
+      {/* role="group": a bare <div> has no role to hang a name on, so the
+          aria-label was dropped on the floor and the results arrived unlabelled. */}
+      <div
+        role="group"
+        aria-label="TMDB search results"
+        className="grid grid-cols-1 gap-2 @3xl:grid-cols-2"
+      >
         {results.map((r) => (
           <ResultRow
             key={`${r.mediaType}:${r.tmdbId}`}

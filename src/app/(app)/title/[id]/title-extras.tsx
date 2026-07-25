@@ -32,8 +32,27 @@ export async function TitleExtras({
   mediaType: MediaType;
 }) {
   const kind = mediaType === MediaType.TV ? ("tv" as const) : ("movie" as const);
+  // Region precedence: the per-device cookie (set by the inline picker) beats
+  // the account default, which beats the built-in fallback.
+  //
+  // The saved User.watchRegion used to be written by Settings and never read
+  // here, so the account preference did nothing: on any browser without the
+  // cookie — a new device, a cleared cache, a private window — you silently got
+  // US providers and a US certification regardless of what Settings said.
+  // Only fall through to the database when the cookie is absent or invalid, so
+  // the common path still costs no extra query.
   const regionRaw = (await cookies()).get("celluloid-region")?.value;
-  const region = isWatchRegion(regionRaw) ? regionRaw : DEFAULT_WATCH_REGION;
+  let region = DEFAULT_WATCH_REGION;
+  if (isWatchRegion(regionRaw)) {
+    region = regionRaw;
+  } else {
+    const owner = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { watchRegion: true },
+    });
+    const saved = owner?.watchRegion;
+    if (isWatchRegion(saved)) region = saved;
+  }
 
   // One append_to_response request carries everything below — down from
   // three separate round trips. The region localizes the certification badge

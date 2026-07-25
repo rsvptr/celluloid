@@ -2,11 +2,13 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Check, ChevronDown } from "lucide-react";
+import { Check, ChevronDown, ChevronsDown } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui";
 import {
   setAllEpisodesWatched,
   setEpisodeWatched,
+  setEpisodesWatchedThrough,
   setSeasonWatched,
 } from "@/lib/actions";
 import { fullDate, progressPct } from "@/lib/format";
@@ -82,6 +84,23 @@ export function SeasonTracker({
   const pct = progressPct(watchedCount, total);
   const allWatched = total > 0 && watchedCount === total;
 
+  // The bulk marks deliberately skip episodes that haven't aired, so on an
+  // ongoing series "watched everything available" is a distinct state from
+  // "watched everything". Naming it "Caught up" stops the button appearing to
+  // have failed when it leaves next week's episode unticked.
+  // Snapshotted once on mount rather than read during render: reading the clock
+  // while rendering is impure (the same render could produce different output),
+  // and episodes air on day boundaries, so a value that ages over one page
+  // session can't change any answer here.
+  const [mountedAt] = useState(() => Date.now());
+  const hasAired = (e: EpisodeVM) =>
+    e.airDate === null || Date.parse(e.airDate) <= mountedAt;
+  const airedEpisodes = allEpisodes.filter(hasAired);
+  const caughtUp =
+    !allWatched &&
+    airedEpisodes.length > 0 &&
+    airedEpisodes.every((e) => watched[e.id]);
+
   function toggleEpisode(epId: string) {
     const next = !watched[epId];
     setWatched((w) => ({ ...w, [epId]: next }));
@@ -99,10 +118,17 @@ export function SeasonTracker({
   }
 
   function toggleSeason(season: SeasonVM, value: boolean) {
-    const prevValues = new Map(season.episodes.map((e) => [e.id, watched[e.id]]));
+    // Marking reaches only the episodes that have aired, because that is all the
+    // server marks. Ticking the whole season optimistically made next week's
+    // episode flash watched and then silently untick itself on the refresh below,
+    // which reads as a bug rather than as the deliberate aired-only rule. Reuses
+    // the same `hasAired` the rest of this component judges by, so the two can't
+    // drift apart. Unmarking still clears everything — so does the server.
+    const affected = value ? season.episodes.filter(hasAired) : season.episodes;
+    const prevValues = new Map(affected.map((e) => [e.id, watched[e.id]]));
     setWatched((w) => {
       const copy = { ...w };
-      for (const e of season.episodes) copy[e.id] = value;
+      for (const e of affected) copy[e.id] = value;
       return copy;
     });
     startTransition(async () => {
@@ -122,10 +148,13 @@ export function SeasonTracker({
   }
 
   function toggleAll(value: boolean) {
-    const prevValues = new Map(allEpisodes.map((e) => [e.id, watched[e.id]]));
+    // Aired-only on the way up, everything on the way down — the same rule
+    // toggleSeason follows, and the same one the server enforces.
+    const affected = value ? airedEpisodes : allEpisodes;
+    const prevValues = new Map(affected.map((e) => [e.id, watched[e.id]]));
     setWatched((w) => {
       const copy = { ...w };
-      for (const e of allEpisodes) copy[e.id] = value;
+      for (const e of affected) copy[e.id] = value;
       return copy;
     });
     startTransition(async () => {
@@ -144,6 +173,37 @@ export function SeasonTracker({
     });
   }
 
+  // "I'm up to here": marks every aired episode in this season through `ep`.
+  function watchThrough(season: SeasonVM, ep: EpisodeVM) {
+    const affected = season.episodes.filter(
+      (e) => e.episodeNumber <= ep.episodeNumber && !watched[e.id] && hasAired(e),
+    );
+    if (affected.length === 0) return;
+    const prevValues = new Map(affected.map((e) => [e.id, watched[e.id]]));
+    setWatched((w) => {
+      const copy = { ...w };
+      for (const e of affected) copy[e.id] = true;
+      return copy;
+    });
+    startTransition(async () => {
+      try {
+        const res = await setEpisodesWatchedThrough(ep.id);
+        toast.success(
+          `Marked ${res.count} ${res.count === 1 ? "episode" : "episodes"} watched`,
+        );
+      } catch (e) {
+        setWatched((w) => {
+          const copy = { ...w };
+          for (const [id, v] of prevValues) copy[id] = v;
+          return copy;
+        });
+        toast.error((e as Error).message);
+      } finally {
+        router.refresh();
+      }
+    });
+  }
+
   if (total === 0) return null;
 
   return (
@@ -153,10 +213,22 @@ export function SeasonTracker({
           <h2 className="text-base font-semibold">Episodes</h2>
           <p className="text-xs text-muted">
             {watchedCount} of {total} watched · {pct}%
+            {/* "Caught up" is a STATE, so it is reported here rather than on the
+                button. Putting it on the button made a destructive control look
+                like a status badge: the button is a toggle, so in that state its
+                press unwatches the whole show — which is the last thing someone
+                tapping the words "Caught up" expects. The button always names
+                the action it performs. */}
+            {caughtUp && " · caught up on everything aired"}
           </p>
         </div>
-        <Button size="sm" variant={allWatched ? "secondary" : "primary"} aria-pressed={allWatched} onClick={() => toggleAll(!allWatched)}>
-          {allWatched ? "Mark all unwatched" : "Mark show watched"}
+        <Button
+          size="sm"
+          variant={allWatched || caughtUp ? "secondary" : "primary"}
+          aria-pressed={allWatched || caughtUp}
+          onClick={() => toggleAll(!(allWatched || caughtUp))}
+        >
+          {allWatched || caughtUp ? "Mark all unwatched" : "Mark show watched"}
         </Button>
       </div>
 
@@ -222,15 +294,27 @@ export function SeasonTracker({
                 <ul className="divide-y divide-line border-t border-line">
                   {season.episodes.map((ep) => {
                     const isWatched = watched[ep.id];
+                    // Only worth offering when it would do more than a plain
+                    // tick — i.e. something earlier in the season is still
+                    // unwatched and has aired.
+                    const canWatchThrough =
+                      !isWatched &&
+                      hasAired(ep) &&
+                      season.episodes.some(
+                        (e) =>
+                          e.episodeNumber < ep.episodeNumber &&
+                          !watched[e.id] &&
+                          hasAired(e),
+                      );
                     return (
-                      <li key={ep.id}>
+                      <li key={ep.id} className="flex items-stretch">
                         <button
                           onClick={() => toggleEpisode(ep.id)}
                           aria-pressed={isWatched}
                           // min-h grows the whole row's hit target to >=44px on
                           // touch without inflating the h-5 w-5 checkbox glyph;
                           // sm:min-h-0 restores the original content-driven height.
-                          className="focus-ring flex min-h-11 w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-surface-2/40 sm:min-h-0"
+                          className="focus-ring flex min-h-11 flex-1 items-center gap-3 px-4 py-2.5 text-left hover:bg-surface-2/40 sm:min-h-0"
                         >
                           <span
                             className={cn(
@@ -261,6 +345,16 @@ export function SeasonTracker({
                             </span>
                           )}
                         </button>
+                        {canWatchThrough && (
+                          <button
+                            onClick={() => watchThrough(season, ep)}
+                            title={`Mark everything watched through episode ${ep.episodeNumber}`}
+                            aria-label={`Mark everything watched through episode ${ep.episodeNumber}`}
+                            className="focus-ring flex min-h-11 w-11 shrink-0 items-center justify-center text-faint transition-colors hover:bg-surface-2/40 hover:text-foreground sm:min-h-0"
+                          >
+                            <ChevronsDown size={15} />
+                          </button>
+                        )}
                       </li>
                     );
                   })}

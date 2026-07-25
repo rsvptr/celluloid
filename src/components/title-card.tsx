@@ -94,9 +94,13 @@ function TitleCardImpl({
             className="absolute right-1.5 top-1.5 fill-rose-400 text-rose-400 drop-shadow"
           />
         )}
-        {!selectable &&
-        item.hasNewEpisodes &&
-        item.status === "WATCHING" ? (
+        {/* Every status except DROPPED. The gate used to also require
+            WATCHING, which silently withheld the badge from the cases it is
+            most useful for: a show parked in WATCHLIST or ON_HOLD that has
+            started airing again, and a series finished long ago that just
+            came back for another season. DROPPED is the one status where a
+            new episode is genuinely not wanted. */}
+        {!selectable && item.hasNewEpisodes && item.status !== "DROPPED" ? (
           <span
             className={cn(
               "absolute right-1.5 rounded-md bg-brand/90 px-1.5 py-0.5 text-[10px] font-medium text-[#04121c] shadow",
@@ -133,9 +137,13 @@ function TitleCardImpl({
       </div>
 
       <div className="mt-2">
-        <h3 className="truncate text-sm font-medium text-foreground" title={item.name}>
+        {/* h2, not h3: the library grid's only other heading is its <h1>, so an
+            h3 here left a 200-card hole at level 2 in the outline. The share
+            page nests these under its own "Titles" h2, where a same-level
+            heading still reads as contiguous. */}
+        <h2 className="truncate text-sm font-medium text-foreground" title={item.name}>
           {item.name}
-        </h3>
+        </h2>
         <p className="truncate text-xs text-muted">
           {item.year || "Unknown"}
           {isTv && item.totalEpisodes

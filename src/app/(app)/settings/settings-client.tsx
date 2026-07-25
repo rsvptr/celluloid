@@ -1,44 +1,80 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   ArchiveRestore,
+  ChevronDown,
   Copy,
   Download,
   Globe,
   KeyRound,
   Link2,
+  Pencil,
   ShieldCheck,
   Sparkles,
+  Tag as TagIcon,
   Trash2,
   Upload,
   User,
 } from "lucide-react";
 import type { AccountInfo, ShareSummary } from "@/lib/data";
 import { authClient } from "@/lib/auth-client";
-import { Button, Card, Input, Select, Spinner } from "@/components/ui";
+import { Badge, Button, Card, Input, Select, Spinner } from "@/components/ui";
 import { useConfirm } from "@/components/confirm-dialog";
+import { fullDate } from "@/lib/format";
+import { cn } from "@/lib/utils";
+import { deleteTag, renameTag, setTagColor } from "@/lib/actions";
 import {
   removeAnthropicKey,
   setAnthropicKey,
   updatePreferences,
   updateProfile,
 } from "@/lib/settings-actions";
-import { deleteShareList, revokeShareList } from "@/lib/share-actions";
+import {
+  deleteShareList,
+  getShareListTitles,
+  renameShareList,
+  restoreShareList,
+  revokeShareList,
+  setShareExpiry,
+  type SharedTitleSummary,
+} from "@/lib/share-actions";
+import {
+  TAG_COLORS,
+  TAG_COLOR_DEFAULT_SWATCH,
+  TAG_COLOR_META,
+  tagChipClass,
+} from "@/lib/tag-colors";
 import { isWatchRegion, regionName, WATCH_REGIONS } from "@/lib/tmdb-extras";
+
+/** One row of the tag manager: the tag plus how many live titles carry it. */
+export interface TagSummary {
+  id: string;
+  name: string;
+  color: string | null;
+  count: number;
+}
 
 export function SettingsClient({
   info,
   shares,
+  tags,
   timeZone,
   watchRegion,
+  lastBackupAt,
+  backupAgeDays,
 }: {
   info: AccountInfo;
   shares: ShareSummary[];
+  tags: TagSummary[];
   timeZone: string;
   watchRegion: string;
+  /** ISO timestamp of the last successful backup download, or null. */
+  lastBackupAt: string | null;
+  /** Whole days since that backup, measured server-side. Null when there is none. */
+  backupAgeDays: number | null;
 }) {
   return (
     <div className="flex flex-col gap-5 lg:grid lg:grid-cols-2">
@@ -46,9 +82,10 @@ export function SettingsClient({
       <PreferencesSection timeZone={timeZone} watchRegion={watchRegion} />
       <ApiKeySection hasApiKey={info.hasApiKey} hasServerKey={info.hasServerKey} />
       <SharedLinksSection shares={shares} />
+      <TagsSection tags={tags} />
       <TwoFactorSection enabled={info.twoFactorEnabled} />
       <PasswordSection />
-      <BackupSection />
+      <BackupSection lastBackupAt={lastBackupAt} backupAgeDays={backupAgeDays} />
       <DangerSection />
     </div>
   );
@@ -422,6 +459,20 @@ function SharedLinksSection({ shares }: { shares: ShareSummary[] }) {
     }
   }
 
+  async function restore(id: string) {
+    setPendingAction(`restore:${id}`);
+    try {
+      const result = await restoreShareList(id);
+      if (!result.ok) throw new Error();
+      toast.success("Link restored. The same URL works again.");
+      router.refresh();
+    } catch {
+      toast.error("Couldn't restore that link. Please try again.");
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
   async function remove(id: string, active: boolean) {
     if (
       !(await confirm({
@@ -461,88 +512,507 @@ function SharedLinksSection({ shares }: { shares: ShareSummary[] }) {
           </p>
         ) : (
           <ul className="flex flex-col divide-y divide-line">
-            {shares.map((s) => {
-              const active = s.state === "ACTIVE";
-              const expiry = s.expiresAt
-                ? new Intl.DateTimeFormat("en-GB", {
-                    day: "numeric",
-                    month: "short",
-                    year: "numeric",
-                    timeZone: "UTC",
-                  }).format(new Date(s.expiresAt))
-                : "Never expires";
-              const stateLabel =
-                s.state === "ACTIVE"
-                  ? "Live"
-                  : s.state === "EXPIRED"
-                    ? "Expired"
-                    : "Revoked";
-              return (
-                <li
-                  key={s.id}
-                  className="flex flex-col gap-2.5 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-center"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <p className="truncate text-sm font-medium">
-                        {s.name ?? "Untitled list"}
-                      </p>
-                      <span
-                        className={
-                          s.state === "ACTIVE"
-                            ? "shrink-0 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-300 ring-1 ring-emerald-500/20"
-                            : "shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-[11px] font-medium text-muted ring-1 ring-line"
-                        }
-                      >
-                        {stateLabel}
-                      </span>
-                    </div>
-                    <p className="mt-0.5 truncate text-xs text-muted">
-                      /s/{s.slug} · {s.count === null ? "Whole library" : `${s.count} titles`}
-                      {s.includeNotes ? " · notes shown" : ""}
-                    </p>
-                    <p className="mt-0.5 text-xs text-faint">
-                      {s.expiresAt ? `Expires ${expiry}` : expiry}
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 items-center justify-end gap-1">
-                    <button
-                      type="button"
-                      onClick={() => copy(s.slug)}
-                      title={active ? "Copy link" : `${stateLabel} links cannot be opened`}
-                      aria-label={`Copy ${s.name ?? "untitled"} share link`}
-                      disabled={!active || pendingAction !== null}
-                      className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2/60 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35 sm:h-8 sm:min-h-0 sm:w-8 sm:min-w-0"
-                    >
-                      <Copy aria-hidden="true" size={15} />
-                    </button>
-                    {active ? (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        disabled={pendingAction !== null}
-                        onClick={() => revoke(s.id)}
-                      >
-                        {pendingAction === `revoke:${s.id}` ? "Revoking…" : "Revoke"}
-                      </Button>
-                    ) : null}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-rose-300 hover:text-rose-200"
-                      disabled={pendingAction !== null}
-                      onClick={() => remove(s.id, active)}
-                    >
-                      {pendingAction === `delete:${s.id}` ? "Deleting…" : "Delete"}
-                    </Button>
-                  </div>
-                </li>
-              );
-            })}
+            {shares.map((s) => (
+              <ShareRow
+                key={s.id}
+                share={s}
+                busy={pendingAction !== null}
+                pendingAction={pendingAction}
+                onCopy={() => copy(s.slug)}
+                onRevoke={() => revoke(s.id)}
+                onRestore={() => restore(s.id)}
+                onDelete={() => remove(s.id, s.state === "ACTIVE")}
+              />
+            ))}
           </ul>
         )}
       </Section>
     </>
+  );
+}
+
+const EXPIRY_CHOICES: { value: string; label: string }[] = [
+  { value: "never", label: "Never expires" },
+  { value: "7", label: "7 days from now" },
+  { value: "30", label: "30 days from now" },
+  { value: "90", label: "90 days from now" },
+];
+
+function ShareRow({
+  share: s,
+  busy,
+  pendingAction,
+  onCopy,
+  onRevoke,
+  onRestore,
+  onDelete,
+}: {
+  share: ShareSummary;
+  busy: boolean;
+  pendingAction: string | null;
+  onCopy: () => void;
+  onRevoke: () => void;
+  onRestore: () => void;
+  onDelete: () => void;
+}) {
+  const router = useRouter();
+  const [manageOpen, setManageOpen] = useState(false);
+  const [name, setName] = useState(s.name ?? "");
+  const [titles, setTitles] = useState<SharedTitleSummary[] | null>(null);
+  const [titlesError, setTitlesError] = useState<string | null>(null);
+  const [saving, startSaving] = useTransition();
+
+  // Take the server's name whenever it changes (the rename above, or another
+  // tab), adjusted during render rather than by re-keying the row — a new key
+  // would remount and slam the manage panel shut on every save. Same "adjusting
+  // state when a prop changes" pattern the library's Trash count uses.
+  const [syncedName, setSyncedName] = useState(s.name ?? "");
+  if ((s.name ?? "") !== syncedName) {
+    setSyncedName(s.name ?? "");
+    setName(s.name ?? "");
+  }
+
+  const active = s.state === "ACTIVE";
+  const stateLabel =
+    s.state === "ACTIVE" ? "Live" : s.state === "EXPIRED" ? "Expired" : "Revoked";
+  const expiry = s.expiresAt
+    ? new Intl.DateTimeFormat("en-GB", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+        timeZone: "UTC",
+      }).format(new Date(s.expiresAt))
+    : "Never expires";
+
+  // The published set is only fetched when the owner actually opens the panel:
+  // a whole-library share resolves the entire library, which is far too much
+  // work to do for every row on every visit to Settings.
+  useEffect(() => {
+    if (!manageOpen || titles !== null) return;
+    let cancelled = false;
+    getShareListTitles(s.id)
+      .then((res) => {
+        if (cancelled) return;
+        if (res.error || !res.titles) {
+          setTitlesError(res.error ?? "Couldn't load what this link publishes.");
+          return;
+        }
+        setTitles(res.titles);
+      })
+      .catch(() => {
+        if (!cancelled) setTitlesError("Couldn't load what this link publishes.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [manageOpen, titles, s.id]);
+
+  function saveName() {
+    startSaving(async () => {
+      try {
+        const result = await renameShareList(s.id, name);
+        if (!result.ok) throw new Error();
+        toast.success("Link renamed");
+        router.refresh();
+      } catch {
+        toast.error("Couldn't rename that link. Please try again.");
+      }
+    });
+  }
+
+  function changeExpiry(value: string) {
+    startSaving(async () => {
+      try {
+        const result = await setShareExpiry(
+          s.id,
+          value === "never" ? null : (Number(value) as 7 | 30 | 90),
+        );
+        if (!result.ok) throw new Error();
+        toast.success(value === "never" ? "Expiry removed" : "Expiry updated");
+        router.refresh();
+      } catch {
+        toast.error("Couldn't change the expiry. Please try again.");
+      }
+    });
+  }
+
+  const panelId = `share-manage-${s.id}`;
+
+  return (
+    <li className="flex flex-col gap-2.5 py-3 first:pt-0 last:pb-0">
+      <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center">
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <p className="truncate text-sm font-medium">{s.name ?? "Untitled list"}</p>
+            <span
+              className={
+                active
+                  ? "shrink-0 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-300 ring-1 ring-emerald-500/20"
+                  : "shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-[11px] font-medium text-muted ring-1 ring-line"
+              }
+            >
+              {stateLabel}
+            </span>
+          </div>
+          <p className="mt-0.5 truncate text-xs text-muted">
+            /s/{s.slug} · {s.count === null ? "Whole library" : `${s.count} titles`}
+            {s.includeNotes ? " · notes shown" : ""}
+          </p>
+          <p className="mt-0.5 text-xs text-faint">
+            {s.expiresAt ? `Expires ${expiry}` : expiry}
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+          <button
+            type="button"
+            onClick={onCopy}
+            title={active ? "Copy link" : `${stateLabel} links cannot be opened`}
+            aria-label={`Copy ${s.name ?? "untitled"} share link`}
+            disabled={!active || busy}
+            className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2/60 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35 sm:h-8 sm:min-h-0 sm:w-8 sm:min-w-0"
+          >
+            <Copy aria-hidden="true" size={15} />
+          </button>
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-expanded={manageOpen}
+            aria-controls={panelId}
+            onClick={() => setManageOpen((v) => !v)}
+          >
+            <ChevronDown
+              aria-hidden="true"
+              size={14}
+              className={cn("transition-transform", manageOpen && "rotate-180")}
+            />
+            Manage
+          </Button>
+          {s.state === "REVOKED" ? (
+            <Button variant="ghost" size="sm" disabled={busy} onClick={onRestore}>
+              {pendingAction === `restore:${s.id}` ? "Restoring…" : "Un-revoke"}
+            </Button>
+          ) : active ? (
+            <Button variant="ghost" size="sm" disabled={busy} onClick={onRevoke}>
+              {pendingAction === `revoke:${s.id}` ? "Revoking…" : "Revoke"}
+            </Button>
+          ) : null}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-rose-300 hover:text-rose-200"
+            disabled={busy}
+            onClick={onDelete}
+          >
+            {pendingAction === `delete:${s.id}` ? "Deleting…" : "Delete"}
+          </Button>
+        </div>
+      </div>
+
+      {manageOpen && (
+        <div id={panelId}>
+          <Card variant="inset" className="flex flex-col gap-3 p-3">
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-muted">Link name</span>
+              <div className="flex items-center gap-2">
+                <Input
+                  value={name}
+                  maxLength={80}
+                  placeholder="Untitled list"
+                  onChange={(e) => setName(e.target.value)}
+                  className="min-w-0 flex-1"
+                />
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={saving || busy || name.trim() === (s.name ?? "")}
+                  onClick={saveName}
+                >
+                  Save
+                </Button>
+              </div>
+            </div>
+
+            <label className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-muted">Expiry</span>
+              <Select
+                value=""
+                className="w-full"
+                disabled={saving || busy}
+                onChange={(e) => {
+                  if (e.target.value) changeExpiry(e.target.value);
+                }}
+              >
+                <option value="">Change expiry…</option>
+                {EXPIRY_CHOICES.map((choice) => (
+                  <option key={choice.value} value={choice.value}>
+                    {choice.label}
+                  </option>
+                ))}
+              </Select>
+              <span className="text-xs text-faint">
+                Counted from now, so this also brings an expired link back.
+              </span>
+            </label>
+
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-muted">
+                {s.scope === "WHOLE_LIBRARY"
+                  ? "Titles this link publishes right now"
+                  : "Titles this link publishes"}
+              </span>
+              {titlesError ? (
+                <Notice kind="error">{titlesError}</Notice>
+              ) : titles === null ? (
+                <p className="text-xs text-muted">Loading…</p>
+              ) : titles.length === 0 ? (
+                <p className="text-xs text-muted">
+                  Nothing. Every title this link referenced has since been removed.
+                </p>
+              ) : (
+                <>
+                  <p className="text-xs text-faint">
+                    {titles.length} {titles.length === 1 ? "title" : "titles"}
+                    {s.includeNotes ? ", with your notes attached" : ""}.
+                  </p>
+                  <ul className="max-h-56 divide-y divide-line overflow-y-auto rounded-lg bg-surface ring-1 ring-line">
+                    {titles.map((t) => (
+                      <li
+                        key={t.id}
+                        className="flex items-center gap-2 px-2.5 py-1.5 text-xs"
+                      >
+                        <span className="min-w-0 flex-1 truncate text-foreground/90">
+                          {t.name}
+                        </span>
+                        <span className="shrink-0 text-faint">
+                          {t.mediaType === "TV" ? "TV" : "Movie"}
+                          {t.year ? ` · ${t.year}` : ""}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+          </Card>
+        </div>
+      )}
+    </li>
+  );
+}
+
+function TagsSection({ tags }: { tags: TagSummary[] }) {
+  const router = useRouter();
+  const { confirm, dialog } = useConfirm();
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  async function remove(tag: TagSummary) {
+    if (
+      !(await confirm({
+        title: `Delete the “${tag.name}” tag?`,
+        body:
+          tag.count === 0
+            ? "It isn't on any titles, so nothing else changes."
+            : `It will be removed from ${tag.count} ${tag.count === 1 ? "title" : "titles"}. Those titles keep everything else.`,
+        confirmLabel: "Delete tag",
+        destructive: true,
+      }))
+    )
+      return;
+    setDeleting(tag.id);
+    try {
+      await deleteTag(tag.id);
+      toast.success(`Deleted the “${tag.name}” tag`);
+      router.refresh();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setDeleting(null);
+    }
+  }
+
+  return (
+    <>
+      {dialog}
+      <Section
+        icon={TagIcon}
+        title="Tags"
+        description="Rename a tag without losing what it's on, give it a colour, or delete it."
+      >
+        {tags.length === 0 ? (
+          <p className="text-sm text-muted">
+            No tags yet. Add one from a title page, or from the Library&apos;s
+            selection bar.
+          </p>
+        ) : (
+          <ul className="flex flex-col divide-y divide-line">
+            {tags.map((tag) => (
+              // Re-keyed on the editable fields so a refresh replaces the row's
+              // draft rather than leaving an edited name over stale server data.
+              <TagRow
+                key={`${tag.id}:${tag.name}:${tag.color ?? ""}`}
+                tag={tag}
+                deleting={deleting === tag.id}
+                onDelete={() => remove(tag)}
+              />
+            ))}
+          </ul>
+        )}
+      </Section>
+    </>
+  );
+}
+
+function TagRow({
+  tag,
+  deleting,
+  onDelete,
+}: {
+  tag: TagSummary;
+  deleting: boolean;
+  onDelete: () => void;
+}) {
+  const router = useRouter();
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(tag.name);
+  const [color, setColor] = useState<string | null>(tag.color);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, start] = useTransition();
+
+  const dirty = name.trim() !== tag.name || color !== tag.color;
+
+  function cancel() {
+    setEditing(false);
+    setName(tag.name);
+    setColor(tag.color);
+    setError(null);
+  }
+
+  function save() {
+    start(async () => {
+      setError(null);
+      try {
+        // Rename first: it's the change that can be refused (the name may be
+        // taken), so a refusal leaves the tag exactly as it was rather than
+        // half-recoloured.
+        if (name.trim() !== tag.name) await renameTag(tag.id, name);
+        if (color !== tag.color) await setTagColor(tag.id, color);
+        setEditing(false);
+        toast.success("Tag updated");
+        router.refresh();
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    });
+  }
+
+  return (
+    <li className="flex flex-col gap-2.5 py-3 first:pt-0 last:pb-0">
+      <div className="flex items-center gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <Badge className={tagChipClass(tag.color)}>{tag.name}</Badge>
+          <span className="shrink-0 text-xs tabular-nums text-faint">
+            {tag.count} {tag.count === 1 ? "title" : "titles"}
+          </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-expanded={editing}
+            disabled={busy || deleting}
+            onClick={() => (editing ? cancel() : setEditing(true))}
+          >
+            <Pencil aria-hidden="true" size={14} />
+            {editing ? "Cancel" : "Edit"}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-rose-300 hover:text-rose-200"
+            disabled={busy || deleting}
+            onClick={onDelete}
+          >
+            {deleting ? "Deleting…" : "Delete"}
+          </Button>
+        </div>
+      </div>
+
+      {editing && (
+        <Card variant="inset" className="flex flex-col gap-3 p-3">
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-muted">Name</span>
+            <Input
+              value={name}
+              maxLength={64}
+              onChange={(e) => setName(e.target.value)}
+              className="w-full"
+            />
+          </label>
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-muted">Colour</span>
+            <div role="group" aria-label="Tag colour" className="flex flex-wrap gap-1.5">
+              <ColorSwatch
+                label="No colour"
+                swatch={TAG_COLOR_DEFAULT_SWATCH}
+                selected={color === null}
+                onSelect={() => setColor(null)}
+              />
+              {TAG_COLORS.map((c) => (
+                <ColorSwatch
+                  key={c}
+                  label={TAG_COLOR_META[c].label}
+                  swatch={TAG_COLOR_META[c].swatch}
+                  selected={color === c}
+                  onSelect={() => setColor(c)}
+                />
+              ))}
+            </div>
+          </div>
+          {error && <Notice kind="error">{error}</Notice>}
+          <div className="flex gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={busy || !dirty || !name.trim()}
+              onClick={save}
+            >
+              {busy ? <Spinner /> : null} Save
+            </Button>
+            <Button variant="ghost" size="sm" disabled={busy} onClick={cancel}>
+              Cancel
+            </Button>
+          </div>
+        </Card>
+      )}
+    </li>
+  );
+}
+
+function ColorSwatch({
+  label,
+  swatch,
+  selected,
+  onSelect,
+}: {
+  label: string;
+  swatch: string;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={selected}
+      aria-label={label}
+      title={label}
+      className={cn(
+        "focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-lg transition-colors sm:min-h-9 sm:min-w-9",
+        selected ? "bg-surface-2 ring-1 ring-brand/50" : "hover:bg-surface-2/60",
+      )}
+    >
+      <span aria-hidden="true" className={cn("h-4 w-4 rounded-full ring-1", swatch)} />
+    </button>
   );
 }
 
@@ -887,7 +1357,52 @@ type RestoreResult = Omit<RestorePreview, "confirmationToken"> & {
   eventsSkipped: number;
 };
 
-function BackupSection() {
+/** A backup older than this is called out. One month of watches is a real loss. */
+const STALE_BACKUP_DAYS = 30;
+
+/**
+ * How stale the off-site copy is. `ageDays` is measured on the server rather
+ * than here: "now" would otherwise be read at two different instants (the
+ * server render and hydration), and a day boundary falling between them would
+ * be a mismatch on the one line whose whole job is to be trustworthy.
+ */
+function BackupFreshness({
+  lastBackupAt,
+  ageDays,
+}: {
+  lastBackupAt: string | null;
+  ageDays: number | null;
+}) {
+  if (!lastBackupAt || ageDays === null) {
+    return (
+      <p role="status" className="text-xs text-amber-200">
+        No backup downloaded yet. This file is the only copy of your history that
+        lives outside the app.
+      </p>
+    );
+  }
+
+  const relative =
+    ageDays <= 0 ? "today" : ageDays === 1 ? "yesterday" : `${ageDays} days ago`;
+  const stale = ageDays >= STALE_BACKUP_DAYS;
+
+  return (
+    <p role="status" className={cn("text-xs", stale ? "text-amber-200" : "text-muted")}>
+      Last backup {fullDate(lastBackupAt)} ({relative}).
+      {stale
+        ? " Anything you have watched, rated or noted since then isn't in it."
+        : ""}
+    </p>
+  );
+}
+
+function BackupSection({
+  lastBackupAt,
+  backupAgeDays,
+}: {
+  lastBackupAt: string | null;
+  backupAgeDays: number | null;
+}) {
   const router = useRouter();
   const { confirm, dialog } = useConfirm();
   const [file, setFile] = useState<File | null>(null);
@@ -927,6 +1442,8 @@ function BackupSection() {
       link.remove();
       URL.revokeObjectURL(url);
       toast.success("Backup downloaded");
+      // Pull the freshness line back from the server, which has just stamped it.
+      router.refresh();
     } catch (downloadError) {
       setError(
         downloadError instanceof Error
@@ -1065,6 +1582,9 @@ function BackupSection() {
               {busy === "download" ? <Spinner /> : <Download aria-hidden="true" size={15} />}
               {busy === "download" ? "Preparing backup\u2026" : "Download backup"}
             </Button>
+            <div className="mt-2">
+              <BackupFreshness lastBackupAt={lastBackupAt} ageDays={backupAgeDays} />
+            </div>
             <p className="mt-2 text-xs text-muted">
               Includes active and trashed titles, watch history, ratings, notes, tags, TV
               progress, preferences, and share settings. Passwords, sessions, API keys, 2FA

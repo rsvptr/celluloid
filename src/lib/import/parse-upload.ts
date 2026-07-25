@@ -1,12 +1,34 @@
 import ExcelJS from "exceljs";
 import { Readable } from "node:stream";
-import type { ParsedStatus, ParsedTitle } from "./parse-excel";
+import { parseHumanDate, type ParsedStatus, type ParsedTitle } from "./parse-excel";
+
+/**
+ * Serialize a date cell to yyyy-mm-dd without moving the day. exceljs puts date
+ * cells on midnight, but which midnight depends on the reader: the xlsx reader
+ * lands on UTC midnight, the CSV reader on LOCAL midnight. Formatting both with
+ * toISOString() shifted every CSV date back a day anywhere east of Greenwich,
+ * which was enough to read a 1 January release as the previous year — and now
+ * that a sheet's watch dates are imported, to record the wrong day for them.
+ * Take the components of whichever midnight the value actually sits on, and
+ * fall back to UTC only when the cell carries a real time of day.
+ */
+function dateToIsoDay(value: Date): string {
+  const utcMidnight =
+    value.getUTCHours() === 0 && value.getUTCMinutes() === 0 && value.getUTCSeconds() === 0;
+  const localMidnight =
+    value.getHours() === 0 && value.getMinutes() === 0 && value.getSeconds() === 0;
+  if (utcMidnight || !localMidnight) return value.toISOString().slice(0, 10);
+  const yyyy = value.getFullYear();
+  const mm = String(value.getMonth() + 1).padStart(2, "0");
+  const dd = String(value.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
 
 function cellText(v: ExcelJS.CellValue): string | null {
   if (v === null || v === undefined) return null;
   if (typeof v === "string") return v.trim() || null;
   if (typeof v === "number") return String(v);
-  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  if (v instanceof Date) return dateToIsoDay(v);
   if (typeof v === "object") {
     const o = v as unknown as Record<string, unknown>;
     if (typeof o.text === "string") return o.text.trim() || null;
@@ -50,6 +72,96 @@ function yearToIso(text: string | null): string | null {
   if (!text) return null;
   const m = text.match(/(\d{4})/);
   return m ? `${m[1]}-01-01` : null;
+}
+
+/**
+ * Which scale a rating column is on, decided from its HEADING first. A heading
+ * that names its scale settles it; otherwise the values get one narrow say (see
+ * resolveScaleFromValues), because guessing wrong doubles or halves every score
+ * in the library. "unknown" means a rating column exists but nothing proved
+ * which scale it is on, so its values are read as text and dropped instead of
+ * being converted on a guess.
+ */
+type RatingScale = "five" | "ten" | "unknown";
+
+/** Headings that name the 0-5 scale outright. A bare "Rating" is deliberately
+ * NOT one of them: Letterboxd writes 0.5-5 under it but plenty of hand-made
+ * sheets mean 1-10, and doubling one of those turned a 7 into a 14 that clipped
+ * to a flat 10. It falls through to the values instead. */
+const FIVE_SCALE_HEADERS = ["stars", "starrating", "ratingoutof5", "rating5"];
+/** IMDb exports rate 1-10 under "Your Rating"; Trakt and Celluloid use 10 too. */
+const TEN_SCALE_HEADERS = [
+  "yourrating",
+  "ratingoutof10",
+  "rating10",
+  "imdbrating",
+  "traktrating",
+];
+/** Recognisably a rating, but the heading names no scale. */
+const UNKNOWN_SCALE_HEADERS = [
+  "rating",
+  "myrating",
+  "userrating",
+  "personalrating",
+  "score",
+];
+
+/**
+ * Convert one rating cell to Celluloid's 0.5-10 half-star scale. A 0-5 column is
+ * doubled; a 0-10 column is taken as-is. Anything outside the source scale (a
+ * stray 11, a negative, an empty or non-numeric cell) yields null rather than a
+ * clamped invention, and 0 means "not rated" in both exports.
+ */
+export function normalizeRating(text: string | null, scale: RatingScale): number | null {
+  if (!text || scale === "unknown") return null;
+  const value = Number(text.trim().replace(",", "."));
+  if (!Number.isFinite(value) || value <= 0) return null;
+  const max = scale === "five" ? 5 : 10;
+  if (value > max) return null;
+  const scaled = scale === "five" ? value * 2 : value;
+  // Snap to the half-star grid the app stores and renders.
+  const rounded = Math.round(scaled * 2) / 2;
+  return rounded >= 0.5 ? Math.min(10, rounded) : null;
+}
+
+/**
+ * Last say on a rating column whose heading named no scale: read the values and
+ * promote the column to 0-10 only when they prove it. The asymmetry is the whole
+ * point — a value above 5 cannot have come from a 0-5 column, so one is proof;
+ * but everything sitting at or below 5 proves nothing, because a 0-10 sheet
+ * where nothing was rated above 5 looks exactly like a 0-5 one. A value above 10
+ * belongs to neither scale (a percentage column, say), so it withdraws the
+ * column rather than letting its smaller siblings be read as marks out of 10.
+ * Unproven means "unknown": the ratings stay unimported and each row says so,
+ * which is the same outcome an unrecognised heading has always had.
+ */
+function resolveScaleFromValues(
+  ws: ExcelJS.Worksheet,
+  col: number,
+  lastRow: number,
+): RatingScale {
+  let aboveFive = false;
+  for (let r = 2; r <= lastRow; r++) {
+    const text = cellText(ws.getRow(r).getCell(col).value);
+    if (!text) continue;
+    const value = Number(text.trim().replace(",", "."));
+    if (!Number.isFinite(value) || value <= 0) continue;
+    if (value > 10) return "unknown";
+    if (value > 5) aboveFive = true;
+  }
+  return aboveFive ? "ten" : "unknown";
+}
+
+function parseImdbId(text: string | null): string | null {
+  if (!text) return null;
+  const id = text.trim().toLowerCase();
+  return /^tt\d{5,12}$/.test(id) ? id : null;
+}
+
+function parseTmdbId(text: string | null): number | null {
+  if (!text) return null;
+  const id = Number(text.trim());
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
 /** Rows scanned past maxRows so the caller can still detect truncation while
@@ -216,11 +328,19 @@ export interface UploadParseResult {
    * end of the sheet (the DoS-protection cap below), so `titles` and
    * `totalRows` may undercount the file. */
   scanCapped?: boolean;
+  /** What the file left to inference, stated plainly for the review screen. A
+   * heading-based guess about a date column or a rating scale is obvious to the
+   * owner and invisible in the resulting library, so it has to be said out loud
+   * while the import can still be abandoned. Absent when nothing was guessed. */
+  notes?: string[];
 }
 
 /**
  * Parse a user-uploaded .xlsx/.csv into ParsedTitle[]. Expects a header row
- * with at least a Title/Name column; Year, Type, and Status are optional.
+ * with at least a Title/Name column; Year, Type, Status, a rating, a watch
+ * date, and an IMDb/TMDB id are all optional. Header matching is
+ * case-insensitive and ignores punctuation, so the real column names in a
+ * Letterboxd or IMDb export are recognised as they ship.
  */
 export async function parseUploadedList(
   buffer: Buffer,
@@ -284,9 +404,46 @@ export async function parseUploadedList(
         'No "Title" or "Name" column found in the first row. Add a header row with at least a Title column.',
     };
   }
-  const yearCol = find("year", "releaseyear", "dateofrelease", "released", "release", "date");
-  const typeCol = find("type", "mediatype", "category", "kind");
+  // "Title Type" is IMDb's own heading ("Movie", "TV Series", "TV Mini Series").
+  const typeCol = find("type", "titletype", "mediatype", "category", "kind");
   const statusCol = find("status", "watched", "state");
+
+  // A bare "Date" column means different things in different exports: on its own
+  // it is the only release hint the file has, but alongside a real year column
+  // (Letterboxd writes both) it is a diary date. WHICH diary is unknowable from
+  // the file: Letterboxd's watchlist.csv and watched.csv ship the identical
+  // header row (Date,Name,Year,Letterboxd URI), and in the watchlist that Date
+  // is when the film was ADDED. Treating it as a viewing turned a whole
+  // watchlist into WATCHED rows carrying a watch date the owner never recorded,
+  // so only a heading that actually names a viewing may say a row was watched.
+  // A generic "date" is kept as a candidate date and used below only where the
+  // file says, independently, that the row was watched.
+  const releaseYearCol = find("year", "releaseyear", "dateofrelease", "released", "release");
+  const watchedCol = find(
+    "watcheddate",
+    "datewatched",
+    "daterated",
+    "lastwatched",
+    "watchdate",
+  );
+  const diaryDateCol = watchedCol == null && releaseYearCol != null ? find("date") : null;
+  const yearCol = releaseYearCol ?? (watchedCol == null ? find("date") : null);
+
+  const ratingCol =
+    find(...FIVE_SCALE_HEADERS) ?? find(...TEN_SCALE_HEADERS) ?? find(...UNKNOWN_SCALE_HEADERS);
+  const namedScale: RatingScale =
+    ratingCol == null
+      ? "unknown"
+      : FIVE_SCALE_HEADERS.some((h) => headers[h] === ratingCol)
+        ? "five"
+        : TEN_SCALE_HEADERS.some((h) => headers[h] === ratingCol)
+          ? "ten"
+          : "unknown";
+
+  // IMDb writes its title id under "Const"; Letterboxd offers "IMDb ID" and
+  // "TMDb ID" in its full export.
+  const imdbCol = find("const", "imdbid", "imdb");
+  const tmdbCol = find("tmdbid", "themoviedbid", "tmdb");
 
   // Cap row iteration so a small but massively-inflated file can't force us to
   // scan an enormous materialized sheet. Read a little past maxRows so the
@@ -294,6 +451,34 @@ export async function parseUploadedList(
   const lastRow =
     maxRows != null ? Math.min(ws.rowCount, maxRows + ROW_SCAN_BUFFER) : ws.rowCount;
   const scanCapped = lastRow < ws.rowCount;
+
+  // A heading that named no scale gets one chance from the column's own values,
+  // taken in a pass of its own so every row is converted on a single decision
+  // rather than the scale changing partway down the sheet.
+  const ratingScale: RatingScale =
+    ratingCol == null || namedScale !== "unknown"
+      ? namedScale
+      : resolveScaleFromValues(ws, ratingCol, lastRow);
+
+  const notes: string[] = [];
+  if (statusCol == null && watchedCol != null) {
+    notes.push(
+      "This file has no status column, so every row with a watch date was read as watched.",
+    );
+  }
+  if (diaryDateCol != null) {
+    notes.push(
+      'A "Date" column can be when a title was watched or when it was added to a list, so it was not used to mark anything watched on its own.',
+    );
+  }
+  if (ratingCol != null && namedScale === "unknown") {
+    notes.push(
+      ratingScale === "ten"
+        ? "The rating column names no scale. It was read as out of 10, because it holds values above 5."
+        : 'The rating column names no scale, so its ratings were not imported. Head it "Stars" for out of 5, or "Your Rating" for out of 10.',
+    );
+  }
+
   const titles: ParsedTitle[] = [];
   for (let r = 2; r <= lastRow; r++) {
     const row = ws.getRow(r);
@@ -306,14 +491,41 @@ export async function parseUploadedList(
     // every subsequent read of the job.
     const name = rawName.slice(0, 500);
     const releaseText = rawReleaseText ? rawReleaseText.slice(0, 200) : rawReleaseText;
+    const ratingCell = ratingCol ? cellText(row.getCell(ratingCol).value) : null;
+    const watchDate = watchedCol
+      ? parseHumanDate(cellText(row.getCell(watchedCol).value))
+      : null;
+    const diaryDate = diaryDateCol
+      ? parseHumanDate(cellText(row.getCell(diaryDateCol).value))
+      : null;
+    // A file with no status column but a column that names a viewing ("Watched
+    // Date", "Date Rated") is stating these were watched; without this such an
+    // export would land on the watchlist with a watch date already attached. A
+    // bare "Date" never gets that vote — see the column resolution above.
+    const status: ParsedStatus = statusCol
+      ? mapStatus(cellText(row.getCell(statusCol).value))
+      : watchDate
+        ? "WATCHED"
+        : "UNWATCHED";
     titles.push({
       source: "upload",
       mediaType: typeCol ? mapType(cellText(row.getCell(typeCol).value)) : "movie",
       name,
       releaseDateText: releaseText,
       releaseDate: yearToIso(releaseText),
-      status: statusCol ? mapStatus(cellText(row.getCell(statusCol).value)) : "UNWATCHED",
+      status,
       languageHint: null,
+      rating: normalizeRating(ratingCell, ratingScale),
+      // Only carried when the scale couldn't be named, which is the one case
+      // review has to explain: the file did rate this title and we declined to
+      // guess whether the number meant 4/5 or 4/10.
+      ratingText: ratingScale === "unknown" && ratingCell ? ratingCell.slice(0, 40) : null,
+      // A diary date is a watch date only for a row something else already calls
+      // watched. On a watchlist export it is the day the film was added, and
+      // recording it would show the owner a viewing that never happened.
+      watchedAt: watchDate ?? (status === "WATCHED" ? diaryDate : null),
+      imdbId: imdbCol ? parseImdbId(cellText(row.getCell(imdbCol).value)) : null,
+      tmdbId: tmdbCol ? parseTmdbId(cellText(row.getCell(tmdbCol).value)) : null,
     });
   }
 
@@ -321,5 +533,6 @@ export async function parseUploadedList(
     titles,
     totalRows: scanCapped ? undefined : Math.max(0, ws.rowCount - 1),
     scanCapped,
+    ...(notes.length > 0 ? { notes } : {}),
   };
 }

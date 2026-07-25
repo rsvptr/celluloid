@@ -105,18 +105,41 @@ export function ExportPanel({
     }
   }
 
-  function download() {
+  async function download() {
     if (format === "xlsx") {
-      window.location.assign(xlsxHref(scope));
+      // Fetched, never navigated to: only a successful workbook carries
+      // Content-Disposition, so navigating would replace this page with the raw
+      // error body on any failure — and coming back re-seeds the scope from the
+      // URL, silently dropping whatever filters were set here.
+      try {
+        const response = await fetch(xlsxHref(scope), { cache: "no-store" });
+        if (!response.ok) {
+          const body = (await response.json().catch(() => null)) as
+            | { error?: string }
+            | null;
+          throw new Error(
+            body?.error || "Celluloid couldn't build the workbook. Try again.",
+          );
+        }
+        const disposition = response.headers.get("content-disposition") ?? "";
+        saveBlob(
+          await response.blob(),
+          disposition.match(/filename="([^"]+)"/)?.[1] ??
+            exportFilename(scope, fmt.ext, "library"),
+        );
+      } catch (downloadError) {
+        toast.error(
+          downloadError instanceof Error
+            ? downloadError.message
+            : "Celluloid couldn't build the workbook. Try again.",
+        );
+      }
       return;
     }
-    const blob = new Blob([content], { type: fmt.mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = exportFilename(scope, fmt.ext, format === "ai" ? "ai-prompt" : "library");
-    a.click();
-    URL.revokeObjectURL(url);
+    saveBlob(
+      new Blob([content], { type: fmt.mime }),
+      exportFilename(scope, fmt.ext, format === "ai" ? "ai-prompt" : "library"),
+    );
   }
 
   return (
@@ -378,6 +401,23 @@ export function ExportPanel({
       </div>
     </div>
   );
+}
+
+/**
+ * Save a blob under `filename`. The anchor has to be in the document for the
+ * synthetic click to count in every browser, and the object URL has to outlive
+ * that click — revoking it in the same tick races the download in some of them,
+ * so the revoke is deferred to the next task instead.
+ */
+function saveBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function xlsxHref(scope: ExportScope): string {

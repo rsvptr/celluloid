@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import {
+  Ban,
   Check,
   Film,
   Plus,
@@ -21,6 +22,8 @@ import { Poster } from "@/components/poster";
 import { AnimatePresence, motion } from "@/components/motion";
 import { addFromTmdb } from "@/lib/actions";
 import { setRecommendModel } from "@/lib/settings-actions";
+import { suppressSuggestion, unsuppressSuggestion } from "@/lib/suppression-actions";
+import { SuppressionsPanel } from "./suppressions-panel";
 import { REC_ERAS, REC_MODELS, type RecEraId } from "@/lib/models";
 import { languageName } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -80,6 +83,22 @@ function rankRecs(
     .map((x) => x.r);
 }
 
+/**
+ * Put a dismissed card back at the position it was removed from, so Undo
+ * restores the list as it was instead of appending the title to the end. A
+ * suggestion that is somehow already back is left alone rather than duplicated.
+ */
+function restoreAt(
+  list: Recommendation[] | null,
+  rec: Recommendation,
+  index: number,
+): Recommendation[] {
+  const next = [...(list ?? [])];
+  if (next.includes(rec)) return next;
+  next.splice(Math.min(index, next.length), 0, rec);
+  return next;
+}
+
 // Mood presets that pre-fill the focus field (and optionally narrow the type).
 const PRESETS: { label: string; focus: string; type?: "movie" | "tv" }[] = [
   { label: "🛋️ Cozy night in", focus: "cozy, low-stakes watches for a relaxed evening" },
@@ -127,6 +146,9 @@ export function RecommendClient({
   const seen = useRef<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
+  // Bumped whenever the "not interested" list changes, so an open review panel
+  // reloads instead of showing a list the owner has already moved on from.
+  const [suppressionsKey, setSuppressionsKey] = useState(0);
   const [basisMode, setBasisMode] = useState<"all" | "recent" | "pick">("all");
   const [recentCount, setRecentCount] = useState(20);
   const [pickedIds, setPickedIds] = useState<Set<string>>(new Set());
@@ -192,6 +214,60 @@ export function RecommendClient({
 
   function stop() {
     abortRef.current?.abort();
+  }
+
+  /**
+   * Turn a suggestion down for good. The in-session `seen` list only stops a
+   * title coming back within this page view; this records the refusal so future
+   * runs skip it — and skip paying Claude and TMDB to derive it again.
+   */
+  async function dismiss(rec: Recommendation, index: number) {
+    // Remove the card first: the write is fast and the toast carries Undo, so
+    // waiting on the round trip would only make the page feel unresponsive.
+    setRecs((current) => (current ?? []).filter((item) => item !== rec));
+    let res: { id?: string; error?: string };
+    try {
+      res = await suppressSuggestion({
+        tmdbId: rec.tmdbId ?? null,
+        mediaType: rec.mediaType,
+        name: rec.title,
+        year: rec.year,
+      });
+    } catch {
+      res = {
+        error: "Celluloid couldn't hide that suggestion. Check your connection and retry.",
+      };
+    }
+    if (!res.id) {
+      // Nothing was recorded, so leaving the card hidden would misrepresent what
+      // future runs will do — put it back and say so.
+      setRecs((current) => restoreAt(current, rec, index));
+      toast.error(res.error ?? "Couldn't hide that suggestion. Please try again.");
+      return;
+    }
+    const suppressionId = res.id;
+    setSuppressionsKey((value) => value + 1);
+    toast.success(`${rec.title} won't be suggested again`, {
+      action: {
+        label: "Undo",
+        onClick: () => {
+          void unsuppressSuggestion(suppressionId)
+            .then((undone) => {
+              if (!undone.ok) {
+                toast.error("Couldn't undo that. Restore it under Not interested.");
+                return;
+              }
+              setRecs((current) => restoreAt(current, rec, index));
+              setSuppressionsKey((value) => value + 1);
+            })
+            .catch(() => {
+              toast.error(
+                "Celluloid couldn't undo that. Check your connection and retry.",
+              );
+            });
+        },
+      },
+    });
   }
 
   async function generate(over?: {
@@ -301,7 +377,8 @@ export function RecommendClient({
 
   // Bring results into view as soon as the first suggestion streams in (on
   // mobile they sit below the form).
-  const hasResults = (recs?.length ?? 0) > 0;
+  const recCount = recs?.length ?? 0;
+  const hasResults = recCount > 0;
   useEffect(() => {
     if (hasResults) {
       const reducedMotion = window.matchMedia(
@@ -718,25 +795,30 @@ export function RecommendClient({
       {(loading || (recs && recs.length > 0)) && (
         <div ref={resultsRef} className="flex scroll-mt-20 flex-col gap-3">
           <div className="flex items-center justify-between gap-3">
-            {loading && phase !== "idle" ? (
-              <p
-                role="status"
-                aria-live="polite"
-                className="flex items-center gap-2 text-xs text-muted"
-              >
-                <Spinner className="shrink-0" />
-                {PHASE_LABEL[phase]}
-                {recs && recs.length > 0 ? (
-                  <span className="tabular-nums">
-                    {recs.length} of {count} found
-                  </span>
-                ) : null}
-              </p>
-            ) : (
-              <p className="text-xs text-muted">
-                {recs!.length} {recs!.length === 1 ? "suggestion" : "suggestions"}
-              </p>
-            )}
+            {/* One live region for the whole run. Swapping it for a plain
+                paragraph on completion would tear the node out before the
+                announcement could fire, so the run would go silent exactly when
+                there was something to say — the same element switches from
+                progress to the final count instead. */}
+            <p
+              role="status"
+              aria-live="polite"
+              className="flex items-center gap-2 text-xs text-muted"
+            >
+              {loading && phase !== "idle" ? (
+                <>
+                  <Spinner className="shrink-0" />
+                  {PHASE_LABEL[phase]}
+                  {recCount > 0 ? (
+                    <span className="tabular-nums">
+                      {recCount} of {count} found
+                    </span>
+                  ) : null}
+                </>
+              ) : (
+                `${recCount} ${recCount === 1 ? "suggestion" : "suggestions"} ready`
+              )}
+            </p>
             {loading ? (
               <button
                 type="button"
@@ -761,16 +843,17 @@ export function RecommendClient({
 
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             <AnimatePresence initial={false}>
-                {(recs ?? []).map((r) => (
+                {(recs ?? []).map((r, index) => (
                   <motion.div
                     key={`${r.mediaType}:${r.tmdbId ?? r.title}`}
                     layout
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -6 }}
                     transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
                     className="min-w-0"
                   >
-                    <RecCard rec={r} />
+                    <RecCard rec={r} onDismiss={() => void dismiss(r, index)} />
                   </motion.div>
                 ))}
             </AnimatePresence>
@@ -797,6 +880,8 @@ export function RecommendClient({
           No suggestions came back. Try a different focus or count.
         </p>
       )}
+
+      <SuppressionsPanel refreshKey={suppressionsKey} />
     </div>
   );
 }
@@ -806,7 +891,13 @@ type AddState =
   | { kind: "adding" }
   | { kind: "done"; id: string };
 
-function RecCard({ rec }: { rec: Recommendation }) {
+function RecCard({
+  rec,
+  onDismiss,
+}: {
+  rec: Recommendation;
+  onDismiss: () => void;
+}) {
   const [state, setState] = useState<AddState>({ kind: "idle" });
   const [, start] = useTransition();
 
@@ -841,7 +932,7 @@ function RecCard({ rec }: { rec: Recommendation }) {
         </div>
         <p className="mt-1 text-sm text-foreground/85">{rec.reason}</p>
       </div>
-      <div className="shrink-0">
+      <div className="flex shrink-0 flex-col items-end gap-2">
         {rec.tmdbId ? (
           state.kind === "done" ? (
             <Link
@@ -893,6 +984,15 @@ function RecCard({ rec }: { rec: Recommendation }) {
             <Search size={13} aria-hidden="true" /> Find on TMDB
           </Link>
         )}
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label={`Not interested in ${rec.title}`}
+          title="Not interested: keep this out of future suggestions"
+          className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-lg text-muted ring-1 ring-line transition-colors hover:text-foreground sm:min-h-9 sm:min-w-9"
+        >
+          <Ban size={15} aria-hidden="true" />
+        </button>
       </div>
     </Card>
   );

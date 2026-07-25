@@ -15,6 +15,7 @@ import {
 } from "@/generated/prisma/client";
 import { getMovie, getSeason, getTv } from "@/lib/tmdb";
 import { mapLimit } from "@/lib/async";
+import { isTagColor } from "@/lib/tag-colors";
 import { z } from "zod";
 
 // --- Runtime validation (SEC-04) -------------------------------------------
@@ -86,9 +87,16 @@ const logWatchSchema = z.object({
 });
 
 const idArgSchema = z.object({ id: idSchema });
+const watchEventIdSchema = z.object({ eventId: idSchema });
+const watchEventEditSchema = z.object({
+  eventId: idSchema,
+  occurredAt: dateStringSchema,
+  note: z.string().max(2000).nullable().optional(),
+});
 const episodeToggleSchema = z.object({ episodeId: idSchema, watched: z.boolean() });
 const seasonToggleSchema = z.object({ seasonId: idSchema, watched: z.boolean() });
 const allEpisodesSchema = z.object({ titleId: idSchema, watched: z.boolean() });
+const episodesThroughSchema = z.object({ episodeId: idSchema });
 const addFromTmdbSchema = z.object({ tmdbId: tmdbIdSchema, mediaType: mediaTypeSchema });
 const rematchSchema = z.object({
   titleId: idSchema,
@@ -111,6 +119,13 @@ const toggleTitleTagSchema = z.object({
   on: z.boolean(),
 });
 const tagIdArgSchema = z.object({ tagId: idSchema });
+const renameTagSchema = z.object({ tagId: idSchema, name: z.string().max(200) });
+// Colours are chosen from a fixed palette (see tag-colors.ts), never freehand,
+// so the stored value is validated against that list rather than bounded as text.
+const tagColorSchema = z.object({
+  tagId: idSchema,
+  color: z.string().refine(isTagColor).nullable(),
+});
 
 /** Dedupe an id list. Does not truncate — callers must reject oversized lists
  * outright (via requireWithinBulkLimit) rather than silently drop ids. */
@@ -187,6 +202,22 @@ function revalidateAll(id?: string) {
   revalidatePath("/stats");
   revalidatePath("/export");
   if (id) revalidatePath(`/title/${id}`);
+}
+
+/**
+ * Prisma filter for "this episode has actually aired". A null airDate means TMDB
+ * doesn't know (common for older and regional titles), which we treat as aired
+ * rather than blocking the user from ticking it.
+ *
+ * The bulk episode marks use this so that "mark season" / "mark show" on an
+ * ONGOING series can't silently tick episodes that haven't aired yet. Doing so
+ * was quietly destructive: a pre-marked episode is already `watched` by the time
+ * it airs, so its "New" badge never fires and the episode you were waiting for
+ * shows up as something you'd already seen. A single deliberate tick on one
+ * episode is left unguarded — the owner may have seen a preview.
+ */
+function airedEpisodeFilter(now: Date) {
+  return { OR: [{ airDate: null }, { airDate: { lte: now } }] };
 }
 
 /** Recompute denormalized episode progress + natural status for a TV title. */
@@ -366,13 +397,21 @@ export async function updateTitle(
       const rows = await tx.$queryRaw<{ id: string }[]>`
         SELECT id FROM "Title" WHERE id = ${id} FOR UPDATE`;
       if (!rows[0]) return; // title removed concurrently
+      // Aired episodes only, matching the episode-tracker bulk marks. Ticking an
+      // episode that hasn't aired is quietly destructive: it is already `watched`
+      // by the time it airs, so its "New" badge never fires and /upcoming never
+      // lists it — the two features that exist to tell you a show came back are
+      // silently dead for exactly the shows they target.
       await tx.episode.updateMany({
-        where: { season: { titleId: id }, watched: false },
+        where: { season: { titleId: id }, watched: false, ...airedEpisodeFilter(now) },
         data: { watched: true, watchedAt: autoWatchedAt ?? now },
       });
-      // Count fresh inside the lock — exact parity with bulkSetStatus's WATCHED
-      // branch — instead of trusting the pre-transaction denormalized read.
-      const total = await tx.episode.count({ where: { season: { titleId: id } } });
+      // Count what is genuinely watched, fresh inside the lock — exact parity
+      // with bulkSetStatus's WATCHED branch. Counting ALL episodes here would
+      // overstate the counter the moment the filter above leaves one unaired.
+      const total = await tx.episode.count({
+        where: { season: { titleId: id }, watched: true },
+      });
       await tx.title.update({
         where: { id },
         data: { ...updateData, watchedEpisodes: total },
@@ -425,8 +464,13 @@ export async function logWatch(
     // Lock + authorize in one shot: the FOR UPDATE row is both the lock and the
     // ownership check. Siblings (updateTitle / episode marks) lock Title first too.
     const rows = await tx.$queryRaw<
-      { status: WatchStatus; watchedAt: Date | null }[]
-    >`SELECT status, "watchedAt" FROM "Title" WHERE id = ${titleId} AND "userId" = ${userId} FOR UPDATE`;
+      {
+        status: WatchStatus;
+        watchedAt: Date | null;
+        totalEpisodes: number | null;
+        watchedEpisodes: number;
+      }[]
+    >`SELECT status, "watchedAt", "totalEpisodes", "watchedEpisodes" FROM "Title" WHERE id = ${titleId} AND "userId" = ${userId} FOR UPDATE`;
     const row = rows[0];
     if (!row) return null; // not found or not owned
 
@@ -450,9 +494,26 @@ export async function logWatch(
       row.watchedAt && row.watchedAt.getTime() >= occurred.getTime()
         ? row.watchedAt
         : occurred;
+
+    // Logging a watch on a show you're only partway through must NOT claim the
+    // whole show is finished. It used to force WATCHED unconditionally, which
+    // recomputeProgress then reverted to WATCHING on the very next episode
+    // tick — the status visibly flip-flopped for no reason the user could see.
+    // A show with episode rows and unwatched ones left is in progress, so say
+    // so; movies, episodeless titles and fully-watched shows still complete.
+    // A title already WATCHED stays WATCHED (this log is a rewatch).
+    const partiallyWatchedTv =
+      row.totalEpisodes !== null &&
+      row.totalEpisodes > 0 &&
+      row.watchedEpisodes < row.totalEpisodes;
+    const nextStatus =
+      row.status === WatchStatus.WATCHED || !partiallyWatchedTv
+        ? WatchStatus.WATCHED
+        : WatchStatus.WATCHING;
+
     await tx.title.update({
       where: { id: titleId },
-      data: { status: WatchStatus.WATCHED, watchedAt: nextWatchedAt },
+      data: { status: nextStatus, watchedAt: nextWatchedAt },
     });
 
     const watchCount = await tx.watchEvent.count({
@@ -467,6 +528,124 @@ export async function logWatch(
   if (!result) return { error: "Title not found." };
   revalidateAll(titleId);
   return { ok: true, watchCount: result.watchCount };
+}
+
+/**
+ * Re-derive a title's `watchedAt` cache from its surviving completion/rewatch
+ * events. Call inside a transaction that already holds the Title row lock.
+ *
+ * The cache is meant to mirror the log's latest completion. Editing or deleting
+ * an event without this leaves the two disagreeing — the History list would show
+ * one date while sort, stats and the AI brief's recency block used another.
+ *
+ * When NO completion event survives, the date is left exactly as it is rather
+ * than cleared. The log is not the only thing that writes `watchedAt`: a
+ * spreadsheet import seats a real, owner-supplied watch date without writing an
+ * event, and titles predating the event log carry dates the log never knew
+ * about. Clearing on an empty log would let "remove one mis-tapped rewatch"
+ * silently erase a completion date from years earlier that nothing else records
+ * — unrecoverable, and never what the owner asked for. A stale-looking date is
+ * the strictly safer failure, and the owner can still change it directly.
+ */
+async function syncWatchedAtFromEvents(
+  tx: Prisma.TransactionClient,
+  titleId: string,
+): Promise<void> {
+  const latest = await tx.watchEvent.findFirst({
+    where: {
+      titleId,
+      kind: { in: [WatchEventKind.TITLE_COMPLETED, WatchEventKind.REWATCH] },
+    },
+    orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }],
+    select: { occurredAt: true },
+  });
+  if (!latest) return;
+  await tx.title.update({
+    where: { id: titleId },
+    data: { watchedAt: latest.occurredAt },
+  });
+}
+
+/**
+ * D-F2: correct a logged viewing — its date, its note, or both. A watch logged
+ * on the wrong day previously could not be fixed from the app at all; it stayed
+ * in the append-only log inflating streaks, the heatmap and the rewatch count
+ * with no route to repair short of touching the database by hand.
+ */
+export async function updateWatchEvent(
+  eventId: string,
+  input: { occurredAt: string; note?: string | null },
+): Promise<{ ok?: boolean; error?: string }> {
+  const userId = await getUserId();
+  const parsed = watchEventEditSchema.safeParse({
+    eventId,
+    occurredAt: input.occurredAt,
+    note: input.note,
+  });
+  if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
+  const occurred = toDate(parsed.data.occurredAt);
+  if (!occurred) return { error: "Invalid request. Refresh and try again." };
+  const trimmed = parsed.data.note?.trim();
+  const note = trimmed ? trimmed.slice(0, 500) : null;
+
+  const event = await prisma.watchEvent.findFirst({
+    where: { id: eventId, userId },
+    select: { id: true, titleId: true },
+  });
+  if (!event) return { error: "Watch not found." };
+
+  await prisma.$transaction(async (tx) => {
+    // Title lock first (invariant), so the event edit and the cache resync are
+    // one unit and can't interleave with a concurrent logWatch on this title.
+    const rows = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM "Title" WHERE id = ${event.titleId} FOR UPDATE`;
+    if (!rows[0]) return; // title removed concurrently
+    await tx.watchEvent.update({
+      where: { id: event.id },
+      data: { occurredAt: occurred, note },
+    });
+    await syncWatchedAtFromEvents(tx, event.titleId);
+  });
+
+  revalidateAll(event.titleId);
+  return { ok: true };
+}
+
+/**
+ * Delete a logged viewing (a duplicate, or one recorded by mistake). Scoped to
+ * the owner's own events; the title's watch date is re-derived from whatever
+ * remains. Returns the surviving completion+rewatch count so the caller can
+ * update the "Watched n times" badge without a refetch.
+ */
+export async function deleteWatchEvent(
+  eventId: string,
+): Promise<{ ok?: boolean; watchCount?: number; error?: string }> {
+  const userId = await getUserId();
+  const parsed = watchEventIdSchema.safeParse({ eventId });
+  if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
+
+  const event = await prisma.watchEvent.findFirst({
+    where: { id: eventId, userId },
+    select: { id: true, titleId: true },
+  });
+  if (!event) return { error: "Watch not found." };
+
+  const watchCount = await prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM "Title" WHERE id = ${event.titleId} FOR UPDATE`;
+    if (!rows[0]) return 0; // title removed concurrently
+    await tx.watchEvent.delete({ where: { id: event.id } });
+    await syncWatchedAtFromEvents(tx, event.titleId);
+    return tx.watchEvent.count({
+      where: {
+        titleId: event.titleId,
+        kind: { in: [WatchEventKind.TITLE_COMPLETED, WatchEventKind.REWATCH] },
+      },
+    });
+  });
+
+  revalidateAll(event.titleId);
+  return { ok: true, watchCount };
 }
 
 export async function removeTitle(id: string) {
@@ -511,6 +690,26 @@ export async function purgeTitle(id: string) {
   // safely no-ops rather than nuking the just-restored title.
   await prisma.title.deleteMany({ where: { id, userId, deletedAt: { not: null } } });
   revalidateAll();
+}
+
+/**
+ * Permanently delete every title currently in Trash. Same one-way guarantees as
+ * purgeTitle — restricted to rows already soft-deleted, so a live title can
+ * never be destroyed by this call, and a concurrent restore simply removes that
+ * row from the set rather than racing it back out of existence.
+ *
+ * Exists because emptying a Trash that accumulated a few hundred rows from a
+ * bulk remove was otherwise one confirmation dialog per title, and every
+ * lingering row keeps occupying its (userId, mediaType, tmdbId) slot — which
+ * silently blocks re-adding that title from search.
+ */
+export async function emptyTrash(): Promise<{ count: number }> {
+  const userId = await getUserId();
+  const res = await prisma.title.deleteMany({
+    where: { userId, deletedAt: { not: null } },
+  });
+  revalidateAll();
+  return { count: res.count };
 }
 
 // --- Episode / season tracking ---------------------------------------------
@@ -591,13 +790,14 @@ export async function setSeasonWatched(seasonId: string, watched: boolean) {
         SELECT id FROM "Title" WHERE id = ${titleId} FOR UPDATE`;
       if (!rows[0]) return; // title removed concurrently
       const now = new Date();
+      const unwatchedAired = { seasonId, watched: false, ...airedEpisodeFilter(now) };
       const toWatch = await tx.episode.findMany({
-        where: { seasonId, watched: false },
+        where: unwatchedAired,
         select: { id: true },
       });
       if (toWatch.length) {
         await tx.episode.updateMany({
-          where: { seasonId, watched: false },
+          where: unwatchedAired,
           data: { watched: true, watchedAt: now },
         });
         await tx.watchEvent.createMany({
@@ -642,13 +842,18 @@ export async function setAllEpisodesWatched(titleId: string, watched: boolean) {
         SELECT id FROM "Title" WHERE id = ${titleId} FOR UPDATE`;
       if (!rows[0]) return; // title removed concurrently
       const now = new Date();
+      const unwatchedAired = {
+        season: { titleId },
+        watched: false,
+        ...airedEpisodeFilter(now),
+      };
       const toWatch = await tx.episode.findMany({
-        where: { season: { titleId }, watched: false },
+        where: unwatchedAired,
         select: { id: true },
       });
       if (toWatch.length) {
         await tx.episode.updateMany({
-          where: { season: { titleId }, watched: false },
+          where: unwatchedAired,
           data: { watched: true, watchedAt: now },
         });
         await tx.watchEvent.createMany({
@@ -672,6 +877,74 @@ export async function setAllEpisodesWatched(titleId: string, watched: boolean) {
   }
   await recomputeProgress(titleId);
   revalidateAll(titleId);
+}
+
+/**
+ * Mark every aired episode in a season up to and including `episodeId` as
+ * watched. Catching up on a season used to mean one server round trip per
+ * episode (19 requests to get through a 20-episode season, each one revalidating
+ * three routes); this is a single transaction and a single revalidation.
+ *
+ * Season-scoped on purpose: "I'm up to here" is a statement about the season
+ * you're looking at. Earlier seasons are left alone — "Mark show watched"
+ * already covers the whole-series case, and silently reaching backwards across
+ * seasons would be far harder to undo than to repeat.
+ *
+ * Returns how many episodes it actually changed so the caller can report it.
+ */
+export async function setEpisodesWatchedThrough(
+  episodeId: string,
+): Promise<{ count: number }> {
+  const userId = await getUserId();
+  const parsed = episodesThroughSchema.safeParse({ episodeId });
+  if (!parsed.success) throw new Error("Invalid request. Refresh and try again.");
+
+  const anchor = await prisma.episode.findFirst({
+    where: { id: episodeId, season: { title: { userId } } },
+    select: {
+      episodeNumber: true,
+      seasonId: true,
+      season: { select: { titleId: true } },
+    },
+  });
+  if (!anchor) throw new Error("Episode not found.");
+  const titleId = anchor.season.titleId;
+
+  const changed = await prisma.$transaction(async (tx) => {
+    // Title lock first — the same ordering every other transaction here uses, so
+    // this serializes against episode/season/bulk marks instead of racing them.
+    const rows = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM "Title" WHERE id = ${titleId} FOR UPDATE`;
+    if (!rows[0]) return 0; // title removed concurrently
+    const now = new Date();
+    const target = {
+      seasonId: anchor.seasonId,
+      episodeNumber: { lte: anchor.episodeNumber },
+      watched: false,
+      ...airedEpisodeFilter(now),
+    };
+    const toWatch = await tx.episode.findMany({ where: target, select: { id: true } });
+    if (toWatch.length === 0) return 0;
+    await tx.episode.updateMany({
+      where: target,
+      data: { watched: true, watchedAt: now },
+    });
+    await tx.watchEvent.createMany({
+      data: toWatch.map((e) => ({
+        userId,
+        titleId,
+        episodeId: e.id,
+        kind: WatchEventKind.EPISODE_WATCHED,
+        occurredAt: now,
+        source: WatchEventSource.BULK,
+      })),
+    });
+    return toWatch.length;
+  });
+
+  await recomputeProgress(titleId);
+  revalidateAll(titleId);
+  return { count: changed };
 }
 
 type FetchedSeason = { n: number; sd: Awaited<ReturnType<typeof getSeason>> };
@@ -1147,21 +1420,37 @@ export async function bulkSetStatus(ids: string[], status: WatchStatus) {
           const rows = await tx.$queryRaw<{ id: string }[]>`
             SELECT id FROM "Title" WHERE id = ${titleId} FOR UPDATE`;
           if (!rows[0]) return; // title removed concurrently; nothing to reconcile
+          // Aired episodes only (see updateTitle's WATCHED branch): pre-ticking
+          // an unaired episode permanently suppresses its "New" badge.
           await tx.episode.updateMany({
-            where: { season: { titleId }, watched: false },
+            where: { season: { titleId }, watched: false, ...airedEpisodeFilter(now) },
             data: { watched: true, watchedAt: now },
           });
-          const total = await tx.episode.count({ where: { season: { titleId } } });
+          // Count the genuinely watched rows, not every row, so the
+          // denormalized counter still equals reality when the filter above
+          // leaves an unaired episode behind.
+          const total = await tx.episode.count({
+            where: { season: { titleId }, watched: true },
+          });
           const data: {
             status: WatchStatus;
             watchedEpisodes: number;
             watchedAt?: Date;
           } = { status, watchedEpisodes: total };
           // Advance the completion date to now on a genuine transition into
-          // WATCHED (a title already WATCHED keeps its real date), and only where
-          // episodes exist so an episodeless unmatched import can't fabricate
-          // activity — mirroring the movie branch above.
-          if (total > 0 && newlyWatchedIds.has(titleId)) data.watchedAt = now;
+          // WATCHED (a title already WATCHED keeps its real date), mirroring the
+          // movie branch above.
+          //
+          // This used to be gated on `total > 0` as well, to stop an episodeless
+          // unmatched import "fabricating activity" — but the guard didn't
+          // achieve that: the BULK TITLE_COMPLETED event below is written for
+          // every newly-watched title regardless, and it is the event (not
+          // watchedAt) that drives the stats heatmap and streaks. So the old
+          // behaviour recorded the activity and withheld the date, leaving the
+          // title invisible to recently-watched sort and to the AI brief's
+          // recency block while still counting toward the streak. Marking a
+          // title WATCHED is an explicit statement; treat it as one everywhere.
+          if (newlyWatchedIds.has(titleId)) data.watchedAt = now;
           await tx.title.update({ where: { id: titleId }, data });
         }),
       );
@@ -1314,6 +1603,70 @@ export async function toggleTitleTag(titleId: string, tagId: string, on: boolean
     await prisma.titleTag.deleteMany({ where: { titleId, tagId } });
   }
   revalidateAll(titleId);
+}
+
+/**
+ * Rename a tag in place, keeping every title it is attached to.
+ *
+ * Tags could be created and deleted but never renamed, so a typo — or a
+ * vocabulary that drifted from "rewatch" to "rewatchable" — could only be fixed
+ * by deleting the tag (losing every attachment) and re-tagging by hand.
+ *
+ * Identity is case-insensitive (see findOrCreateTag), so the clash check has to
+ * be too: without it, renaming "horror" to "Thriller" while a "thriller" exists
+ * would trip the invisible functional index and surface a raw P2002. The
+ * pre-check gives the owner a sentence they can act on; the P2002 catch covers
+ * the window between the check and the update, exactly as findOrCreateTag does.
+ * The tag's own row is excluded from the check so a case-only rename
+ * ("horror" -> "Horror") is allowed rather than reported as a clash with itself.
+ */
+export async function renameTag(tagId: string, name: string): Promise<{ name: string }> {
+  const userId = await getUserId();
+  const parsed = renameTagSchema.safeParse({ tagId, name });
+  if (!parsed.success) throw new Error("Invalid request. Refresh and try again.");
+  const next = normTagName(parsed.data.name);
+  if (!next) throw new Error("Tag name is required.");
+
+  const tag = await prisma.tag.findFirst({
+    where: { id: parsed.data.tagId, userId },
+    select: { id: true, name: true },
+  });
+  if (!tag) throw new Error("Tag not found.");
+  if (tag.name === next) return { name: tag.name };
+
+  const taken = await prisma.tag.findFirst({
+    where: {
+      userId,
+      id: { not: tag.id },
+      name: { equals: next, mode: "insensitive" },
+    },
+    select: { name: true },
+  });
+  if (taken) throw new Error(`You already have a tag called “${taken.name}”.`);
+
+  try {
+    await prisma.tag.update({ where: { id: tag.id }, data: { name: next } });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      throw new Error(`You already have a tag called “${next}”.`);
+    }
+    throw err;
+  }
+  revalidateAll();
+  return { name: next };
+}
+
+/** Set (or clear, with null) a tag's colour. Palette values only — see tag-colors.ts. */
+export async function setTagColor(tagId: string, color: string | null): Promise<void> {
+  const userId = await getUserId();
+  const parsed = tagColorSchema.safeParse({ tagId, color });
+  if (!parsed.success) throw new Error("Invalid request. Refresh and try again.");
+  const updated = await prisma.tag.updateMany({
+    where: { id: parsed.data.tagId, userId },
+    data: { color: parsed.data.color },
+  });
+  if (updated.count === 0) throw new Error("Tag not found.");
+  revalidateAll();
 }
 
 export async function deleteTag(tagId: string) {

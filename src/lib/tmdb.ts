@@ -12,6 +12,10 @@ import {
   pickTvCertification,
   type TitleCastMember,
 } from "@/lib/tmdb-extras";
+// tmdb-match imports only a TYPE from this module, so there is no runtime cycle.
+// Reusing its normalizer keeps "does this page contain the title we asked for?"
+// answered the same way the matcher will answer it.
+import { norm } from "@/lib/tmdb-match";
 
 const BASE = "https://api.themoviedb.org/3";
 
@@ -31,6 +35,28 @@ interface TmdbOptions {
   /** Next.js cache revalidation seconds (ignored outside Next). */
   revalidate?: number;
   retries?: number;
+  /**
+   * Wall-clock budget for the whole call, retries and backoff included. The
+   * per-attempt timeout below only bounds one attempt, so a call that keeps
+   * timing out would otherwise run ~47s — and getTitleBundle, which can make
+   * two calls, twice that — past a route's maxDuration.
+   */
+  deadlineMs?: number;
+  /** Caller cancellation: aborts the in-flight request and stops retrying. */
+  signal?: AbortSignal;
+}
+
+/**
+ * Whether another attempt is worth making: retries left, the caller still
+ * wants the result, and the overall budget has room for one more.
+ */
+function shouldRetry(
+  attempt: number,
+  retries: number,
+  deadline: number,
+  signal?: AbortSignal,
+): boolean {
+  return attempt < retries && !signal?.aborted && Date.now() < deadline;
 }
 
 async function tmdb<T>(
@@ -44,6 +70,7 @@ async function tmdb<T>(
   }
 
   const retries = opts.retries ?? 3;
+  const deadline = Date.now() + (opts.deadlineMs ?? 15000);
   for (let attempt = 0; ; attempt++) {
     const init: FetchInit = {
       headers: {
@@ -55,29 +82,35 @@ async function tmdb<T>(
 
     // Bound the request so a stalled TMDB response can't hang indefinitely
     // and bypass the retry/backoff below (which only triggers on rejection
-    // or a non-2xx response).
+    // or a non-2xx response). The caller's own signal rides alongside it so a
+    // cancelled run stops paying for TMDB work already in flight.
     const timeoutSignal = AbortSignal.timeout(8000);
-    init.signal = init.signal
-      ? AbortSignal.any([init.signal, timeoutSignal])
+    init.signal = opts.signal
+      ? AbortSignal.any([opts.signal, timeoutSignal])
       : timeoutSignal;
 
     let res: Response;
     try {
       res = await fetch(url, init);
+      // The body read belongs inside the retried region: a connection dropped
+      // mid-body rejects here, and that is every bit as transient as a failed
+      // connect. Read after the catch, such a failure escaped unretried.
+      if (res.ok) return (await res.json()) as T;
     } catch (err) {
-      if (attempt < retries) {
+      if (shouldRetry(attempt, retries, deadline, opts.signal)) {
         await sleep(400 * 2 ** attempt);
         continue;
       }
       throw err;
     }
 
-    if (res.ok) return (await res.json()) as T;
-
     // Back off on rate limits / transient server errors. Cap the honored
     // Retry-After so a pathological header can't stall a serverless function
     // for its whole timeout budget.
-    if ((res.status === 429 || res.status >= 500) && attempt < retries) {
+    if (
+      (res.status === 429 || res.status >= 500) &&
+      shouldRetry(attempt, retries, deadline, opts.signal)
+    ) {
       const retryAfter = Number(res.headers.get("retry-after"));
       const wait = Math.min(retryAfter > 0 ? retryAfter * 1000 : 500 * 2 ** attempt, 5000);
       await sleep(wait);
@@ -205,18 +238,98 @@ export async function searchMulti(
   );
 }
 
+/** Per-search refinements: the year filter and caller cancellation. */
+export interface SearchOptions {
+  /**
+   * Release year (movies) or first-air year (TV). TMDB ranks by popularity, so
+   * an unfiltered title search resolves to whichever entry is better known —
+   * "Drishyam" 2013 lands on the 2015 remake — and the wrong tmdbId then trips
+   * @@unique([userId, mediaType, tmdbId]) when the real title is added.
+   */
+  year?: number | null;
+  signal?: AbortSignal;
+}
+
 export async function searchByType(
   kind: "movie" | "tv",
   query: string,
   page = 1,
+  opts: SearchOptions = {},
 ): Promise<TmdbSearchItem[]> {
   if (!query.trim()) return [];
-  const data = await tmdb<TmdbPage<TmdbSearchItem>>(
-    `/search/${kind}`,
-    { query, page, include_adult: false, language: "en-US" },
-    { revalidate: 60 * 60 },
+  const base = { query, page, include_adult: false, language: "en-US" };
+  // /search/movie takes primary_release_year; /search/tv takes
+  // first_air_date_year. The generic `year` both accept is looser (TV matches
+  // any episode's air date), so use the precise one per kind.
+  const yearKey = kind === "movie" ? "primary_release_year" : "first_air_date_year";
+  const run = (year?: number) =>
+    tmdb<TmdbPage<TmdbSearchItem>>(
+      `/search/${kind}`,
+      year === undefined ? base : { ...base, [yearKey]: year },
+      { revalidate: 60 * 60, signal: opts.signal },
+    );
+
+  const year = opts.year ?? undefined;
+  let results = (await run(year)).results;
+
+  // The filter is exact and the year we hold comes from a spreadsheet or from
+  // the model, either of which can simply be wrong — a festival year against a
+  // wide release, or the year the owner watched it rather than the year it came
+  // out. Retrying only on an EMPTY page was not enough: an off-by-one year
+  // usually returns a populated page that just doesn't contain the right title,
+  // and the caller's matcher will then settle for a partial name overlap — a
+  // confidently wrong tmdbId, poster and year, which for "add to library" means
+  // adding the wrong film. So retry whenever nothing on the filtered page
+  // actually carries the queried name, and hand the matcher BOTH sets with the
+  // year-filtered ones first, so it can still prefer them on an even score.
+  if (year !== undefined) {
+    const wanted = norm(query);
+    const hasNameMatch = results.some(
+      (r) => norm(r.title ?? r.name ?? "") === wanted,
+    );
+    if (!hasNameMatch) {
+      const seen = new Set(results.map((r) => r.id));
+      const unfiltered = (await run()).results.filter((r) => !seen.has(r.id));
+      results = [...results, ...unfiltered];
+    }
+  }
+
+  return results.map((r) => ({ ...r, media_type: kind }));
+}
+
+/**
+ * Shape of `/find/{external_id}`. TMDB returns one array per object kind; only
+ * the two we can import are declared, and `media_type` is stamped by the caller
+ * below rather than trusted (it is documented on movie results but not on the
+ * TV ones).
+ */
+interface TmdbFindResponse {
+  movie_results?: TmdbSearchItem[];
+  tv_results?: TmdbSearchItem[];
+}
+
+/**
+ * Resolve an IMDb id ("tt0110912") to its TMDB entries. An external id is an
+ * exact identity, so a spreadsheet that carries one never has to go through the
+ * fuzzy name search — which is where a large import loses most of its accuracy.
+ * Returns movies first, then TV; an unknown or malformed id yields an empty
+ * list rather than an error, since a bad cell is the caller's normal case.
+ */
+export async function findByImdbId(
+  imdbId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<TmdbSearchItem[]> {
+  const id = imdbId.trim();
+  if (!/^tt\d{5,12}$/i.test(id)) return [];
+  const data = await tmdb<TmdbFindResponse>(
+    `/find/${encodeURIComponent(id)}`,
+    { external_source: "imdb_id", language: "en-US" },
+    { revalidate: 60 * 60 * 24, signal: opts.signal },
   );
-  return data.results.map((r) => ({ ...r, media_type: kind }));
+  return [
+    ...(data.movie_results ?? []).map((r) => ({ ...r, media_type: "movie" as const })),
+    ...(data.tv_results ?? []).map((r) => ({ ...r, media_type: "tv" as const })),
+  ];
 }
 
 export function getMovie(id: number): Promise<TmdbMovieDetails> {

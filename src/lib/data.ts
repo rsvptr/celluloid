@@ -78,27 +78,33 @@ export async function getLibraryItems(userId: string): Promise<LibraryItem[]> {
         tags: { select: { tag: { select: { name: true } } } },
       },
     }),
-    // Single extra query (not per-row): every TV title's seasonId->titleId
-    // whose episodes have at least one unwatched, already-aired episode
-    // discovered inside the fresh window. `some` compiles to a correlated
-    // EXISTS against Episode, one join against Title for the owner/status
-    // filter — no N+1 across the library grid.
-    prisma.season.findMany({
-      where: {
-        title: { userId, deletedAt: null, mediaType: "TV" as const },
-        episodes: {
-          some: {
-            watched: false,
-            airDate: { lte: now },
-            discoveredAt: { gt: newEpisodeDiscoveredAfter(now) },
-          },
-        },
-      },
-      select: { titleId: true },
-      distinct: ["titleId"],
-    }),
+    // Single extra query (not per-row): every TV title with at least one
+    // unwatched, already-aired episode discovered inside the fresh window.
+    //
+    // Raw SQL because the last predicate compares two COLUMNS, which Prisma's
+    // filter language cannot express. It is what makes the badge mean anything:
+    // adding a show writes all of its episode rows at once with discoveredAt =
+    // now, so a purely time-based window flagged every freshly added series —
+    // including one that finished airing a decade ago — as having new episodes,
+    // for the whole length of the window. An episode is only NEW to the owner
+    // if it arrived after the title itself did. The one-minute grace absorbs the
+    // gap between creating the Title row and writing its episodes in the same
+    // add, which are milliseconds apart but not simultaneous.
+    prisma.$queryRaw<{ id: string }[]>`
+      SELECT DISTINCT t.id
+      FROM "Title" t
+      JOIN "Season" s ON s."titleId" = t.id
+      JOIN "Episode" e ON e."seasonId" = s.id
+      WHERE t."userId" = ${userId}
+        AND t."deletedAt" IS NULL
+        AND t."mediaType" = 'TV'::"MediaType"
+        AND e.watched = false
+        AND e."airDate" IS NOT NULL
+        AND e."airDate" <= ${now}
+        AND e."discoveredAt" > ${newEpisodeDiscoveredAfter(now)}
+        AND e."discoveredAt" > t."createdAt" + interval '1 minute'`,
   ]);
-  const newEpisodeTitleIds = new Set(freshTvSeasons.map((s) => s.titleId));
+  const newEpisodeTitleIds = new Set(freshTvSeasons.map((t) => t.id));
 
   return rows.map((t) => ({
     id: t.id,
@@ -494,28 +500,45 @@ export const getSharePayload = cache(
 );
 
 export async function getExportRows(userId: string): Promise<ExportRow[]> {
-  const rows = await prisma.title.findMany({
-    where: { userId, deletedAt: null },
-    orderBy: [{ mediaType: "asc" }, { name: "asc" }],
-    select: {
-      id: true,
-      name: true,
-      mediaType: true,
-      releaseDate: true,
-      language: true,
-      status: true,
-      rating: true,
-      tmdbRating: true,
-      genres: true,
-      totalEpisodes: true,
-      watchedEpisodes: true,
-      favorite: true,
-      notes: true,
-      watchedAt: true,
-      createdAt: true,
-      tags: { select: { tag: { select: { name: true } } } },
-    },
-  });
+  const [rows, watchCounts] = await Promise.all([
+    prisma.title.findMany({
+      where: { userId, deletedAt: null },
+      orderBy: [{ mediaType: "asc" }, { name: "asc" }],
+      select: {
+        id: true,
+        name: true,
+        mediaType: true,
+        releaseDate: true,
+        language: true,
+        status: true,
+        rating: true,
+        tmdbRating: true,
+        genres: true,
+        totalEpisodes: true,
+        watchedEpisodes: true,
+        favorite: true,
+        notes: true,
+        watchedAt: true,
+        createdAt: true,
+        tags: { select: { tag: { select: { name: true } } } },
+      },
+    }),
+    // How many times each title was actually completed, as one grouped pass
+    // over the watch log rather than a count per exported row. EPISODE_WATCHED
+    // is deliberately excluded: it counts episodes, not viewings of the show.
+    prisma.watchEvent.groupBy({
+      by: ["titleId"],
+      where: {
+        userId,
+        kind: { in: ["TITLE_COMPLETED", "REWATCH"] },
+        title: { deletedAt: null },
+      },
+      _count: { _all: true },
+    }),
+  ]);
+  const watchCountByTitle = new Map(
+    watchCounts.map((g) => [g.titleId, g._count._all]),
+  );
 
   return rows.map((t) => ({
     id: t.id,
@@ -532,6 +555,7 @@ export async function getExportRows(userId: string): Promise<ExportRow[]> {
     genres: t.genres,
     totalEpisodes: t.totalEpisodes,
     watchedEpisodes: t.watchedEpisodes,
+    watchCount: watchCountByTitle.get(t.id) ?? 0,
     favorite: t.favorite,
     notes: t.notes,
     // Full ISO timestamps: never printed, only used to sort the "recent" basis
@@ -550,9 +574,29 @@ export const getTitleDetail = cache(async (userId: string, id: string) => {
     // deletedAt: null so a trashed title's detail page resolves to notFound().
     where: { id, userId, deletedAt: null },
     include: {
+      // Seasons and episodes are selected field-by-field rather than included
+      // wholesale: a long-running show has hundreds of episode rows, and each
+      // carries a full `overview` paragraph the title page never renders. The
+      // list below is exactly what the page maps into <SeasonTracker/> plus the
+      // three fields the "new episodes" check below reads.
       seasons: {
         orderBy: { seasonNumber: "asc" },
-        include: { episodes: { orderBy: { episodeNumber: "asc" } } },
+        select: {
+          id: true,
+          seasonNumber: true,
+          name: true,
+          episodes: {
+            orderBy: { episodeNumber: "asc" },
+            select: {
+              id: true,
+              episodeNumber: true,
+              name: true,
+              airDate: true,
+              watched: true,
+              discoveredAt: true,
+            },
+          },
+        },
       },
       tags: { include: { tag: true } },
     },
@@ -564,6 +608,11 @@ export const getTitleDetail = cache(async (userId: string, id: string) => {
   // NEW_EPISODE_BACKFILL_CUTOFF comment there for why the floor exists.
   const now = new Date();
   const freshAfter = newEpisodeDiscoveredAfter(now);
+  // Must match getLibraryItems' predicate exactly, including the "arrived after
+  // the title did" clause — otherwise a show badges in the grid and not on its
+  // own page, or the reverse. See the comment on that query for why the
+  // comparison against createdAt is what makes the badge meaningful.
+  const addedWith = title.createdAt.getTime() + 60_000;
   const hasNewEpisodes =
     title.mediaType === "TV" &&
     title.seasons.some((s) =>
@@ -572,7 +621,8 @@ export const getTitleDetail = cache(async (userId: string, id: string) => {
           !e.watched &&
           e.airDate !== null &&
           e.airDate <= now &&
-          e.discoveredAt > freshAfter,
+          e.discoveredAt > freshAfter &&
+          e.discoveredAt.getTime() > addedWith,
       ),
     );
   return { ...title, hasNewEpisodes };
@@ -620,6 +670,12 @@ export interface LibraryStats {
   watchedMovies: number;
   watchedEpisodes: number;
   watchTimeMinutes: number;
+  /**
+   * How many of the watched episodes behind `watchTimeMinutes` were counted at
+   * the flat average because nothing knows their real runtime — so the page can
+   * say how much of the headline number is a guess.
+   */
+  watchTimeEstimatedEpisodes: number;
   byLanguage: { code: string; count: number }[];
   byDecade: { decade: string; count: number }[];
   byYear: { year: number; count: number }[];
@@ -645,70 +701,224 @@ export interface LibraryStats {
 }
 
 /**
- * Builds a UTC-instant -> owner-local "YYYY-MM-DD" key function for the given
- * IANA time zone, so activity/streaks bucket into the day the owner actually
- * experienced it as, not the server's UTC day. Falls back to UTC if the stored
- * zone is empty or not a valid IANA identifier (Intl throws on construction).
+ * Average episode length used when nothing knows an episode's real runtime.
+ * Exported so the stats page can name the same number in its caveat instead of
+ * hardcoding a second copy that could drift away from the arithmetic.
  */
-function dayKeyFormatter(timeZone: string): (d: Date) => string {
+export const ESTIMATED_EPISODE_MINUTES = 42;
+
+/**
+ * A UTC instant as the owner-local "YYYY-MM-DD" it happened on, so activity and
+ * streaks bucket into the day the owner actually experienced it as, not the
+ * server's UTC day. Falls back to UTC if the stored zone is empty or not a valid
+ * IANA identifier (Intl throws on construction).
+ */
+export function dayKeyInZone(date: Date, timeZone: string): string {
+  const options: Intl.DateTimeFormatOptions = {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  };
   let fmt: Intl.DateTimeFormat;
   try {
-    fmt = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    });
+    fmt = new Intl.DateTimeFormat("en-US", { ...options, timeZone });
   } catch {
-    fmt = new Intl.DateTimeFormat("en-US", {
-      timeZone: "UTC",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    });
+    fmt = new Intl.DateTimeFormat("en-US", { ...options, timeZone: "UTC" });
   }
-  return (d: Date) => {
-    const parts = fmt.formatToParts(d);
-    const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
-    return `${get("year")}-${get("month")}-${get("day")}`;
-  };
+  const parts = fmt.formatToParts(date);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+// IANA identifiers are slash-separated alphanumeric segments ("Etc/GMT+5",
+// "America/Argentina/Buenos_Aires"). Offset forms like "+05:30" are deliberately
+// excluded: Intl accepts them, but Postgres reads the sign the other way round,
+// so letting one through would silently shift every bucket by twice the offset.
+const IANA_TIME_ZONE = /^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)*$/;
+
+/**
+ * The zone getStats hands to Postgres for day bucketing. `AT TIME ZONE` errors
+ * on an unknown zone, which would take the whole stats page down over a stored
+ * value the owner may not even be able to see, so anything that isn't a valid
+ * IANA name degrades to UTC — the same fallback dayKeyInZone applies.
+ */
+export function resolveTimeZone(timeZone: string): string {
+  if (!IANA_TIME_ZONE.test(timeZone)) return "UTC";
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone });
+    return timeZone;
+  } catch {
+    return "UTC";
+  }
+}
+
+/**
+ * Current and longest run of consecutive active days, over owner-local
+ * "YYYY-MM-DD" keys. Once we have a Y-M-D key, stepping by 24h on a UTC-midnight
+ * parse of that key always lands on the correct adjacent calendar date
+ * (Gregorian day math, independent of the origin time zone), so a DST shift in
+ * the owner's zone can't split a run.
+ */
+export function computeStreaks(
+  activeDayKeys: string[],
+  todayKey: string,
+): { currentStreak: number; longestStreak: number } {
+  const DAY = 86_400_000;
+  const daySet = new Set(activeDayKeys);
+  const sorted = [...daySet].sort();
+
+  let longestStreak = 0;
+  let run = 0;
+  let prev: number | null = null;
+  for (const k of sorted) {
+    const t = Date.parse(`${k}T00:00:00Z`);
+    run = prev !== null && t - prev === DAY ? run + 1 : 1;
+    if (run > longestStreak) longestStreak = run;
+    prev = t;
+  }
+
+  const dayBefore = (key: string) =>
+    new Date(Date.parse(`${key}T00:00:00Z`) - DAY).toISOString().slice(0, 10);
+  // Today is still in progress, so an empty today doesn't end a streak —
+  // yesterday is allowed as the starting point.
+  let cursorKey = daySet.has(todayKey) ? todayKey : dayBefore(todayKey);
+  let currentStreak = 0;
+  while (daySet.has(cursorKey)) {
+    currentStreak++;
+    cursorKey = dayBefore(cursorKey);
+  }
+
+  return { currentStreak, longestStreak };
+}
+
+export interface ActivityDay {
+  /** Owner-local "YYYY-MM-DD", matching the keys in LibraryStats.activity. */
+  date: string;
+  titles: { id: string; name: string; count: number }[];
+  /** Titles past the per-day cap, so the panel can say how many it left out. */
+  more: number;
+}
+
+/**
+ * The heatmap renders 53 weeks; 400 days covers that plus the partial week the
+ * grid pads with, so every clickable cell has its day available.
+ */
+const ACTIVITY_DETAIL_DAYS = 400;
+/** Titles listed for a single day before the rest collapse into a count. */
+const ACTIVITY_DAY_TITLE_CAP = 12;
+
+/**
+ * What was watched on each day of the heatmap window, so a cell can answer the
+ * question it raises ("what did I watch that day?") instead of only showing a
+ * count. Grouped by (day, title) in Postgres for the same reason getStats
+ * buckets there: an owner who tracks episodes individually has one row per
+ * episode, and streaming a year of those to count them client-side is wasteful.
+ */
+export async function getActivityDays(userId: string): Promise<ActivityDay[]> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { timeZone: true },
+  });
+  const timeZone = resolveTimeZone(user?.timeZone || "UTC");
+  const since = new Date(Date.now() - ACTIVITY_DETAIL_DAYS * 86_400_000);
+  const rows = await prisma.$queryRaw<
+    { date: string; id: string; name: string; count: number }[]
+  >`
+    SELECT to_char(
+             ((e."occurredAt" AT TIME ZONE 'UTC') AT TIME ZONE ${timeZone}::text)::date,
+             'YYYY-MM-DD'
+           ) AS "date",
+           t.id AS "id",
+           t.name AS "name",
+           COUNT(*)::int AS "count"
+    FROM "WatchEvent" e
+    JOIN "Title" t ON t.id = e."titleId"
+    WHERE e."userId" = ${userId}
+      AND t."deletedAt" IS NULL
+      AND e."occurredAt" >= ${since}
+    GROUP BY 1, t.id, t.name
+    ORDER BY 1 ASC, COUNT(*) DESC, t.name ASC`;
+
+  const byDay = new Map<string, ActivityDay>();
+  for (const r of rows) {
+    const day = byDay.get(r.date) ?? { date: r.date, titles: [], more: 0 };
+    if (day.titles.length < ACTIVITY_DAY_TITLE_CAP) {
+      day.titles.push({ id: r.id, name: r.name, count: r.count });
+    } else {
+      day.more += 1;
+    }
+    byDay.set(r.date, day);
+  }
+  return [...byDay.values()];
 }
 
 export async function getStats(userId: string): Promise<LibraryStats> {
-  const [user, titles, watchEvents] = await Promise.all([
-    prisma.user.findUnique({
-      where: { id: userId },
-      select: { timeZone: true },
-    }),
-    prisma.title.findMany({
-      where: { userId, deletedAt: null },
-      select: {
-        id: true,
-        name: true,
-        mediaType: true,
-        status: true,
-        language: true,
-        releaseDate: true,
-        rating: true,
-        runtime: true,
-        totalEpisodes: true,
-        watchedEpisodes: true,
-        genres: true,
-      },
-    }),
-    // Append-only activity log: drives the heatmap/streaks and rewatch stats.
-    // Excludes soft-deleted titles via the relation filter.
-    prisma.watchEvent.findMany({
-      where: { userId, title: { deletedAt: null } },
-      select: {
-        kind: true,
-        occurredAt: true,
-        titleId: true,
-        title: { select: { name: true } },
-      },
-    }),
-  ]);
-  const dayKey = dayKeyFormatter(user?.timeZone || "UTC");
+  const [user, titles, watchedEpisodeRuntime, mostRewatched, totalRewatches] =
+    await Promise.all([
+      prisma.user.findUnique({
+        where: { id: userId },
+        select: { timeZone: true },
+      }),
+      prisma.title.findMany({
+        where: { userId, deletedAt: null },
+        select: {
+          id: true,
+          name: true,
+          mediaType: true,
+          status: true,
+          language: true,
+          releaseDate: true,
+          rating: true,
+          runtime: true,
+          totalEpisodes: true,
+          watchedEpisodes: true,
+          genres: true,
+        },
+      }),
+      // Real minutes behind the watch-time KPI, plus how many watched episodes
+      // have no runtime to fall back on. Excludes soft-deleted titles the same
+      // way the title query does, two relations up.
+      prisma.episode.aggregate({
+        where: { watched: true, season: { title: { userId, deletedAt: null } } },
+        _sum: { runtime: true },
+        _count: { _all: true, runtime: true },
+      }),
+      // Top rewatched titles, grouped and truncated in SQL. `HAVING >= 2` keeps
+      // a single logged rewatch out of a "most rewatched" list; the name tiebreak
+      // makes an otherwise arbitrary ordering stable between page loads.
+      prisma.$queryRaw<{ id: string; name: string; count: number }[]>`
+        SELECT t.id AS "id", t.name AS "name", COUNT(*)::int AS "count"
+        FROM "WatchEvent" e
+        JOIN "Title" t ON t.id = e."titleId"
+        WHERE e."userId" = ${userId}
+          AND e.kind = 'REWATCH'::"WatchEventKind"
+          AND t."deletedAt" IS NULL
+        GROUP BY t.id, t.name
+        HAVING COUNT(*) >= 2
+        ORDER BY COUNT(*) DESC, t.name ASC
+        LIMIT 3`,
+      prisma.watchEvent.count({
+        where: { userId, kind: "REWATCH", title: { deletedAt: null } },
+      }),
+    ]);
+
+  // Day bucketing happens in Postgres — the alternative streamed every watch
+  // event the owner has ever recorded (tens of thousands of rows once episodes
+  // are tracked individually) just to count them by day. It runs after the batch
+  // above because the owner's zone is part of the query, and it must be a zone
+  // Postgres will accept: see resolveTimeZone.
+  const timeZone = resolveTimeZone(user?.timeZone || "UTC");
+  const activity = await prisma.$queryRaw<{ date: string; count: number }[]>`
+    SELECT to_char(
+             ((e."occurredAt" AT TIME ZONE 'UTC') AT TIME ZONE ${timeZone}::text)::date,
+             'YYYY-MM-DD'
+           ) AS "date",
+           COUNT(*)::int AS "count"
+    FROM "WatchEvent" e
+    JOIN "Title" t ON t.id = e."titleId"
+    WHERE e."userId" = ${userId} AND t."deletedAt" IS NULL
+    GROUP BY 1
+    ORDER BY 1`;
 
   const byStatus = {
     WATCHLIST: 0,
@@ -723,7 +933,6 @@ export async function getStats(userId: string): Promise<LibraryStats> {
   const genreCount = new Map<string, number>();
   const genreRating = new Map<string, { sum: number; count: number }>();
   const ratingCount = new Array<number>(11).fill(0); // index = rating (1..10)
-  const dayCount = new Map<string, number>(); // owner-local YYYY-MM-DD -> count
 
   let movies = 0;
   let tv = 0;
@@ -745,8 +954,7 @@ export async function getStats(userId: string): Promise<LibraryStats> {
       tv++;
       watchedEpisodes += t.watchedEpisodes;
       episodesTotal += t.totalEpisodes ?? 0;
-      // ~42 min average if runtime missing
-      watchTimeMinutes += t.watchedEpisodes * (t.runtime ?? 42);
+      // TV minutes come from the episode rows below, not from Title.runtime.
     }
     if (t.language) langCount.set(t.language, (langCount.get(t.language) ?? 0) + 1);
     if (t.releaseDate) {
@@ -769,26 +977,25 @@ export async function getStats(userId: string): Promise<LibraryStats> {
     }
   }
 
-  // Activity/streaks are driven by the event log (every kind counts), bucketed
-  // into the owner's local calendar day. Rewatch stats are tallied from the
-  // same pass since REWATCH is one of the event kinds.
-  let totalRewatches = 0;
-  const rewatchByTitle = new Map<string, { name: string; count: number }>();
-  for (const e of watchEvents) {
-    const k = dayKey(e.occurredAt);
-    dayCount.set(k, (dayCount.get(k) ?? 0) + 1);
-    if (e.kind === "REWATCH") {
-      totalRewatches++;
-      const agg = rewatchByTitle.get(e.titleId) ?? { name: e.title.name, count: 0 };
-      agg.count++;
-      rewatchByTitle.set(e.titleId, agg);
-    }
-  }
-  const mostRewatched = [...rewatchByTitle.entries()]
-    .map(([id, agg]) => ({ id, name: agg.name, count: agg.count }))
-    .filter((r) => r.count >= 2)
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 3);
+  // TV watch time is the sum of the real per-episode runtimes of the episodes
+  // marked watched. It used to be watchedEpisodes * (Title.runtime ?? 42), but
+  // Title.runtime holds TMDB's episode_run_time, which is empty for most modern
+  // shows — so nearly every series was priced at a flat 42 minutes, well short
+  // for drama and well over for sitcoms. Episodes with no runtime of their own
+  // still take the average, as do episodes the denormalized counter knows about
+  // but has no row for (a restored backup that carried no episodes), and their
+  // combined count is reported so the page can qualify the headline number.
+  const untrackedWatchedEpisodes = Math.max(
+    0,
+    watchedEpisodes - watchedEpisodeRuntime._count._all,
+  );
+  const watchTimeEstimatedEpisodes =
+    watchedEpisodeRuntime._count._all -
+    watchedEpisodeRuntime._count.runtime +
+    untrackedWatchedEpisodes;
+  watchTimeMinutes +=
+    (watchedEpisodeRuntime._sum.runtime ?? 0) +
+    watchTimeEstimatedEpisodes * ESTIMATED_EPISODE_MINUTES;
 
   const averageRating =
     rated.length > 0
@@ -807,37 +1014,12 @@ export async function getStats(userId: string): Promise<LibraryStats> {
     }
   }
 
-  // Streaks over distinct active days.
-  const activeDayKeys = [...dayCount.keys()].sort();
-  let longestStreak = 0;
-  let run = 0;
-  let prev: number | null = null;
-  const DAY = 86_400_000;
-  for (const k of activeDayKeys) {
-    const t = Date.parse(`${k}T00:00:00Z`);
-    run = prev !== null && t - prev === DAY ? run + 1 : 1;
-    if (run > longestStreak) longestStreak = run;
-    prev = t;
-  }
-  // Current streak counts back from today (or yesterday), "today" meaning the
-  // owner's local calendar day. Once we have a Y-M-D key, stepping by 24h on a
-  // UTC-midnight parse of that key always lands on the correct adjacent
-  // calendar date (Gregorian day math, independent of the origin time zone).
-  const daySet = new Set(activeDayKeys);
-  let currentStreak = 0;
-  let cursorKey = dayKey(new Date());
-  if (!daySet.has(cursorKey)) {
-    // allow "yesterday" start
-    cursorKey = new Date(Date.parse(`${cursorKey}T00:00:00Z`) - DAY)
-      .toISOString()
-      .slice(0, 10);
-  }
-  while (daySet.has(cursorKey)) {
-    currentStreak++;
-    cursorKey = new Date(Date.parse(`${cursorKey}T00:00:00Z`) - DAY)
-      .toISOString()
-      .slice(0, 10);
-  }
+  // Streaks over distinct active days, counted back from the owner's local
+  // "today" (see computeStreaks for the day arithmetic).
+  const { currentStreak, longestStreak } = computeStreaks(
+    activity.map((a) => a.date),
+    dayKeyInZone(new Date(), timeZone),
+  );
 
   return {
     total: titles.length,
@@ -848,6 +1030,7 @@ export async function getStats(userId: string): Promise<LibraryStats> {
     watchedEpisodes,
     episodesTotal,
     watchTimeMinutes,
+    watchTimeEstimatedEpisodes,
     byLanguage: [...langCount.entries()]
       .map(([code, count]) => ({ code, count }))
       .sort((a, b) => b.count - a.count),
@@ -884,12 +1067,11 @@ export async function getStats(userId: string): Promise<LibraryStats> {
       rating: i + 1,
       count: ratingCount[i + 1],
     })),
-    activity: [...dayCount.entries()]
-      .map(([date, count]) => ({ date, count }))
-      .sort((a, b) => a.date.localeCompare(b.date)),
+    // Already one row per active day, ordered oldest-first by the query.
+    activity,
     currentStreak,
     longestStreak,
-    activeDays: dayCount.size,
+    activeDays: activity.length,
     totalRewatches,
     mostRewatched,
   };

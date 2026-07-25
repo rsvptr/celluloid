@@ -4,7 +4,15 @@ import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { addFromTmdb, rematchTitle } from "@/lib/actions";
 import { mapLimit } from "@/lib/async";
-import { searchByType } from "@/lib/tmdb";
+import {
+  findByImdbId,
+  getMovie,
+  getTv,
+  searchByType,
+  type TmdbMovieDetails,
+  type TmdbSearchItem,
+  type TmdbTvDetails,
+} from "@/lib/tmdb";
 import { pickBest } from "@/lib/tmdb-match";
 import type { ParsedTitle } from "@/lib/import/parse-excel";
 import {
@@ -13,18 +21,40 @@ import {
   IMPORT_MAX_ATTEMPTS,
   INVALID_STAGED_ROW_ERROR,
   INVALID_STAGED_ROW_WARNING,
+  MATCH_TIMED_OUT_ERROR,
+  MATCH_TIMED_OUT_WARNING,
   parsedTitleSchema,
   planImportActions,
   proposedMatchFromTmdb,
   safeStagedNormalized,
   scoreImportMatch,
   stagedNormalizedSchema,
+  type ImportItemAction,
   type ProposedImportMatch,
   type StagedImportItemView,
   type StagedImportJobView,
 } from "@/lib/import-staging-format";
 
 type JobWithItems = Awaited<ReturnType<typeof findImportJob>>;
+
+/**
+ * Wall-clock budget for the TMDB matching phase, measured from the start of the
+ * upload request and set well under that route's maxDuration. Matching 250 rows
+ * used to run unbounded: when the platform killed the function mid-parse neither
+ * the catch nor the "-> FAILED" update ran, and the job sat in PARSING forever
+ * while the Add page kept offering that empty job for resume. Stopping on our
+ * own terms leaves the unmatched rows individually retryable in review instead.
+ */
+export const IMPORT_STAGING_BUDGET_MS = 35_000;
+
+/**
+ * How long a PARSING job may sit before it is treated as the corpse of a killed
+ * upload rather than work in progress. A parse only lives for the length of one
+ * request, so anything older than this is never coming back.
+ */
+const STALE_PARSING_MS = 5 * 60_000;
+
+const NO_MATCH_WARNING = "No confident TMDB match. Choose a match or exclude this row.";
 
 function parsedYear(parsed: ParsedTitle): number | null {
   if (!parsed.releaseDate) return null;
@@ -84,9 +114,30 @@ export async function getImportJobView(
   return job ? serializeImportJob(job) : null;
 }
 
+/**
+ * The newest job the Add page has to say something about, or null. A parse only
+ * exists for the life of its upload request, which returns the staged job to the
+ * browser itself, so a PARSING row here is either that request still running or
+ * the wreck of one the platform killed. Both used to be offered for resume,
+ * which handed review an item-less job on every visit to Add — Commit was a
+ * no-op and nothing said Cancel was the only way out. The wrecks are retired as
+ * FAILED on the way past so the job list stays honest, but a parse that started
+ * moments ago is still returned, as PARSING: hiding it left a second tab showing
+ * a clean upload form while a large file was genuinely being matched, so the
+ * owner uploaded it again and got two jobs for one file. A PARSING job is
+ * reported, not resumable — it carries no items to review yet.
+ */
 export async function getActiveImportJobView(
   userId: string,
 ): Promise<StagedImportJobView | null> {
+  await prisma.importJob.updateMany({
+    where: {
+      userId,
+      status: "PARSING",
+      createdAt: { lt: new Date(Date.now() - STALE_PARSING_MS) },
+    },
+    data: { status: "FAILED", summary: asJson({ error: "STAGING_ABANDONED" }) },
+  });
   const job = await prisma.importJob.findFirst({
     where: {
       userId,
@@ -135,6 +186,20 @@ export async function reconcileImportActions(userId: string, jobId: string) {
       )
       .map((item) => item.id),
   );
+  // Rows the staging deadline cut short are ordinary unmatched rows, but their
+  // warning has to keep saying why. Warnings are recomputed from scratch below,
+  // so without re-asserting the marker the first review edit anywhere in the job
+  // would silently relabel them as "no confident match".
+  const timedOutItemIds = new Set(
+    job.items
+      .filter(
+        (item) =>
+          item.errorCode === MATCH_TIMED_OUT_ERROR &&
+          !item.titleId &&
+          item.proposedTmdbId === null,
+      )
+      .map((item) => item.id),
+  );
   const existingKeys = await existingProposalKeys(userId, job.items);
   const plan = planImportActions(
     job.items.map((item) => ({
@@ -162,8 +227,18 @@ export async function reconcileImportActions(userId: string, jobId: string) {
       }
       const next = plan.get(item.id);
       const invalid = invalidItemIds.has(item.id) && next?.action !== "SKIP";
-      const nextWarning = invalid ? INVALID_STAGED_ROW_WARNING : next?.warning;
-      const nextErrorCode = invalid ? INVALID_STAGED_ROW_ERROR : null;
+      const timedOut =
+        !invalid && next?.action === "CONFLICT" && timedOutItemIds.has(item.id);
+      const nextWarning = invalid
+        ? INVALID_STAGED_ROW_WARNING
+        : timedOut
+          ? MATCH_TIMED_OUT_WARNING
+          : next?.warning;
+      const nextErrorCode = invalid
+        ? INVALID_STAGED_ROW_ERROR
+        : timedOut
+          ? MATCH_TIMED_OUT_ERROR
+          : null;
       if (
         !next ||
         (next.action === item.action &&
@@ -185,51 +260,163 @@ export async function reconcileImportActions(userId: string, jobId: string) {
   return getImportJobView(userId, jobId);
 }
 
+function movieAsSearchItem(movie: TmdbMovieDetails): TmdbSearchItem {
+  return {
+    id: movie.id,
+    media_type: "movie",
+    title: movie.title,
+    original_title: movie.original_title,
+    release_date: movie.release_date,
+    poster_path: movie.poster_path,
+    original_language: movie.original_language,
+  };
+}
+
+function tvAsSearchItem(tv: TmdbTvDetails): TmdbSearchItem {
+  return {
+    id: tv.id,
+    media_type: "tv",
+    name: tv.name,
+    original_name: tv.original_name,
+    first_air_date: tv.first_air_date,
+    poster_path: tv.poster_path,
+    original_language: tv.original_language,
+  };
+}
+
+/**
+ * Resolve a row through the exact identifier its file carried, if any. A TMDB or
+ * IMDb id names one title outright, so honouring it skips the fuzzy name search
+ * entirely — the single biggest accuracy win on a large export, where "Drishyam"
+ * or "The Office" otherwise resolves by popularity. Never throws: a dead id or a
+ * TMDB failure just returns null so the caller falls back to searching by name.
+ */
+async function resolveByExactId(
+  parsed: ParsedTitle,
+  signal: AbortSignal,
+): Promise<TmdbSearchItem | null> {
+  const tmdbId = parsed.tmdbId ?? null;
+  if (tmdbId !== null) {
+    // The Type column is a hint, not a guarantee, and a TMDB id means nothing
+    // without its kind — so an id that doesn't exist as the declared kind is
+    // tried as the other one before we give up on it.
+    const kinds =
+      parsed.mediaType === "tv" ? (["tv", "movie"] as const) : (["movie", "tv"] as const);
+    for (const kind of kinds) {
+      try {
+        return kind === "movie"
+          ? movieAsSearchItem(await getMovie(tmdbId))
+          : tvAsSearchItem(await getTv(tmdbId));
+      } catch {
+        // Wrong kind or unknown id — try the other kind, then the name search.
+      }
+    }
+  }
+  if (parsed.imdbId) {
+    try {
+      const found = await findByImdbId(parsed.imdbId, { signal });
+      return found.find((item) => item.media_type === parsed.mediaType) ?? found[0] ?? null;
+    } catch {
+      // Fall through to the name search.
+    }
+  }
+  return null;
+}
+
 export async function stageParsedImport(input: {
   userId: string;
   jobId: string;
   parsed: ParsedTitle[];
   summary: Record<string, unknown>;
+  /** Epoch ms at which matching must stop. See IMPORT_STAGING_BUDGET_MS. */
+  deadlineAt?: number;
 }): Promise<StagedImportJobView> {
-  const matched = await mapLimit(
-    input.parsed.map((parsed, index) => ({ parsed, rowNumber: index + 1 })),
-    6,
-    async ({ parsed, rowNumber }) => {
-      const validated = parsedTitleSchema.safeParse(parsed);
-      if (!validated.success) {
-        const normalized = safeStagedNormalized({ parsed, proposed: null }, rowNumber);
-        return {
-          raw: parsed,
-          parsed: normalized.data.parsed,
-          proposed: null,
-          score: null,
-          invalid: true,
-        };
-      }
+  const deadlineAt = input.deadlineAt ?? Date.now() + IMPORT_STAGING_BUDGET_MS;
+  const expired = () => Date.now() >= deadlineAt;
+  // Abort searches still in flight when the budget runs out, rather than paying
+  // each one's own multi-attempt deadline past ours.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(0, deadlineAt - Date.now()));
 
-      const validParsed = validated.data;
-      try {
-        const results = await searchByType(validParsed.mediaType, validParsed.name);
-        const best = pickBest(results, validParsed.name, parsedYear(validParsed));
-        return {
-          raw: parsed,
-          parsed: validParsed,
-          proposed: best ? proposedMatchFromTmdb(best) : null,
-          score: best ? scoreImportMatch(validParsed, best) : null,
-          invalid: false,
-        };
-      } catch (error) {
-        console.error(`Staged import match failed for ${validParsed.name}:`, error);
-        return {
+  let matched: {
+    raw: ParsedTitle;
+    parsed: ParsedTitle;
+    proposed: ProposedImportMatch | null;
+    score: number | null;
+    invalid: boolean;
+    timedOut: boolean;
+  }[];
+  try {
+    matched = await mapLimit(
+      input.parsed.map((parsed, index) => ({ parsed, rowNumber: index + 1 })),
+      6,
+      async ({ parsed, rowNumber }) => {
+        const validated = parsedTitleSchema.safeParse(parsed);
+        if (!validated.success) {
+          const normalized = safeStagedNormalized({ parsed, proposed: null }, rowNumber);
+          return {
+            raw: parsed,
+            parsed: normalized.data.parsed,
+            proposed: null,
+            score: null,
+            invalid: true,
+            timedOut: false,
+          };
+        }
+
+        const validParsed = validated.data;
+        const unmatched = (timedOut: boolean) => ({
           raw: parsed,
           parsed: validParsed,
           proposed: null,
           score: null,
           invalid: false,
-        };
-      }
-    },
-  );
+          timedOut,
+        });
+        if (expired()) return unmatched(true);
+
+        try {
+          const exact = await resolveByExactId(validParsed, controller.signal);
+          if (exact) {
+            return {
+              raw: parsed,
+              // An exact id also settles the kind, so correct the row when the
+              // file's Type column disagreed with the identifier it supplied.
+              parsed: {
+                ...validParsed,
+                mediaType: exact.media_type === "tv" ? ("tv" as const) : ("movie" as const),
+              },
+              proposed: proposedMatchFromTmdb(exact),
+              // An identifier is certain; there is nothing for review to weigh.
+              score: 1,
+              invalid: false,
+              timedOut: false,
+            };
+          }
+          const year = parsedYear(validParsed);
+          const results = await searchByType(validParsed.mediaType, validParsed.name, 1, {
+            year,
+            signal: controller.signal,
+          });
+          const best = pickBest(results, validParsed.name, year);
+          return {
+            raw: parsed,
+            parsed: validParsed,
+            proposed: best ? proposedMatchFromTmdb(best) : null,
+            score: best ? scoreImportMatch(validParsed, best) : null,
+            invalid: false,
+            timedOut: false,
+          };
+        } catch (error) {
+          if (expired()) return unmatched(true);
+          console.error(`Staged import match failed for ${validParsed.name}:`, error);
+          return unmatched(false);
+        }
+      },
+    );
+  } finally {
+    clearTimeout(timer);
+  }
 
   await prisma.importItem.createMany({
     data: matched.map((item, index) => ({
@@ -246,17 +433,27 @@ export async function stageParsedImport(input: {
             : null,
       matchScore: item.score,
       action: item.invalid || !item.proposed ? "CONFLICT" : "CREATE",
-      errorCode: item.invalid ? INVALID_STAGED_ROW_ERROR : null,
+      errorCode: item.invalid
+        ? INVALID_STAGED_ROW_ERROR
+        : item.timedOut
+          ? MATCH_TIMED_OUT_ERROR
+          : null,
       warning: item.invalid
         ? INVALID_STAGED_ROW_WARNING
         : item.proposed
           ? null
-          : "No confident TMDB match. Choose a match or exclude this row.",
+          : item.timedOut
+            ? MATCH_TIMED_OUT_WARNING
+            : NO_MATCH_WARNING,
     })),
   });
+  const timedOutRows = matched.filter((item) => item.timedOut).length;
   await prisma.importJob.update({
     where: { id: input.jobId },
-    data: { status: "READY_FOR_REVIEW", summary: asJson(input.summary) },
+    data: {
+      status: "READY_FOR_REVIEW",
+      summary: asJson({ ...input.summary, timedOutRows }),
+    },
   });
   const job = await reconcileImportActions(input.userId, input.jobId);
   if (!job) throw new Error("Staged import job disappeared after creation.");
@@ -315,6 +512,38 @@ export async function updateImportItemReview(input: {
   return reconcileImportActions(input.userId, input.jobId);
 }
 
+/**
+ * Exclude a set of reviewed rows in one pass. Reviewing 250 rows one checkbox at
+ * a time cost a round trip — and a full reconcile — per row; this settles a
+ * whole selection with a single write. Rows that already produced a title are
+ * left alone: they are committed history, not proposals.
+ */
+export async function excludeImportItems(input: {
+  userId: string;
+  jobId: string;
+  itemIds: string[];
+}): Promise<StagedImportJobView | null> {
+  const job = await prisma.importJob.findFirst({
+    where: {
+      id: input.jobId,
+      userId: input.userId,
+      status: { in: ["READY_FOR_REVIEW", "PARTIAL"] },
+    },
+    select: { id: true },
+  });
+  if (!job) return null;
+
+  await prisma.importItem.updateMany({
+    where: { id: { in: input.itemIds }, jobId: input.jobId, titleId: null },
+    data: { action: "SKIP", errorCode: null, warning: null },
+  });
+  await prisma.importJob.updateMany({
+    where: { id: input.jobId, userId: input.userId, status: { in: ["PARTIAL", "FAILED"] } },
+    data: { status: "READY_FOR_REVIEW", committedAt: null },
+  });
+  return reconcileImportActions(input.userId, input.jobId);
+}
+
 function statusForParsed(parsed: ParsedTitle): "WATCHLIST" | "WATCHING" | "WATCHED" {
   if (parsed.status === "WATCHED") return "WATCHED";
   if (parsed.status === "PARTIALLY_WATCHED") return "WATCHING";
@@ -322,17 +551,37 @@ function statusForParsed(parsed: ParsedTitle): "WATCHLIST" | "WATCHING" | "WATCH
 }
 
 /**
- * Seat a freshly created import title's personal status and source. Movies (and
- * any non-watched import) take the plain single-row write. A TV title imported as
- * WATCHED must be episode-backed: addFromTmdb creates every episode unwatched, so
- * writing status = WATCHED alone would leave a 0/N "watched" show that demotes to
- * WATCHING the first time the owner ticks an episode (recomputeProgress recounts
- * from the rows). Mark every episode watched — with no date, since the import
- * format carries none — sync watchedEpisodes to the real count, then derive the
- * status from those rows. Runs under a Title-FOR-UPDATE-first lock (the same
- * order every write in this app takes) so a concurrent episode toggle's recompute
- * can't interleave. Mirrors run-import's markWatched/deriveStatus contract while
- * deliberately leaving WatchEvents absent (agreed: the format has no dates).
+ * The personal fields a staged row can seat on a title it just created. A rating
+ * and a watch date are facts the owner supplied in the file, so they are written
+ * where the file provides them; a sheet with neither leaves both untouched. Still
+ * no WatchEvent: a date says when a title was finished, not how many times it was
+ * watched, and inventing history would move the recommendation engine's recency
+ * signal and the stats activity views.
+ */
+function personalFieldsFor(parsed: ParsedTitle): {
+  rating?: number;
+  watchedAt?: Date;
+} {
+  const watchedAt = parsed.watchedAt ? new Date(`${parsed.watchedAt}T00:00:00.000Z`) : null;
+  return {
+    ...(parsed.rating != null ? { rating: parsed.rating } : {}),
+    ...(watchedAt && !Number.isNaN(watchedAt.getTime()) ? { watchedAt } : {}),
+  };
+}
+
+/**
+ * Seat a freshly created import title's personal status, source, and any rating
+ * or watch date the sheet carried. Movies (and any non-watched import) take the
+ * plain single-row write. A TV title imported as WATCHED must be episode-backed:
+ * addFromTmdb creates every episode unwatched, so writing status = WATCHED alone
+ * would leave a 0/N "watched" show that demotes to WATCHING the first time the
+ * owner ticks an episode (recomputeProgress recounts from the rows). Mark the
+ * aired episodes watched — with no date, since a sheet dates the show, not each
+ * episode — sync watchedEpisodes to the real count, then derive the status from
+ * those rows. Runs under a Title-FOR-UPDATE-first lock (the same order every
+ * write in this app takes) so a concurrent episode toggle's recompute can't
+ * interleave. Mirrors run-import's markWatched/deriveStatus contract while
+ * deliberately leaving WatchEvents absent.
  */
 async function applyStagedStatus(
   userId: string,
@@ -341,10 +590,11 @@ async function applyStagedStatus(
   parsed: ParsedTitle,
 ): Promise<void> {
   const status = statusForParsed(parsed);
+  const personal = personalFieldsFor(parsed);
   if (dbMediaType !== "TV" || status !== "WATCHED") {
     await prisma.title.updateMany({
       where: { id: titleId, userId },
-      data: { status, source: parsed.source },
+      data: { status, source: parsed.source, ...personal },
     });
     return;
   }
@@ -353,60 +603,96 @@ async function applyStagedStatus(
     const rows = await tx.$queryRaw<{ id: string }[]>`
       SELECT id FROM "Title" WHERE id = ${titleId} AND "userId" = ${userId} FOR UPDATE`;
     if (!rows[0]) return; // title removed concurrently
-    // Mark every episode watched (no date — the import format carries none), then
-    // sync the denormalized counter to the real count.
+    // Mark every AIRED episode watched (no date — a sheet dates the show as a
+    // whole, never an episode). This used to mark every episode, which pre-ticked
+    // next week's episode of a still-airing show: a pre-marked episode is already
+    // `watched` when it airs, so its "New" badge never fires and the episode the
+    // owner was waiting for arrives looking like something already seen. A null
+    // airDate means TMDB doesn't know, which counts as aired — the same rule the
+    // episode tracker's bulk marks use.
+    const now = new Date();
     await tx.episode.updateMany({
-      where: { season: { titleId } },
+      where: {
+        season: { titleId },
+        OR: [{ airDate: null }, { airDate: { lte: now } }],
+      },
       data: { watched: true, watchedAt: null },
     });
-    const total = await tx.episode.count({ where: { season: { titleId } } });
+    // Count what is actually watched rather than assuming the sheet's "watched"
+    // covers the whole run: with unaired episodes left alone the total is no
+    // longer the watched count, and a denormalized cache that disagrees with the
+    // rows is corrected — visibly, under the owner — by the next recompute.
+    const [total, watched] = await Promise.all([
+      tx.episode.count({ where: { season: { titleId } } }),
+      tx.episode.count({ where: { season: { titleId }, watched: true } }),
+    ]);
     await tx.title.update({
       where: { id: titleId },
       data: {
         source: parsed.source,
-        watchedEpisodes: total,
-        // Episode-backed status. With every episode now watched, run-import's
-        // deriveStatus(WATCHED, total, total) resolves to WATCHED whether or not
-        // the show has episodes, so `status` is already WATCHED here (narrowed
-        // by the guard above). Writing it from that reconciled state — not blindly
-        // from the sheet at 0/N — is what stops the first episode toggle's
-        // recompute from demoting the show to WATCHING.
-        status,
+        ...personal,
+        watchedEpisodes: watched,
+        // Episode-backed status, derived from the rows the way recomputeProgress
+        // will derive it: caught up on an airing show is WATCHING, not WATCHED.
+        // Writing that reconciled value — not the sheet's WATCHED at 0/N, and not
+        // WATCHED over a run with episodes still to come — is what stops the
+        // first episode toggle's recompute from changing the status underneath
+        // the owner. A show with no episode rows at all keeps the sheet's word:
+        // nothing will ever recount it.
+        status:
+          total === 0
+            ? status
+            : watched >= total
+              ? "WATCHED"
+              : watched > 0
+                ? "WATCHING"
+                : "WATCHLIST",
       },
     });
   });
 }
 
-async function commitOneImportItem(userId: string, itemId: string) {
+/**
+ * The fields a commit wrote to one row. The caller folds this back into the job
+ * it already holds, so settling the batch's outcome doesn't need to re-read
+ * every row of a job it just walked. Null means the row was left untouched.
+ */
+type CommittedItemPatch = {
+  titleId?: string | null;
+  action?: ImportItemAction;
+  warning?: string | null;
+  errorCode?: string | null;
+  attempts?: number;
+} | null;
+
+async function commitOneImportItem(
+  userId: string,
+  itemId: string,
+): Promise<CommittedItemPatch> {
   const item = await prisma.importItem.findFirst({
     where: { id: itemId, job: { userId } },
   });
-  if (!item || item.titleId || item.action === "SKIP" || item.action === "CONFLICT") return;
-  if (item.action === "FAILED" && item.attempts >= IMPORT_MAX_ATTEMPTS) return;
+  if (!item || item.titleId || item.action === "SKIP" || item.action === "CONFLICT") {
+    return null;
+  }
+  if (item.action === "FAILED" && item.attempts >= IMPORT_MAX_ATTEMPTS) return null;
 
   const normalizedResult = stagedNormalizedSchema.safeParse(item.normalized);
   if (!normalizedResult.success) {
-    await prisma.importItem.update({
-      where: { id: item.id },
-      data: {
-        action: "CONFLICT",
-        errorCode: INVALID_STAGED_ROW_ERROR,
-        warning: INVALID_STAGED_ROW_WARNING,
-      },
-    });
-    return;
+    const patch = {
+      action: "CONFLICT" as const,
+      errorCode: INVALID_STAGED_ROW_ERROR,
+      warning: INVALID_STAGED_ROW_WARNING,
+    };
+    await prisma.importItem.update({ where: { id: item.id }, data: patch });
+    return patch;
   }
   const normalized = normalizedResult.data;
   const proposed = normalized.proposed;
   if (!proposed) {
-    await prisma.importItem.update({
-      where: { id: item.id },
-      data: {
-        action: "CONFLICT",
-        warning: "No confident TMDB match. Choose a match or exclude this row.",
-      },
-    });
-    return;
+    const patch = { action: "CONFLICT" as const, warning: NO_MATCH_WARNING };
+    await prisma.importItem.update({ where: { id: item.id }, data: patch });
+    return patch;
   }
 
   const mediaType = proposed.mediaType;
@@ -461,24 +747,34 @@ async function commitOneImportItem(userId: string, itemId: string) {
         attempts: { increment: 1 },
       },
     });
+    return { titleId, action, warning, errorCode: null, attempts: item.attempts + 1 };
   } catch (error) {
     console.error(`Staged import commit failed for ${normalized.parsed.name}:`, error);
+    const patch = {
+      action: "FAILED" as const,
+      errorCode: "IMPORT_WRITE_FAILED",
+      warning: "Celluloid couldn't save this title. Retry after checking the match.",
+    };
     await prisma.importItem.update({
       where: { id: item.id },
-      data: {
-        action: "FAILED",
-        errorCode: "IMPORT_WRITE_FAILED",
-        warning: "Celluloid couldn't save this title. Retry after checking the match.",
-        attempts: { increment: 1 },
-      },
+      data: { ...patch, attempts: { increment: 1 } },
     });
+    return { ...patch, attempts: item.attempts + 1 };
   }
 }
 
-async function refreshJobOutcome(userId: string, jobId: string) {
-  const job = await findImportJob(userId, jobId);
-  if (!job) return null;
-  if (job.status === "CANCELLED") return serializeImportJob(job);
+/**
+ * Settle the job's status and counts from the rows the caller is already
+ * holding. It takes the loaded job rather than a job id because the commit path
+ * walked every row of it moments ago — re-reading the whole job (and then
+ * re-reading it a third time to serialize a view) cost a 250-row import around
+ * 150 full-job fetches, all to recount rows it had just written.
+ *
+ * The final write is conditional on the job still being the COMMITTING one this
+ * batch claimed, so a cancel that lands mid-batch is reported rather than
+ * overwritten with a derived outcome.
+ */
+async function refreshJobOutcome(userId: string, job: NonNullable<JobWithItems>) {
   const status = deriveImportJobStatus(job.items);
   const counts = {
     total: job.items.length,
@@ -490,31 +786,45 @@ async function refreshJobOutcome(userId: string, jobId: string) {
       (item) => item.action === "FAILED" && item.attempts >= IMPORT_MAX_ATTEMPTS,
     ).length,
   };
-  await prisma.importJob.update({
-    where: { id: job.id },
-    data: {
-      status,
-      summary: asJson({ ...(summaryRecord(job.summary) ?? {}), ...counts }),
-      committedAt: status === "COMPLETED" || status === "PARTIAL" ? new Date() : null,
-    },
+  const summary = { ...(summaryRecord(job.summary) ?? {}), ...counts };
+  const committedAt = status === "COMPLETED" || status === "PARTIAL" ? new Date() : null;
+  const settled = await prisma.importJob.updateMany({
+    where: { id: job.id, userId, status: "COMMITTING" },
+    data: { status, summary: asJson(summary), committedAt },
   });
-  return getImportJobView(userId, jobId);
+  if (settled.count === 0) {
+    const current = await findImportJob(userId, job.id);
+    return current ? serializeImportJob(current) : null;
+  }
+  return {
+    ...serializeImportJob(job),
+    status,
+    summary,
+    committedAt: committedAt?.toISOString() ?? null,
+  };
 }
 
 export async function commitImportJobChunk(
   userId: string,
   jobId: string,
 ): Promise<StagedImportJobView | null> {
+  // Claim the job conditionally. Reading the status and then writing COMMITTING
+  // unconditionally meant a cancel landing between the two was erased and the
+  // whole import committed anyway — after review had told the owner uncommitted
+  // rows would be abandoned. Two tabs, or one stale tab, was enough.
+  const claimed = await prisma.importJob.updateMany({
+    where: {
+      id: jobId,
+      userId,
+      status: { in: ["READY_FOR_REVIEW", "COMMITTING", "PARTIAL"] },
+    },
+    data: { status: "COMMITTING" },
+  });
   const job = await findImportJob(userId, jobId);
   if (!job) return null;
-  if (
-    job.status !== "READY_FOR_REVIEW" &&
-    job.status !== "COMMITTING" &&
-    job.status !== "PARTIAL"
-  ) {
-    return serializeImportJob(job);
-  }
-  await prisma.importJob.update({ where: { id: job.id }, data: { status: "COMMITTING" } });
+  // Not ours to commit: report the job's real state so the UI shows the
+  // cancellation (or completion) instead of a commit that never happened.
+  if (claimed.count === 0) return serializeImportJob(job);
 
   const candidates = job.items
     .filter(
@@ -531,9 +841,12 @@ export async function commitImportJobChunk(
       select: { status: true },
     });
     if (!state || state.status === "CANCELLED") break;
-    await commitOneImportItem(userId, item.id);
+    const patch = await commitOneImportItem(userId, item.id);
+    // Fold the write back into the loaded row so the outcome below is derived
+    // from what this batch actually did, without re-reading the job.
+    if (patch) Object.assign(item, patch);
   }
-  return refreshJobOutcome(userId, jobId);
+  return refreshJobOutcome(userId, job);
 }
 
 export async function cancelImportJob(userId: string, jobId: string): Promise<boolean> {

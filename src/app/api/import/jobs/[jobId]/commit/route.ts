@@ -11,9 +11,9 @@ export async function POST(
 ) {
   const session = await getSession();
   if (!session?.user) return Response.json({ error: "Unauthorized" }, { status: 401 });
-  // 250 staged rows can require 150 five-item chunks in the all-fail/retry
-  // worst case. Keep the abuse bound while allowing one legitimate run to
-  // settle without tripping its own per-user limiter.
+  // 250 staged rows take around 38 chunks in the all-fail/retry worst case at
+  // the current batch size. Keep the abuse bound while allowing one legitimate
+  // run to settle without tripping its own per-user limiter.
   const limited = rateLimit(`import-commit:${session.user.id}`, 240, 60_000);
   if (!limited.ok) return tooManyRequests(limited.retryAfter);
   const { jobId } = await params;

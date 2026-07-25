@@ -483,3 +483,112 @@ describe("backup merge policy — tag union casing", () => {
     assert.deepEqual(merged.tags, ["Action"]);
   });
 });
+
+describe("backup merge policy — denormalized episode counters", () => {
+  // Regression: mergeBackupTitle used to carry the EXISTING totals through
+  // `fillNullable` while unioning the season/episode rows underneath them, so a
+  // restore that added a season left Title.totalEpisodes describing the
+  // pre-restore library. The progress bar then read e.g. "12/2 eps" forever and
+  // stats' episodesTotal undercounted. These lock the counters to the rows the
+  // merge actually persists.
+
+  /** A second season the local copy doesn't have, with 3 episodes (1 watched). */
+  const seasonTwo = {
+    sourceId: "season-two-source",
+    tmdbId: 306,
+    seasonNumber: 2,
+    name: "Season 2",
+    overview: null,
+    airDate: "2024-09-01T00:00:00.000Z",
+    posterPath: null,
+    episodeCount: 3,
+    episodes: [1, 2, 3].map((n) => ({
+      sourceId: `s2e${n}-source`,
+      tmdbId: 500 + n,
+      episodeNumber: n,
+      name: `S2E${n}`,
+      overview: null,
+      airDate: "2024-09-01T00:00:00.000Z",
+      runtime: 45,
+      stillPath: null,
+      watched: n === 1,
+      watchedAt: n === 1 ? "2026-07-10T20:00:00.000Z" : null,
+    })),
+  };
+
+  it("recounts totalEpisodes from the union when the backup adds a season", () => {
+    // Local: season 1 only (2 episodes). Incoming: seasons 1 and 2 (5 total).
+    const localTv: BackupTitle = { ...tv, sourceId: "local-tv" };
+    const incoming: BackupTitle = { ...tv, seasons: [...tv.seasons, seasonTwo] };
+
+    const merged = mergeBackupTitle(localTv, incoming, "merge");
+
+    const actualEpisodes = merged.seasons.reduce(
+      (n, season) => n + season.episodes.length,
+      0,
+    );
+    assert.equal(actualEpisodes, 5, "union should hold both seasons' episodes");
+    assert.equal(merged.totalEpisodes, 5, "totalEpisodes must match the union");
+    assert.equal(merged.totalSeasons, 2, "totalSeasons must match the union");
+  });
+
+  it("recounts watchedEpisodes from the merged rows, not the stale cache", () => {
+    // Local claims 1 watched; the incoming season 2 contributes another.
+    const localTv: BackupTitle = { ...tv, sourceId: "local-tv", watchedEpisodes: 1 };
+    const incoming: BackupTitle = { ...tv, seasons: [...tv.seasons, seasonTwo] };
+
+    const merged = mergeBackupTitle(localTv, incoming, "merge");
+
+    const actualWatched = merged.seasons.reduce(
+      (n, season) => n + season.episodes.filter((e) => e.watched).length,
+      0,
+    );
+    assert.equal(actualWatched, 2);
+    assert.equal(merged.watchedEpisodes, 2);
+  });
+
+  it("never lets totalSeasons understate a known-good TMDB season count", () => {
+    // TMDB reports 4 seasons but only 1 is materialized locally (specials and
+    // unaired seasons aren't stored), so the row count must not clobber it.
+    const localTv: BackupTitle = { ...tv, sourceId: "local-tv", totalSeasons: 4 };
+
+    const merged = mergeBackupTitle(localTv, tv, "merge");
+
+    assert.equal(merged.totalSeasons, 4);
+  });
+
+  it("leaves movie counters alone (no season rows to count)", () => {
+    const localMovie: BackupTitle = { ...movie, sourceId: "local-movie" };
+
+    const merged = mergeBackupTitle(localMovie, movie, "merge");
+
+    assert.equal(merged.totalEpisodes, null);
+    assert.equal(merged.totalSeasons, null);
+    assert.equal(merged.watchedEpisodes, 0);
+  });
+
+  it("keeps the restore preview honest: the plan's merged title carries the recount", () => {
+    // planRestoreTitles calls mergeBackupTitle, so the confirmation dialog's
+    // counts and the applied write must agree on the same numbers.
+    const localTv: BackupTitle = { ...tv, sourceId: "local-tv" };
+    const incoming: BackupTitle = { ...tv, seasons: [...tv.seasons, seasonTwo] };
+
+    const plan = planRestoreTitles([incoming], [localTv], "merge");
+
+    assert.equal(plan.counts.update, 1);
+    const item = plan.items[0];
+    assert.equal(item.action, "update");
+    assert.equal(item.action === "update" ? item.merged.totalEpisodes : null, 5);
+  });
+
+  it("treats a pure recount as a real update, not a phantom skip", () => {
+    // A local row whose cached totals are already wrong must be planned as an
+    // update so the fix actually reaches the database.
+    const staleLocal: BackupTitle = { ...tv, sourceId: "local-tv", totalEpisodes: 99 };
+
+    const plan = planRestoreTitles([tv], [staleLocal], "merge");
+
+    assert.equal(plan.counts.update, 1);
+    assert.equal(plan.counts.skip, 0);
+  });
+});

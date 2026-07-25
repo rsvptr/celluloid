@@ -1,14 +1,17 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { requireUser } from "@/lib/session";
-import { getStats } from "@/lib/data";
+import { getActivityDays, getStats } from "@/lib/data";
 import { StatsClient } from "./stats-client";
 
 export const metadata: Metadata = { title: "Stats" };
 
 export default async function StatsPage() {
   const user = await requireUser();
-  const stats = await getStats(user.id);
+  const [stats, activityDays] = await Promise.all([
+    getStats(user.id),
+    getActivityDays(user.id),
+  ]);
 
   if (stats.total === 0) {
     return (
@@ -21,5 +24,5 @@ export default async function StatsPage() {
     );
   }
 
-  return <StatsClient stats={stats} />;
+  return <StatsClient stats={stats} activityDays={activityDays} />;
 }

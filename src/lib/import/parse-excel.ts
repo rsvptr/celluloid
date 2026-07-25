@@ -21,6 +21,21 @@ export interface ParsedTitle {
   status: ParsedStatus;
   /** ISO-639-1 hint derived from the source sheet (e.g. "ml"), else null. */
   languageHint: string | null;
+  /**
+   * Owner-supplied rating, already converted to Celluloid's 0.5-10 half-star
+   * scale. Null when the file carried no rating, or carried one on a scale the
+   * heading didn't identify — a guessed scale silently halves or doubles every
+   * score, so an unread rating is the safer answer.
+   */
+  rating?: number | null;
+  /** The rating cell verbatim, kept so review can say a rating was present but
+   * not importable. Null when the file has no rating column. */
+  ratingText?: string | null;
+  /** ISO yyyy-mm-dd date the owner watched this, when the sheet records one. */
+  watchedAt?: string | null;
+  /** Exact identifiers carried by the file, used to skip the fuzzy name search. */
+  imdbId?: string | null;
+  tmdbId?: number | null;
   tv?: ParsedTvMeta;
 }
 

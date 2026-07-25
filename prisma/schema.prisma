@@ -34,6 +34,16 @@ model User {
   timeZone    String @default("UTC")
   watchRegion String @default("US") // ISO 3166-1 region for release/provider lookups
 
+  // Last successful backup download, so Settings can say how stale the owner's
+  // off-site copy is. Advisory only — nothing in the app depends on it.
+  lastBackupAt DateTime?
+
+  // TMDB watch-provider ids the owner actually subscribes to, to answer "what
+  // can I watch tonight without paying for anything new". Nothing reads this
+  // yet and no screen sets it: the column exists ahead of that view, alongside
+  // Title.streamProviderIds below, which the scheduled sync already fills.
+  myProviders Int[] @default([])
+
   twoFactorEnabled Boolean? @default(false)
 
   sessions   Session[]
@@ -41,13 +51,50 @@ model User {
   twofactors TwoFactor[]
 
   // App relations
-  titles      Title[]
-  tags        Tag[]
-  shareLists  ShareList[]
-  watchEvents WatchEvent[]
-  importJobs  ImportJob[]
+  titles       Title[]
+  tags         Tag[]
+  shareLists   ShareList[]
+  watchEvents  WatchEvent[]
+  importJobs   ImportJob[]
+  suppressions Suppression[]
 
   @@map("user")
+}
+
+/**
+ * A suggestion the owner explicitly does not want to see again.
+ *
+ * The recommend page used to hold rejections in a component ref, so they died on
+ * reload and a title turned down last week came straight back — burning API
+ * budget re-deriving a pick already refused. This makes the refusal durable.
+ *
+ * Keyed by `matchKey` rather than tmdbId because a suggestion may never resolve
+ * to a TMDB entry (regional titles often don't), and those are exactly the ones
+ * worth suppressing. The key is "tmdb:<MediaType>:<id>" when matched and
+ * "name:<type>:<normalized name>|<year>" otherwise — the same normalization the
+ * recommendation de-duplicator already uses.
+ */
+model Suppression {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  matchKey  String
+  tmdbId    Int?
+  mediaType MediaType
+  name      String
+  year      Int?
+  reason    SuppressionReason @default(NOT_INTERESTED)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, matchKey])
+  @@index([userId])
+}
+
+enum SuppressionReason {
+  NOT_INTERESTED
+  SEEN_ELSEWHERE
 }
 
 // A public, read-only snapshot/view of a user's library or a selection of it.
@@ -190,6 +237,24 @@ model Title {
   metadataSyncState MetadataSyncState?
   metadataLastError String?
 
+  // TV lifecycle, refreshed by the scheduled metadata sync. `tmdbStatus` is
+  // TMDB's own string ("Returning Series", "Ended", "Canceled", ...) — stored
+  // verbatim rather than mapped to an enum so a new TMDB value can't break a
+  // sync. Together these distinguish "on hiatus" from "finished for good" and
+  // drive the upcoming-episodes view.
+  tmdbStatus         String?
+  nextEpisodeAirDate DateTime? @db.Date
+
+  // Cached streaming availability for the owner's region, refreshed by the same
+  // sync. TMDB provider ids only — names and logos are resolved at render time.
+  // Written but not yet read: these ride along on a request the sync makes
+  // anyway, so the data is warm for the "what can I watch tonight" view (see
+  // User.myProviders) whenever it is built. The title page still asks TMDB
+  // directly for what it shows today.
+  streamProviderIds  Int[]     @default([])
+  providersRegion    String?
+  providersSyncedAt  DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -204,6 +269,13 @@ model Title {
   @@index([userId, status])
   @@index([userId, mediaType])
   @@index([userId, deletedAt])
+  // "What's airing soon" scans a narrow date window for one owner.
+  @@index([userId, nextEpisodeAirDate])
+  // The scheduled sync picks the least-recently-synced titles to refresh. It
+  // asks for never-synced titles in a separate query rather than ordering NULLS
+  // FIRST, because a btree is ASC NULLS LAST and that ordering could not have
+  // been served by this index. See selectCandidates in lib/metadata-sync.
+  @@index([userId, metadataSyncedAt])
 }
 
 model Season {
@@ -262,6 +334,14 @@ model Tag {
 
   titles TitleTag[]
 
+  // NOTE: a second, CASE-INSENSITIVE unique index exists on (userId, lower(name)),
+  // created in migration 20260717221157_workflow_foundation. Prisma's schema
+  // language cannot express a functional index, so it is invisible here — and
+  // `prisma db push`, which syncs from THIS file rather than from the migration
+  // history, will drop it. `npm run db:push` therefore chains
+  // scripts/ensure-indexes.mjs to put it back. Do not remove that chaining:
+  // findOrCreateTag depends on the index to lose the race safely (P2002) when two
+  // requests create the same tag in different casings.
   @@unique([userId, name])
   @@index([userId])
 }

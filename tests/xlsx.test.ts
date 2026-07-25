@@ -20,6 +20,7 @@ function row(over: Partial<ExportRow>): ExportRow {
     genres: ["Drama"],
     totalEpisodes: null,
     watchedEpisodes: 0,
+    watchCount: 0,
     favorite: true,
     notes: "great",
     tags: ["gem"],
