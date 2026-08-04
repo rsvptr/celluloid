@@ -1,7 +1,5 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { Toaster } from "sonner";
-import { MotionProvider } from "@/components/motion";
 import { env } from "@/lib/env";
 import "./globals.css";
 
@@ -55,27 +53,12 @@ export default function RootLayout({
       lang="en"
       className={`dark ${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">
-        <MotionProvider>
-          {children}
-          <Toaster
-            theme="dark"
-            richColors
-            position="bottom-right"
-            mobileOffset={{ bottom: "calc(4.5rem + env(safe-area-inset-bottom))" }}
-            toastOptions={{
-              style: {
-                background: "var(--color-surface)",
-                border: "1px solid var(--color-line)",
-                color: "var(--color-foreground)",
-              },
-              classNames: {
-                actionButton: "min-h-11 sm:min-h-0",
-              },
-            }}
-          />
-        </MotionProvider>
-      </body>
+      {/* Motion and the toaster are provided by the layouts that use them —
+          the authenticated shell and the login page — not here. Mounting them
+          at the root shipped the Motion and sonner chunks to the public share
+          page and the not-found route, which render neither an animation nor
+          a toast (AUD-NEXT-02). */}
+      <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );
 }

@@ -1,18 +1,23 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import Image from "next/image";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   ArchiveRestore,
+  Check,
   ChevronDown,
+  Clapperboard,
   Copy,
   Download,
   Globe,
   KeyRound,
   Link2,
   Pencil,
+  Search,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Tag as TagIcon,
   Trash2,
@@ -29,6 +34,7 @@ import { deleteTag, renameTag, setTagColor } from "@/lib/actions";
 import {
   removeAnthropicKey,
   setAnthropicKey,
+  updateMyProviders,
   updatePreferences,
   updateProfile,
 } from "@/lib/settings-actions";
@@ -48,6 +54,8 @@ import {
   tagChipClass,
 } from "@/lib/tag-colors";
 import { isWatchRegion, regionName, WATCH_REGIONS } from "@/lib/tmdb-extras";
+import { TMDB_IMAGE_BASE } from "@/lib/images";
+import { setRememberFiltersEnabled } from "@/lib/remembered-state-client";
 
 /** One row of the tag manager: the tag plus how many live titles carry it. */
 export interface TagSummary {
@@ -57,29 +65,54 @@ export interface TagSummary {
   count: number;
 }
 
+/** Minimal, serializable provider data passed across the RSC boundary. */
+export interface ProviderOption {
+  id: number;
+  name: string;
+  logoPath: string | null;
+}
+
 export function SettingsClient({
   info,
   shares,
   tags,
   timeZone,
   watchRegion,
+  myProviders,
+  providers,
+  providersUnavailable,
   lastBackupAt,
   backupAgeDays,
+  rememberFilters,
 }: {
   info: AccountInfo;
   shares: ShareSummary[];
   tags: TagSummary[];
   timeZone: string;
   watchRegion: string;
+  myProviders: number[];
+  providers: ProviderOption[];
+  providersUnavailable: boolean;
   /** ISO timestamp of the last successful backup download, or null. */
   lastBackupAt: string | null;
   /** Whole days since that backup, measured server-side. Null when there is none. */
   backupAgeDays: number | null;
+  rememberFilters: boolean;
 }) {
   return (
     <div className="flex flex-col gap-5 lg:grid lg:grid-cols-2">
       <ProfileSection name={info.name} email={info.email} />
       <PreferencesSection timeZone={timeZone} watchRegion={watchRegion} />
+      <div className="lg:col-span-2">
+        <MyServicesSection
+          key={watchRegion}
+          region={watchRegion}
+          initialProviderIds={myProviders}
+          providers={providers}
+          unavailable={providersUnavailable}
+        />
+      </div>
+      <RememberFiltersSection initialEnabled={rememberFilters} />
       <ApiKeySection hasApiKey={info.hasApiKey} hasServerKey={info.hasServerKey} />
       <SharedLinksSection shares={shares} />
       <TagsSection tags={tags} />
@@ -317,6 +350,269 @@ function PreferencesSection({
           Save
         </Button>
       </div>
+    </Section>
+  );
+}
+
+function RememberFiltersSection({ initialEnabled }: { initialEnabled: boolean }) {
+  const [enabled, setEnabled] = useState(initialEnabled);
+
+  function toggle() {
+    const next = !enabled;
+    setRememberFiltersEnabled(next);
+    setEnabled(next);
+    toast.success(
+      next
+        ? "Filter memory is on for this device."
+        : "Filter memory is off and saved filters were cleared.",
+    );
+  }
+
+  return (
+    <Section
+      icon={SlidersHorizontal}
+      title="Remember filters on this device"
+      description="Keep each page's viewing preferences between visits."
+    >
+      <div className="flex items-center justify-between gap-4 rounded-xl bg-surface-2/45 p-3 ring-1 ring-line">
+        <div>
+          <p className="text-sm font-medium">Remember filters</p>
+          <p className="mt-0.5 text-xs text-faint">
+            Saves library filters and view, recommendation dials, and export scope.
+          </p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={enabled}
+          aria-label="Remember filters on this device"
+          onClick={toggle}
+          className={cn(
+            "focus-ring relative h-6 w-11 shrink-0 rounded-full ring-1 transition-colors",
+            enabled ? "bg-brand ring-brand" : "bg-surface ring-line",
+          )}
+        >
+          <span
+            aria-hidden="true"
+            className={cn(
+              "absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform",
+              enabled && "translate-x-5",
+            )}
+          />
+        </button>
+      </div>
+      <p className="mt-3 text-xs text-faint">
+        Stored in this browser only. Search text and recommendation results are never saved.
+      </p>
+    </Section>
+  );
+}
+
+function sortedProviderIds(ids: Iterable<number>): number[] {
+  return [...ids].sort((a, b) => a - b);
+}
+
+function MyServicesSection({
+  region,
+  initialProviderIds,
+  providers,
+  unavailable,
+}: {
+  region: string;
+  initialProviderIds: number[];
+  providers: ProviderOption[];
+  unavailable: boolean;
+}) {
+  const router = useRouter();
+  const availableIds = useMemo(() => new Set(providers.map((provider) => provider.id)), [providers]);
+  const availableInitialIds = useMemo(
+    () => sortedProviderIds(initialProviderIds.filter((id) => availableIds.has(id))),
+    [availableIds, initialProviderIds],
+  );
+  const [selected, setSelected] = useState<Set<number>>(
+    () => new Set(availableInitialIds),
+  );
+  const [savedIds, setSavedIds] = useState<number[]>(availableInitialIds);
+  const [unavailableCount, setUnavailableCount] = useState(
+    () => initialProviderIds.length - availableInitialIds.length,
+  );
+  const [query, setQuery] = useState("");
+  const [msg, setMsg] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  const [pending, start] = useTransition();
+
+  const selectedIds = useMemo(() => sortedProviderIds(selected), [selected]);
+  const dirty =
+    unavailableCount > 0 || selectedIds.join(",") !== savedIds.join(",");
+  const foldedQuery = query.trim().toLocaleLowerCase();
+  const visibleProviders = useMemo(
+    () =>
+      foldedQuery
+        ? providers.filter((provider) =>
+            provider.name.toLocaleLowerCase().includes(foldedQuery),
+          )
+        : providers,
+    [foldedQuery, providers],
+  );
+
+  function toggleProvider(id: number) {
+    setMsg(null);
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else if (next.size < 100) next.add(id);
+      return next;
+    });
+  }
+
+  return (
+    <Section
+      icon={Clapperboard}
+      title="My services"
+      description={`Choose the streaming services you use in ${regionName(region)}. The Library can then answer “what can I watch tonight?” in one tap.`}
+    >
+      {unavailable ? (
+        <Notice kind="error">
+          Celluloid couldn&apos;t load the service list right now. Your existing choices are
+          unchanged; refresh to try again.
+        </Notice>
+      ) : (
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="relative min-w-0 sm:max-w-sm sm:flex-1">
+              <Search
+                aria-hidden="true"
+                size={15}
+                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-faint"
+              />
+              <Input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                aria-label="Search streaming services"
+                placeholder="Find a streaming service…"
+                spellCheck={false}
+                className="w-full pl-9"
+              />
+            </div>
+            <div className="flex items-center justify-between gap-3 sm:justify-end">
+              <p className="text-xs tabular-nums text-muted" role="status" aria-live="polite">
+                {selected.size} selected
+              </p>
+              {selected.size > 0 ? (
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => {
+                    setSelected(new Set());
+                    setMsg(null);
+                  }}
+                  className="focus-ring flex min-h-11 items-center rounded-lg px-2 text-xs font-medium text-muted transition-colors hover:text-foreground disabled:opacity-50 sm:min-h-8"
+                >
+                  Clear
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          {unavailableCount > 0 ? (
+            <p className="text-xs text-amber-300">
+              {unavailableCount} previously selected {unavailableCount === 1 ? "service is" : "services are"}
+              {" "}not offered in {regionName(region)}. Saving removes {unavailableCount === 1 ? "it" : "them"}.
+            </p>
+          ) : null}
+
+          <div className="max-h-80 overflow-y-auto rounded-lg bg-surface-2/50 p-2 ring-1 ring-line">
+            {visibleProviders.length > 0 ? (
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                {visibleProviders.map((provider) => {
+                  const isSelected = selected.has(provider.id);
+                  const atLimit = selected.size >= 100 && !isSelected;
+                  return (
+                    <button
+                      key={provider.id}
+                      type="button"
+                      aria-pressed={isSelected}
+                      disabled={pending || atLimit}
+                      onClick={() => toggleProvider(provider.id)}
+                      title={atLimit ? "You can choose up to 100 services" : provider.name}
+                      className={cn(
+                        "focus-ring flex min-h-14 min-w-0 items-center gap-2 rounded-lg p-2 text-left text-xs ring-1 transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+                        isSelected
+                          ? "bg-brand/15 text-foreground ring-brand/40"
+                          : "bg-surface text-muted ring-line hover:text-foreground hover:ring-line-strong",
+                      )}
+                    >
+                      <span className="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-surface-2 ring-1 ring-line">
+                        {provider.logoPath ? (
+                          <Image
+                            src={`${TMDB_IMAGE_BASE}w92${provider.logoPath}`}
+                            alt=""
+                            width={36}
+                            height={36}
+                            className="h-9 w-9 object-cover"
+                          />
+                        ) : (
+                          <span aria-hidden="true" className="font-semibold text-faint">
+                            {provider.name.slice(0, 1)}
+                          </span>
+                        )}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate">{provider.name}</span>
+                      {isSelected ? (
+                        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand text-[#04121c]">
+                          <Check aria-hidden="true" size={13} strokeWidth={3} />
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="px-3 py-8 text-center text-sm text-muted">
+                {query.trim()
+                  ? "No services match that search."
+                  : `No streaming services are listed for ${regionName(region)}.`}
+              </p>
+            )}
+          </div>
+
+          <p className="text-xs text-faint">
+            Availability data via JustWatch. Rentals and purchases do not count as being
+            on your services; library availability refreshes nightly.
+          </p>
+          {msg ? <Notice kind={msg.kind}>{msg.text}</Notice> : null}
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className="self-start"
+            disabled={pending || !dirty}
+            onClick={() =>
+              start(async () => {
+                setMsg(null);
+                try {
+                  const result = await updateMyProviders(selectedIds);
+                  if (result.error) {
+                    setMsg({ kind: "error", text: result.error });
+                    return;
+                  }
+                  setSavedIds(selectedIds);
+                  setUnavailableCount(0);
+                  setMsg({ kind: "ok", text: "Services saved." });
+                  router.refresh();
+                } catch {
+                  setMsg({
+                    kind: "error",
+                    text: "Celluloid couldn't save your services. Check your connection and retry.",
+                  });
+                }
+              })
+            }
+          >
+            {pending ? <Spinner /> : null}
+            {pending ? "Saving…" : "Save services"}
+          </Button>
+        </div>
+      )}
     </Section>
   );
 }
@@ -1347,6 +1643,14 @@ type RestorePreview = {
   update: number;
   skip: number;
   conflict: number;
+  suppressionsCreate: number;
+  suppressionsUpdate: number;
+  suppressionsSkip: number;
+  providerSelections: number;
+  providerPreferenceIncluded: number;
+  providerPreferenceUpdate: number;
+  recommendModelPreferenceIncluded: number;
+  recommendModelPreferenceUpdate: number;
   confirmationToken: string;
 };
 
@@ -1489,6 +1793,14 @@ function BackupSection({
         typeof body.update !== "number" ||
         typeof body.skip !== "number" ||
         typeof body.conflict !== "number" ||
+        typeof body.suppressionsCreate !== "number" ||
+        typeof body.suppressionsUpdate !== "number" ||
+        typeof body.suppressionsSkip !== "number" ||
+        typeof body.providerSelections !== "number" ||
+        typeof body.providerPreferenceIncluded !== "number" ||
+        typeof body.providerPreferenceUpdate !== "number" ||
+        typeof body.recommendModelPreferenceIncluded !== "number" ||
+        typeof body.recommendModelPreferenceUpdate !== "number" ||
         typeof body.confirmationToken !== "string"
       ) {
         throw new Error("Celluloid returned an incomplete restore preview. Try again.");
@@ -1498,6 +1810,14 @@ function BackupSection({
         update: body.update,
         skip: body.skip,
         conflict: body.conflict,
+        suppressionsCreate: body.suppressionsCreate,
+        suppressionsUpdate: body.suppressionsUpdate,
+        suppressionsSkip: body.suppressionsSkip,
+        providerSelections: body.providerSelections,
+        providerPreferenceIncluded: body.providerPreferenceIncluded,
+        providerPreferenceUpdate: body.providerPreferenceUpdate,
+        recommendModelPreferenceIncluded: body.recommendModelPreferenceIncluded,
+        recommendModelPreferenceUpdate: body.recommendModelPreferenceUpdate,
         confirmationToken: body.confirmationToken,
       });
     } catch (previewError) {
@@ -1514,9 +1834,21 @@ function BackupSection({
 
   async function commitRestore() {
     if (!preview) return;
+    const hiddenSuggestionWrites =
+      preview.suppressionsCreate + preview.suppressionsUpdate;
+    const providerCopy = !preview.providerPreferenceIncluded
+      ? "This older file has no selected-service data."
+      : preview.providerPreferenceUpdate
+        ? `It will restore ${preview.providerSelections} selected ${preview.providerSelections === 1 ? "service" : "services"}.`
+        : "The current selected services will stay unchanged.";
+    const recommendModelCopy = !preview.recommendModelPreferenceIncluded
+      ? "It has no recommendation-model preference."
+      : preview.recommendModelPreferenceUpdate
+        ? "It will restore the recommendation-model preference."
+        : "The current recommendation model will stay unchanged.";
     const approved = await confirm({
       title: "Restore this backup?",
-      body: `This will create ${preview.create} and update ${preview.update} titles. Existing titles not included in the backup stay untouched. Restored shared lists receive new private links.`,
+      body: `This will create ${preview.create} and update ${preview.update} titles, and restore ${hiddenSuggestionWrites} hidden ${hiddenSuggestionWrites === 1 ? "suggestion" : "suggestions"}. ${providerCopy} ${recommendModelCopy} Existing titles not included in the backup stay untouched. Restored shared lists receive new private links.`,
       confirmLabel: "Restore backup",
       destructive: mode === "replace-personal",
     });
@@ -1531,6 +1863,14 @@ function BackupSection({
         typeof body.update !== "number" ||
         typeof body.skip !== "number" ||
         typeof body.conflict !== "number" ||
+        typeof body.suppressionsCreate !== "number" ||
+        typeof body.suppressionsUpdate !== "number" ||
+        typeof body.suppressionsSkip !== "number" ||
+        typeof body.providerSelections !== "number" ||
+        typeof body.providerPreferenceIncluded !== "number" ||
+        typeof body.providerPreferenceUpdate !== "number" ||
+        typeof body.recommendModelPreferenceIncluded !== "number" ||
+        typeof body.recommendModelPreferenceUpdate !== "number" ||
         typeof body.sharesCreated !== "number" ||
         typeof body.sharesSkipped !== "number" ||
         typeof body.eventsCreated !== "number" ||
@@ -1543,6 +1883,14 @@ function BackupSection({
         update: body.update,
         skip: body.skip,
         conflict: body.conflict,
+        suppressionsCreate: body.suppressionsCreate,
+        suppressionsUpdate: body.suppressionsUpdate,
+        suppressionsSkip: body.suppressionsSkip,
+        providerSelections: body.providerSelections,
+        providerPreferenceIncluded: body.providerPreferenceIncluded,
+        providerPreferenceUpdate: body.providerPreferenceUpdate,
+        recommendModelPreferenceIncluded: body.recommendModelPreferenceIncluded,
+        recommendModelPreferenceUpdate: body.recommendModelPreferenceUpdate,
         sharesCreated: body.sharesCreated,
         sharesSkipped: body.sharesSkipped,
         eventsCreated: body.eventsCreated,
@@ -1587,8 +1935,9 @@ function BackupSection({
             </div>
             <p className="mt-2 text-xs text-muted">
               Includes active and trashed titles, watch history, ratings, notes, tags, TV
-              progress, preferences, and share settings. Passwords, sessions, API keys, 2FA
-              secrets, and live share URLs are excluded.
+              progress, selected services, recommendation preferences, hidden suggestions,
+              and share settings. Passwords, sessions, API keys, 2FA secrets, and live share
+              URLs are excluded.
             </p>
           </div>
 
@@ -1648,10 +1997,50 @@ function BackupSection({
             <div className="rounded-lg bg-surface-2 p-3 ring-1 ring-line" aria-live="polite">
               <p className="text-xs font-medium text-foreground">Restore preview</p>
               <dl className="mt-2 grid grid-cols-2 gap-2 text-xs tabular-nums">
-                <div><dt className="text-muted">Create</dt><dd className="font-medium">{preview.create}</dd></div>
-                <div><dt className="text-muted">Update</dt><dd className="font-medium">{preview.update}</dd></div>
-                <div><dt className="text-muted">Unchanged</dt><dd className="font-medium">{preview.skip}</dd></div>
-                <div><dt className="text-muted">Conflicts</dt><dd className="font-medium text-amber-300">{preview.conflict}</dd></div>
+                <div>
+                  <dt className="text-muted">Create</dt>
+                  <dd className="font-medium">{preview.create}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted">Update</dt>
+                  <dd className="font-medium">{preview.update}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted">Unchanged</dt>
+                  <dd className="font-medium">{preview.skip}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted">Conflicts</dt>
+                  <dd className="font-medium text-amber-300">{preview.conflict}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted">Hidden suggestions</dt>
+                  <dd className="font-medium">
+                    {preview.suppressionsCreate + preview.suppressionsUpdate}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted">Already hidden</dt>
+                  <dd className="font-medium">{preview.suppressionsSkip}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted">Selected services</dt>
+                  <dd className="font-medium">
+                    {preview.providerPreferenceIncluded
+                      ? `${preview.providerSelections} · ${preview.providerPreferenceUpdate ? "Restore" : "Keep current"}`
+                      : "Not in file"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted">Recommendation model</dt>
+                  <dd className="font-medium">
+                    {preview.recommendModelPreferenceIncluded
+                      ? preview.recommendModelPreferenceUpdate
+                        ? "Restore"
+                        : "Keep current"
+                      : "Not in file"}
+                  </dd>
+                </div>
               </dl>
               {preview.conflict > 0 ? (
                 <p className="mt-2 text-xs text-amber-200">
@@ -1684,6 +2073,21 @@ function BackupSection({
               {result.eventsCreated === 1 ? " event" : " events"}.
               {result.eventsSkipped > 0
                 ? ` Recognized ${result.eventsSkipped} already-restored watch ${result.eventsSkipped === 1 ? "event" : "events"}.`
+                : ""}
+              {" "}Restored {result.suppressionsCreate + result.suppressionsUpdate} hidden
+              {result.suppressionsCreate + result.suppressionsUpdate === 1 ? " suggestion" : " suggestions"}.
+              {result.suppressionsSkip > 0
+                ? ` Recognized ${result.suppressionsSkip} already-recorded hidden ${result.suppressionsSkip === 1 ? "suggestion" : "suggestions"}.`
+                : ""}
+              {result.providerPreferenceIncluded
+                ? result.providerPreferenceUpdate
+                  ? ` Restored ${result.providerSelections} selected ${result.providerSelections === 1 ? "service" : "services"}.`
+                  : " Kept the current selected services."
+                : ""}
+              {result.recommendModelPreferenceIncluded
+                ? result.recommendModelPreferenceUpdate
+                  ? " Restored the recommendation-model preference."
+                  : " Kept the current recommendation model."
                 : ""}
             </Notice>
           ) : null}

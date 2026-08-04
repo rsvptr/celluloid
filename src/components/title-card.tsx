@@ -50,7 +50,22 @@ function TitleCardImpl({
   const target = href === undefined ? `/title/${item.id}` : href;
 
   const visual = (
-    <>
+    <div
+      className={cn(
+        "cv-auto-card",
+        // The ring below is flush with the poster's top/left/right edges, so
+        // content-visibility's paint containment (contain: paint) would clip it
+        // exactly the way an overflow-hidden ancestor would — reserve 2px on
+        // those three edges (the widest the ring gets, at ring-2) and cancel it
+        // with an equal negative margin so neither the poster nor the card's
+        // grid footprint actually changes size. The bottom edge doesn't need
+        // it: the ring there lands well inside the text block below, never
+        // near this box's edge. Needs the outer element's `flow-root` (see
+        // liftClass) — otherwise -mt-0.5 collapses into its margin instead of
+        // staying put.
+        "-mx-0.5 -mt-0.5 px-0.5 pt-0.5",
+      )}
+    >
       <div className="relative">
         <Poster
           path={item.posterPath}
@@ -152,14 +167,14 @@ function TitleCardImpl({
           {item.rating ? ` · ★ ${item.rating}` : ""}
         </p>
       </div>
-    </>
+    </div>
   );
 
-  // No `content-visibility` here: its paint containment clips the poster's
-  // hover ring (full-width child, ink extends past the card box) — observed
-  // before Wave 1 and re-confirmed in review. List rows keep `cv-auto`; grid
-  // cards rely on memoization + lazy images instead.
-  const liftClass = "block transition duration-200 hover:-translate-y-1";
+  // flow-root, not block: establishes a block formatting context so the
+  // visual wrapper's -mt-0.5 (above) can't collapse into this element's own
+  // margin and drag the whole card upward inside the grid — flow-root has the
+  // same block-level sizing as `block`, it just also stops that collapse.
+  const liftClass = "flow-root transition duration-200 hover:-translate-y-1";
 
   // Selection mode: toggle instead of navigating.
   if (selectable) {
@@ -175,9 +190,11 @@ function TitleCardImpl({
     );
   }
 
-  // Read-only (no link) — used on public share pages.
+  // Read-only (no link) — used on public share pages. Still flow-root (see
+  // liftClass above) for the same reason: the visual wrapper's -mt-0.5 needs a
+  // formatting-context boundary regardless of whether this card is interactive.
   if (target === null) {
-    return <div className="group block">{visual}</div>;
+    return <div className="group flow-root">{visual}</div>;
   }
 
   return (

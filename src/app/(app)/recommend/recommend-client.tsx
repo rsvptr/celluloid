@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   Ban,
   Check,
+  Eye,
   Film,
   Plus,
   RefreshCw,
@@ -27,6 +28,12 @@ import { SuppressionsPanel } from "./suppressions-panel";
 import { REC_ERAS, REC_MODELS, type RecEraId } from "@/lib/models";
 import { languageName } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import {
+  encodeRecommendRememberedState,
+  REMEMBERED_COOKIE_NAMES,
+  type RecommendRememberedState,
+  writeRememberedCookie,
+} from "@/lib/remembered-state-client";
 
 const CONFIDENCE = {
   high: "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30",
@@ -34,7 +41,16 @@ const CONFIDENCE = {
   low: "bg-slate-500/15 text-slate-300 ring-slate-500/30",
 } as const;
 
+const CONFIDENCE_LABELS: Record<Recommendation["confidence"], string> = {
+  high: "High",
+  medium: "Medium",
+  low: "Low",
+};
+
 type Phase = "idle" | "starting" | "thinking" | "generating";
+
+/** Why a suggestion was hidden — mirrors SuppressionReason in the Prisma schema. */
+type DismissReason = "NOT_INTERESTED" | "SEEN_ELSEWHERE";
 
 const PHASE_LABEL: Record<Exclude<Phase, "idle">, string> = {
   starting: "Reading your taste brief…",
@@ -110,6 +126,20 @@ const PRESETS: { label: string; focus: string; type?: "movie" | "tv" }[] = [
   { label: "🎬 Short & light", focus: "short, easy watches", type: "movie" },
 ];
 
+function resolvePreset(
+  key: string | null | undefined,
+  tags: string[],
+): { key: string; focus: string; type?: "movie" | "tv" } | null {
+  if (!key) return null;
+  const preset = PRESETS.find((candidate) => candidate.label === key);
+  if (preset) return { key, focus: preset.focus, type: preset.type };
+  if (!key.startsWith("tag:")) return null;
+  const tag = key.slice(4);
+  return tags.includes(tag)
+    ? { key, focus: `similar to the titles I tagged \"${tag}\"` }
+    : null;
+}
+
 export function RecommendClient({
   hasKey,
   model: initialModel,
@@ -117,6 +147,8 @@ export function RecommendClient({
   languages,
   genres,
   hasWatchDates,
+  initialPreferences,
+  rememberFilters,
 }: {
   hasKey: boolean;
   model: string;
@@ -124,15 +156,36 @@ export function RecommendClient({
   languages: string[];
   genres: string[];
   hasWatchDates: boolean;
+  initialPreferences: RecommendRememberedState | null;
+  rememberFilters: boolean;
 }) {
-  const [countStr, setCountStr] = useState("12");
+  const initialPreset = resolvePreset(initialPreferences?.preset, tags);
+  const initialLanguage =
+    initialPreferences && languages.includes(initialPreferences.language)
+      ? initialPreferences.language
+      : "";
+  const initialGenre =
+    initialPreferences && genres.includes(initialPreferences.genre)
+      ? initialPreferences.genre
+      : "";
+  const initialEra =
+    initialPreferences && REC_ERAS.some((candidate) => candidate.id === initialPreferences.era)
+      ? initialPreferences.era
+      : "";
+  const [countStr, setCountStr] = useState(() =>
+    String(initialPreferences?.count ?? 12),
+  );
   const count = Math.min(30, Math.max(1, parseInt(countStr || "12", 10) || 12));
-  const [type, setType] = useState<"all" | "movie" | "tv">("all");
-  const [focus, setFocus] = useState("");
-  const [activePreset, setActivePreset] = useState<string | null>(null);
-  const [language, setLanguage] = useState("");
-  const [genre, setGenre] = useState("");
-  const [era, setEra] = useState("");
+  const [type, setType] = useState<"all" | "movie" | "tv">(
+    initialPreferences?.type ?? initialPreset?.type ?? "all",
+  );
+  const [focus, setFocus] = useState(initialPreset?.focus ?? "");
+  const [activePreset, setActivePreset] = useState<string | null>(
+    initialPreset?.key ?? null,
+  );
+  const [language, setLanguage] = useState(initialLanguage);
+  const [genre, setGenre] = useState(initialGenre);
+  const [era, setEra] = useState(initialEra);
   const [model, setModel] = useState(initialModel);
   const [loading, setLoading] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
@@ -149,53 +202,33 @@ export function RecommendClient({
   // Bumped whenever the "not interested" list changes, so an open review panel
   // reloads instead of showing a list the owner has already moved on from.
   const [suppressionsKey, setSuppressionsKey] = useState(0);
-  const [basisMode, setBasisMode] = useState<"all" | "recent" | "pick">("all");
-  const [recentCount, setRecentCount] = useState(20);
+  const [basisMode, setBasisMode] = useState<"all" | "recent" | "pick">(
+    initialPreferences?.basisMode === "recent" && hasWatchDates ? "recent" : "all",
+  );
+  const [recentCount, setRecentCount] = useState<10 | 20 | 50>(
+    initialPreferences?.recentCount ?? 20,
+  );
   const [pickedIds, setPickedIds] = useState<Set<string>>(new Set());
   const pickEmpty = basisMode === "pick" && pickedIds.size === 0;
 
-  // Remember the dial settings for this browsing session so returning to the
-  // page keeps your language/genre/era/type choices. Values are validated
-  // against what's actually offered; junk or stale entries fall back silently.
-  // (Hydrate-from-storage in an effect is the established pattern here; the
-  // library toolbar does the same.)
-  /* eslint-disable react-hooks/set-state-in-effect */
-  const skipFirstWrite = useRef(true);
   useEffect(() => {
-    try {
-      const raw = sessionStorage.getItem("celluloid:recprefs");
-      if (!raw) return;
-      const s = JSON.parse(raw);
-      if (typeof s.count === "string" && /^\d{1,2}$/.test(s.count)) setCountStr(s.count);
-      if (s.type === "movie" || s.type === "tv" || s.type === "all") setType(s.type);
-      if (typeof s.language === "string" && languages.includes(s.language))
-        setLanguage(s.language);
-      if (typeof s.genre === "string" && genres.includes(s.genre)) setGenre(s.genre);
-      if (typeof s.era === "string" && REC_ERAS.some((e) => e.id === s.era))
-        setEra(s.era);
-      if (s.basisMode === "recent" && hasWatchDates) setBasisMode("recent");
-      if ([10, 20, 50].includes(s.recentCount)) setRecentCount(s.recentCount);
-    } catch {
-      // ignore malformed/unavailable storage
-    }
-    // Mount-only by design; props are stable for the life of this page view.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  /* eslint-enable react-hooks/set-state-in-effect */
-  useEffect(() => {
-    if (skipFirstWrite.current) {
-      skipFirstWrite.current = false;
-      return;
-    }
-    try {
-      sessionStorage.setItem(
-        "celluloid:recprefs",
-        JSON.stringify({ count: countStr, type, language, genre, era, basisMode, recentCount }),
-      );
-    } catch {
-      // storage may be unavailable; persistence is best-effort
-    }
-  }, [countStr, type, language, genre, era, basisMode, recentCount]);
+    if (!rememberFilters) return;
+    writeRememberedCookie(
+      REMEMBERED_COOKIE_NAMES.recommend,
+      encodeRecommendRememberedState({
+        count,
+        type,
+        preset: activePreset,
+        language,
+        genre,
+        era,
+        // A hand-picked title basis is intentionally transient because the
+        // selected title IDs are not part of remembered filter state.
+        basisMode: basisMode === "recent" ? "recent" : "all",
+        recentCount,
+      }),
+    );
+  }, [activePreset, basisMode, count, era, genre, language, recentCount, rememberFilters, type]);
 
   function togglePicked(id: string) {
     setPickedIds((prev) => {
@@ -206,10 +239,20 @@ export function RecommendClient({
     });
   }
 
-  function changeModel(next: string) {
+  async function changeModel(next: string) {
+    const previous = model;
     setModel(next);
     // Persist as the default; the next request also sends it explicitly.
-    setRecommendModel(next).catch(() => {});
+    try {
+      const res = await setRecommendModel(next);
+      if (res.error) {
+        setModel(previous);
+        toast.error(res.error);
+      }
+    } catch {
+      setModel(previous);
+      toast.error("Celluloid couldn't save that model. Check your connection and retry.");
+    }
   }
 
   function stop() {
@@ -221,7 +264,7 @@ export function RecommendClient({
    * title coming back within this page view; this records the refusal so future
    * runs skip it — and skip paying Claude and TMDB to derive it again.
    */
-  async function dismiss(rec: Recommendation, index: number) {
+  async function dismiss(rec: Recommendation, index: number, reason: DismissReason) {
     // Remove the card first: the write is fast and the toast carries Undo, so
     // waiting on the round trip would only make the page feel unresponsive.
     setRecs((current) => (current ?? []).filter((item) => item !== rec));
@@ -232,6 +275,7 @@ export function RecommendClient({
         mediaType: rec.mediaType,
         name: rec.title,
         year: rec.year,
+        reason,
       });
     } catch {
       res = {
@@ -623,7 +667,7 @@ export function RecommendClient({
 
               {basisMode === "recent" ? (
                 <div className="flex flex-wrap items-center gap-1.5">
-                  {[10, 20, 50].map((value) => (
+                  {([10, 20, 50] as const).map((value) => (
                     <button
                       key={value}
                       type="button"
@@ -725,7 +769,7 @@ export function RecommendClient({
                   name="recommendation-model"
                   value={model}
                   disabled={loading}
-                  onChange={(event) => changeModel(event.target.value)}
+                  onChange={(event) => void changeModel(event.target.value)}
                 >
                   {REC_MODELS.map((item) => (
                     <option key={item.id} value={item.id}>
@@ -853,7 +897,10 @@ export function RecommendClient({
                     transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
                     className="min-w-0"
                   >
-                    <RecCard rec={r} onDismiss={() => void dismiss(r, index)} />
+                    <RecCard
+                      rec={r}
+                      onDismiss={(reason) => void dismiss(r, index, reason)}
+                    />
                   </motion.div>
                 ))}
             </AnimatePresence>
@@ -896,10 +943,19 @@ function RecCard({
   onDismiss,
 }: {
   rec: Recommendation;
-  onDismiss: () => void;
+  onDismiss: (reason: DismissReason) => void;
 }) {
   const [state, setState] = useState<AddState>({ kind: "idle" });
   const [, start] = useTransition();
+  const resultRef = useRef<HTMLAnchorElement>(null);
+  const focusResult = useRef(false);
+
+  useEffect(() => {
+    if (state.kind === "done" && focusResult.current) {
+      focusResult.current = false;
+      resultRef.current?.focus();
+    }
+  }, [state.kind]);
 
   return (
     <Card className="flex items-start gap-3 p-3">
@@ -927,7 +983,7 @@ function RecCard({
               CONFIDENCE[rec.confidence],
             )}
           >
-            {rec.confidence}
+            {CONFIDENCE_LABELS[rec.confidence]}
           </span>
         </div>
         <p className="mt-1 text-sm text-foreground/85">{rec.reason}</p>
@@ -936,6 +992,7 @@ function RecCard({
         {rec.tmdbId ? (
           state.kind === "done" ? (
             <Link
+              ref={resultRef}
               href={`/title/${state.id}`}
               aria-label={`View ${rec.title} in your watchlist`}
               className="focus-ring flex min-h-11 items-center gap-1.5 rounded-lg bg-emerald-500/15 px-3 py-2 text-sm font-medium text-emerald-300 ring-1 ring-emerald-500/30 sm:min-h-0"
@@ -947,7 +1004,8 @@ function RecCard({
               type="button"
               disabled={state.kind === "adding"}
               aria-label={`Add ${rec.title} to your watchlist`}
-              onClick={() =>
+              onClick={() => {
+                focusResult.current = true;
                 start(async () => {
                   setState({ kind: "adding" });
                   try {
@@ -967,7 +1025,7 @@ function RecCard({
                     );
                   }
                 })
-              }
+              }}
               className="focus-ring brand-gradient flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-[#04121c] hover:opacity-90 disabled:opacity-60 sm:min-h-0"
             >
               {state.kind === "adding" ? <Spinner /> : <Plus size={15} aria-hidden="true" />}
@@ -984,15 +1042,26 @@ function RecCard({
             <Search size={13} aria-hidden="true" /> Find on TMDB
           </Link>
         )}
-        <button
-          type="button"
-          onClick={onDismiss}
-          aria-label={`Not interested in ${rec.title}`}
-          title="Not interested: keep this out of future suggestions"
-          className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-lg text-muted ring-1 ring-line transition-colors hover:text-foreground sm:min-h-9 sm:min-w-9"
-        >
-          <Ban size={15} aria-hidden="true" />
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => onDismiss("SEEN_ELSEWHERE")}
+            aria-label={`Seen ${rec.title} elsewhere`}
+            title="Seen it: keep this out of future suggestions"
+            className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-lg text-muted ring-1 ring-line transition-colors hover:text-foreground sm:min-h-9 sm:min-w-9"
+          >
+            <Eye size={15} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            onClick={() => onDismiss("NOT_INTERESTED")}
+            aria-label={`Not interested in ${rec.title}`}
+            title="Not interested: keep this out of future suggestions"
+            className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-lg text-muted ring-1 ring-line transition-colors hover:text-foreground sm:min-h-9 sm:min-w-9"
+          >
+            <Ban size={15} aria-hidden="true" />
+          </button>
+        </div>
       </div>
     </Card>
   );

@@ -1,5 +1,7 @@
 import { ImageResponse } from "next/og";
+import { headers } from "next/headers";
 import { getSharePayload } from "@/lib/data";
+import { rateLimit } from "@/lib/rate-limit";
 
 export const alt = "A shared Celluloid list";
 export const size = { width: 1200, height: 630 };
@@ -14,12 +16,35 @@ function compactText(value: string, maxLength: number) {
     : normalized;
 }
 
+/** First `x-forwarded-for` hop, or "unknown" if the request arrived without one. */
+function clientIp(headerList: Headers): string {
+  const forwardedFor = headerList.get("x-forwarded-for");
+  return forwardedFor?.split(",")[0]?.trim() || "unknown";
+}
+
 export default async function OpenGraphImage({
   params,
 }: {
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
+
+  // IP-keyed cap: this is a public, no-auth image endpoint that link
+  // unfurlers and crawlers fetch directly and repeatedly, bypassing the page
+  // entirely, so it needs its own ceiling rather than inheriting the page's.
+  // Unlike the page, there's no shared "unavailable" presentation to reuse
+  // for an image response, so a limited caller just gets a bare 429.
+  const limited = rateLimit(`share-og:${clientIp(await headers())}`, 30, 60_000);
+  if (!limited.ok) {
+    return new Response(null, {
+      status: 429,
+      headers: {
+        "Cache-Control": "private, no-store",
+        "Retry-After": String(Math.max(1, limited.retryAfter)),
+      },
+    });
+  }
+
   const payload = await getSharePayload(slug);
   if (!payload) {
     return new Response(null, {

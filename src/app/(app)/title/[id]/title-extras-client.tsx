@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Check, Plus } from "lucide-react";
@@ -26,10 +26,20 @@ export function QuickAdd({
     { kind: "idle" } | { kind: "adding" } | { kind: "done"; id: string }
   >(existingId ? { kind: "done", id: existingId } : { kind: "idle" });
   const [, start] = useTransition();
+  const resultRef = useRef<HTMLAnchorElement>(null);
+  const focusResult = useRef(false);
+
+  useEffect(() => {
+    if (state.kind === "done" && focusResult.current) {
+      focusResult.current = false;
+      resultRef.current?.focus();
+    }
+  }, [state.kind]);
 
   if (state.kind === "done") {
     return (
       <Link
+        ref={resultRef}
         href={`/title/${state.id}`}
         className="focus-ring inline-flex w-fit items-center gap-1 rounded-md bg-emerald-500/15 px-2 py-1 text-[11px] font-medium text-emerald-300 ring-1 ring-emerald-500/30"
       >
@@ -43,7 +53,8 @@ export function QuickAdd({
       type="button"
       disabled={state.kind === "adding"}
       aria-label={`Add ${name} to your watchlist`}
-      onClick={() =>
+      onClick={() => {
+        focusResult.current = true;
         start(async () => {
           setState({ kind: "adding" });
           const res = await addFromTmdb(tmdbId, mediaType);
@@ -57,7 +68,7 @@ export function QuickAdd({
             toast.error(res.error ?? `Couldn't add ${name}. Please try again.`);
           }
         })
-      }
+      }}
       className="focus-ring inline-flex min-h-11 w-fit items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-muted ring-1 ring-line transition-colors hover:text-foreground disabled:opacity-60 sm:min-h-0"
     >
       {state.kind === "adding" ? <Spinner className="h-3 w-3" /> : <Plus size={11} />}

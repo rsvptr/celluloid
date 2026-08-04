@@ -1,11 +1,42 @@
 import type { Metadata } from "next";
 import { Clapperboard, LockKeyhole, MessageSquareQuote } from "lucide-react";
+import { headers } from "next/headers";
 import { notFound } from "next/navigation";
+import { cache } from "react";
 import { Wordmark } from "@/components/brand";
 import { TitleCard } from "@/components/title-card";
 import { getSharePayload } from "@/lib/data";
+import { rateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
+
+/** First `x-forwarded-for` hop, or "unknown" if the request arrived without one. */
+function clientIp(headerList: Headers): string {
+  const forwardedFor = headerList.get("x-forwarded-for");
+  return forwardedFor?.split(",")[0]?.trim() || "unknown";
+}
+
+/**
+ * IP-keyed cap for this public, no-auth route (getSharePayload has no ceiling
+ * of its own). Wrapped in React's cache() — like getSharePayload below — so
+ * generateMetadata and the page body, which both run for a single page view,
+ * share one deduction instead of two.
+ */
+const checkShareRateLimit = cache(async () => {
+  const ip = clientIp(await headers());
+  return rateLimit(`share-page:${ip}`, 60, 60_000);
+});
+
+/**
+ * Rate-limit-aware wrapper around getSharePayload: a limited caller gets back
+ * null, exactly what an unknown slug gets back, so it flows into the same
+ * "unavailable" handling as a revoked/expired/missing share below — no
+ * separate status code or message that would confirm the slug exists.
+ */
+async function loadSharePayload(slug: string) {
+  const limited = await checkShareRateLimit();
+  return limited.ok ? getSharePayload(slug) : null;
+}
 
 function itemLabel(count: number) {
   return count === 1 ? "title" : "titles";
@@ -25,7 +56,7 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
   const { slug } = await params;
-  const payload = await getSharePayload(slug);
+  const payload = await loadSharePayload(slug);
   const title = payload
     ? payload.name
       ? `${payload.name} · ${payload.ownerName}`
@@ -51,7 +82,7 @@ export default async function SharePage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const payload = await getSharePayload(slug);
+  const payload = await loadSharePayload(slug);
   if (!payload) notFound();
 
   const { items, name, ownerName, includeNotes } = payload;

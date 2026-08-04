@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { memo, useCallback, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import Link from "next/link";
 import { windowActivity } from "@/components/charts";
 import type { ActivityDay } from "@/lib/data";
@@ -66,29 +66,48 @@ export function ActivityCalendar({
   const cellRefs = useRef(new Map<string, HTMLButtonElement | null>());
   const tabStop = focused ?? reachable[reachable.length - 1] ?? null;
 
-  const moveTo = (index: number) => {
-    const date = reachable[Math.max(0, Math.min(reachable.length - 1, index))];
-    if (!date) return;
-    setFocused(date);
-    cellRefs.current.get(date)?.focus();
-  };
+  const moveTo = useCallback(
+    (index: number) => {
+      const date = reachable[Math.max(0, Math.min(reachable.length - 1, index))];
+      if (!date) return;
+      setFocused(date);
+      cellRefs.current.get(date)?.focus();
+    },
+    [reachable],
+  );
 
-  const onKeyDown = (e: KeyboardEvent<HTMLButtonElement>, date: string) => {
-    const i = reachable.indexOf(date);
-    if (i < 0) return;
-    const step: Record<string, number | undefined> = {
-      ArrowUp: i - 1,
-      ArrowDown: i + 1,
-      ArrowLeft: i - 7,
-      ArrowRight: i + 7,
-      Home: 0,
-      End: reachable.length - 1,
-    };
-    const next = step[e.key];
-    if (next === undefined) return;
-    e.preventDefault();
-    moveTo(next);
-  };
+  // useCallback (here and below) so React.memo(DayCell) holds and
+  // selecting/arrow-keying a cell doesn't reconcile all ~371 day buttons —
+  // only `reachable` (the calendar's own layout) can change these callbacks'
+  // identity, and that's stable across a click or keypress.
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLButtonElement>, date: string) => {
+      const i = reachable.indexOf(date);
+      if (i < 0) return;
+      const step: Record<string, number | undefined> = {
+        ArrowUp: i - 1,
+        ArrowDown: i + 1,
+        ArrowLeft: i - 7,
+        ArrowRight: i + 7,
+        Home: 0,
+        End: reachable.length - 1,
+      };
+      const next = step[e.key];
+      if (next === undefined) return;
+      e.preventDefault();
+      moveTo(next);
+    },
+    [reachable, moveTo],
+  );
+
+  const handleSelect = useCallback((date: string) => {
+    setSelected(date);
+    setFocused(date);
+  }, []);
+
+  const registerCell = useCallback((date: string, el: HTMLButtonElement | null) => {
+    cellRefs.current.set(date, el);
+  }, []);
 
   const level = (c: number) => {
     if (c <= 0) return 0;
@@ -111,26 +130,16 @@ export function ActivityCalendar({
                 cell.future ? (
                   <div key={cell.date} className="h-[11px] w-[11px]" />
                 ) : (
-                  <button
+                  <DayCell
                     key={cell.date}
-                    ref={(el) => {
-                      cellRefs.current.set(cell.date, el);
-                    }}
-                    type="button"
-                    tabIndex={cell.date === tabStop ? 0 : -1}
-                    aria-pressed={cell.date === selected}
-                    aria-label={`${cell.date}: ${cell.count} watched`}
-                    title={`${cell.date}: ${cell.count} watched`}
-                    onClick={() => {
-                      setSelected(cell.date);
-                      setFocused(cell.date);
-                    }}
-                    onKeyDown={(e) => onKeyDown(e, cell.date)}
-                    className={cn(
-                      "focus-ring h-[11px] w-[11px] rounded-[2px]",
-                      LEVEL_CLASS[level(cell.count)],
-                      cell.date === selected && "ring-1 ring-foreground",
-                    )}
+                    date={cell.date}
+                    count={cell.count}
+                    level={level(cell.count)}
+                    selected={cell.date === selected}
+                    isTabStop={cell.date === tabStop}
+                    onSelect={handleSelect}
+                    onKeyDown={handleKeyDown}
+                    registerCell={registerCell}
                   />
                 ),
               )}
@@ -194,3 +203,48 @@ export function ActivityCalendar({
     </div>
   );
 }
+
+function DayCellImpl({
+  date,
+  count,
+  level,
+  selected,
+  isTabStop,
+  onSelect,
+  onKeyDown,
+  registerCell,
+}: {
+  date: string;
+  count: number;
+  /** Precomputed 0–4 index into LEVEL_CLASS (depends on the grid's own max, so
+   *  the parent computes it rather than handing this cell the whole column). */
+  level: number;
+  selected: boolean;
+  isTabStop: boolean;
+  onSelect: (date: string) => void;
+  onKeyDown: (e: KeyboardEvent<HTMLButtonElement>, date: string) => void;
+  registerCell: (date: string, el: HTMLButtonElement | null) => void;
+}) {
+  return (
+    <button
+      ref={(el) => {
+        registerCell(date, el);
+      }}
+      type="button"
+      tabIndex={isTabStop ? 0 : -1}
+      aria-pressed={selected}
+      aria-label={`${date}: ${count} watched`}
+      title={`${date}: ${count} watched`}
+      onClick={() => onSelect(date)}
+      onKeyDown={(e) => onKeyDown(e, date)}
+      className={cn(
+        "focus-ring h-[11px] w-[11px] rounded-[2px]",
+        LEVEL_CLASS[level],
+        selected && "ring-1 ring-foreground",
+      )}
+    />
+  );
+}
+
+/** Memoized so selecting or arrow-keying a cell doesn't reconcile all ~371 day buttons. */
+const DayCell = memo(DayCellImpl);

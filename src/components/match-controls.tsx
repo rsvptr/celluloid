@@ -113,8 +113,8 @@ export function MatchControls({
             </Dialog.Title>
             <Dialog.Description className="mt-0.5 text-xs text-muted">
               {unmatched
-                ? "Pick the matching title to pull in its poster, cast, and episode list. Your status, rating, notes, tags, and watch progress all stay put."
-                : "Pick the correct title. Your status, rating, notes, tags, and watch progress all stay put."}
+                ? "Pick the matching title to pull in its poster, cast, and episode list. Your status, rating, notes, tags, and watch history stay put."
+                : "Pick the correct title. Your status, rating, notes, tags, and watch history stay put; episode progress resets for a different show."}
             </Dialog.Description>
             <div
               className={

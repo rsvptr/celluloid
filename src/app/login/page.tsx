@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { Wordmark } from "@/components/brand";
-import { FadeIn } from "@/components/motion";
+import { FadeIn, MotionProvider } from "@/components/motion";
 import { signupsDisabled } from "@/lib/auth";
 import { getOptionalUser } from "@/lib/session";
 import { AuthForm } from "./auth-form";
@@ -33,6 +33,11 @@ export default async function LoginPage() {
     // the page itself never scrolls; the form column scrolls internally on
     // short screens instead. Ambience (glow, grid texture, top accent line)
     // lives on MAIN so both columns share one continuous canvas - no seam.
+    // MotionProvider is mounted here (not the root layout) because this page
+    // and the authed shell are the only Motion users; the provider is what
+    // makes FadeIn and the form's transitions honor the OS reduce-motion
+    // setting.
+    <MotionProvider>
     <main className="relative min-h-dvh overflow-hidden lg:grid lg:h-dvh lg:grid-cols-[minmax(0,1.08fr)_minmax(28rem,0.92fr)]">
       <div aria-hidden="true" className="pointer-events-none absolute inset-0">
         {/* Radial glows are desktop-only (mobile has its own hero-float glow);
@@ -105,5 +110,6 @@ export default async function LoginPage() {
         </FadeIn>
       </section>
     </main>
+    </MotionProvider>
   );
 }

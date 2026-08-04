@@ -1,14 +1,33 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { FileSpreadsheet, Upload, UploadCloud, X } from "lucide-react";
+import { FileSpreadsheet, RotateCcw, Upload, UploadCloud, X } from "lucide-react";
 import { Button, Card, Spinner } from "@/components/ui";
 import { ImportReview } from "@/components/import-review";
-import type { StagedImportJobView } from "@/lib/import-staging-format";
+import type { StagedImportJobView } from "@/lib/import-staging-views";
 import { cn } from "@/lib/utils";
 
 const MAX_BYTES = 2 * 1024 * 1024;
 const ACCEPT_RE = /\.(xlsx|csv)$/i;
+const ACTIVE_CHECK_ERROR =
+  "Celluloid couldn't verify whether an import is already unfinished. Uploads are paused until this check succeeds.";
+
+async function fetchActiveImport(signal?: AbortSignal): Promise<StagedImportJobView | null> {
+  const response = await fetch("/api/import/jobs/active", {
+    cache: "no-store",
+    signal,
+  });
+  const body = (await response.json().catch(() => null)) as
+    | { job?: StagedImportJobView | null; error?: string }
+    | null;
+  if (!response.ok) {
+    throw new Error(body?.error ?? ACTIVE_CHECK_ERROR);
+  }
+  if (!body || !("job" in body)) {
+    throw new Error(ACTIVE_CHECK_ERROR);
+  }
+  return body.job ?? null;
+}
 
 function formatSize(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -21,26 +40,36 @@ export function ImportUpload() {
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingActive, setLoadingActive] = useState(true);
+  const [activeError, setActiveError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<StagedImportJobView | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch("/api/import/jobs/active", { cache: "no-store", signal: controller.signal })
-      .then(async (response) => {
-        const body = (await response.json().catch(() => null)) as
-          | { job?: StagedImportJobView | null }
-          | null;
-        if (response.ok && body?.job) setJob(body.job);
-      })
+    fetchActiveImport(controller.signal)
+      .then((activeJob) => setJob(activeJob))
       .catch((activeError) => {
         if (!(activeError instanceof Error) || activeError.name !== "AbortError") {
-          setError("Celluloid couldn't check for an unfinished import. You can still start a new one.");
+          setActiveError(activeError instanceof Error ? activeError.message : ACTIVE_CHECK_ERROR);
         }
       })
       .finally(() => setLoadingActive(false));
     return () => controller.abort();
   }, []);
+
+  async function retryActiveCheck() {
+    setLoadingActive(true);
+    setActiveError(null);
+    try {
+      setJob(await fetchActiveImport());
+    } catch (activeCheckError) {
+      setActiveError(
+        activeCheckError instanceof Error ? activeCheckError.message : ACTIVE_CHECK_ERROR,
+      );
+    } finally {
+      setLoadingActive(false);
+    }
+  }
 
   function clearFile() {
     setFile(null);
@@ -64,7 +93,7 @@ export function ImportUpload() {
   }
 
   async function upload() {
-    if (!file) return;
+    if (!file || loadingActive || activeError) return;
     setLoading(true);
     setError(null);
     try {
@@ -102,6 +131,8 @@ export function ImportUpload() {
     );
   }
 
+  const uploadBlocked = loading || loadingActive || activeError !== null;
+
   return (
     <Card className="flex flex-col gap-4 p-5" aria-busy={loading || loadingActive}>
       <div>
@@ -117,19 +148,19 @@ export function ImportUpload() {
         htmlFor="import-file"
         onDragOver={(event) => {
           event.preventDefault();
-          if (!loading) setDragging(true);
+          if (!uploadBlocked) setDragging(true);
         }}
         onDragLeave={() => setDragging(false)}
         onDrop={(event) => {
           event.preventDefault();
           setDragging(false);
-          if (!loading) pick(event.dataTransfer.files?.[0] ?? null);
+          if (!uploadBlocked) pick(event.dataTransfer.files?.[0] ?? null);
         }}
         className={cn(
           "flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-line bg-surface-2/30 px-4 py-7 text-center transition-colors",
           "focus-within:ring-2 focus-within:ring-brand/60 hover:border-brand/40 hover:bg-surface-2/50",
           dragging && "border-brand/60 bg-brand/5",
-          loading && "pointer-events-none opacity-60",
+          uploadBlocked && "pointer-events-none opacity-60",
         )}
       >
         <input
@@ -138,6 +169,7 @@ export function ImportUpload() {
           name="library-import"
           type="file"
           accept=".xlsx,.csv"
+          disabled={uploadBlocked}
           className="sr-only"
           onChange={(event) => pick(event.target.files?.[0] ?? null)}
         />
@@ -172,6 +204,24 @@ export function ImportUpload() {
         )}
       </label>
 
+      {loadingActive ? (
+        <p role="status" className="flex items-center gap-2 text-sm text-muted">
+          <Spinner /> Checking for an unfinished import…
+        </p>
+      ) : null}
+
+      {activeError ? (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-rose-500/10 px-3 py-2 text-sm text-rose-300 ring-1 ring-rose-500/20"
+        >
+          <p>{activeError}</p>
+          <Button type="button" variant="secondary" size="sm" onClick={retryActiveCheck}>
+            <RotateCcw size={14} aria-hidden="true" /> Retry check
+          </Button>
+        </div>
+      ) : null}
+
       {error ? (
         <p role="alert" className="rounded-lg bg-rose-500/10 px-3 py-2 text-sm text-rose-300 ring-1 ring-rose-500/20">
           {error}
@@ -183,7 +233,7 @@ export function ImportUpload() {
         variant="primary"
         size="sm"
         className="self-start"
-        disabled={!file || loading || loadingActive}
+        disabled={!file || uploadBlocked}
         onClick={upload}
       >
         {loading ? <Spinner /> : <Upload size={15} aria-hidden="true" />}

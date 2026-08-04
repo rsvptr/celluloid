@@ -17,7 +17,7 @@ import { Button, Card, Input, Select, Textarea } from "@/components/ui";
 import { RatingStars } from "@/components/rating-stars";
 import { useConfirm } from "@/components/confirm-dialog";
 import { STATUS_META, STATUS_ORDER } from "@/lib/format";
-import { logWatch, removeTitle, updateTitle } from "@/lib/actions";
+import { logWatch, removeTitle, restoreTitle, updateTitle } from "@/lib/actions";
 import { cn } from "@/lib/utils";
 
 type NotesStatus = "idle" | "saving" | "saved" | "error";
@@ -561,9 +561,31 @@ export function TitleControls({
             )
               return;
             startTransition(async () => {
-              await removeTitle(id);
-              router.push("/");
-              router.refresh();
+              try {
+                await removeTitle(id);
+                toast.success("Moved to Trash", {
+                  action: {
+                    label: "Undo",
+                    onClick: () => {
+                      void restoreTitle(id)
+                        .then(() => {
+                          toast.success("Restored to your library");
+                          router.push(`/title/${id}`);
+                          router.refresh();
+                        })
+                        .catch(() => {
+                          toast.error(
+                            "Couldn't undo that. Restore the title from Trash.",
+                          );
+                        });
+                    },
+                  },
+                });
+                router.push("/");
+                router.refresh();
+              } catch {
+                toast.error("Couldn't move this title to Trash. Please try again.");
+              }
             });
           }}
         >

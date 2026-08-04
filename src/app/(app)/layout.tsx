@@ -1,6 +1,8 @@
+import { Toaster } from "sonner";
 import { requireUser } from "@/lib/session";
 import { Nav } from "@/components/nav";
-import { CommandPalette } from "@/components/command-palette";
+import { MotionProvider } from "@/components/motion";
+import { LazyCommandPalette } from "@/components/command-palette-lazy";
 
 export default async function AppLayout({
   children,
@@ -11,6 +13,7 @@ export default async function AppLayout({
   // The command palette fetches its title index lazily on first open, so the
   // layout doesn't run (and serialize) a whole-library query on every page.
   return (
+    <MotionProvider>
     <div className="flex min-h-dvh flex-col">
       <a
         href="#main"
@@ -29,7 +32,24 @@ export default async function AppLayout({
       >
         {children}
       </main>
-      <CommandPalette />
+      <LazyCommandPalette />
+      <Toaster
+        theme="dark"
+        richColors
+        position="bottom-right"
+        mobileOffset={{ bottom: "calc(4.5rem + env(safe-area-inset-bottom))" }}
+        toastOptions={{
+          style: {
+            background: "var(--color-surface)",
+            border: "1px solid var(--color-line)",
+            color: "var(--color-foreground)",
+          },
+          classNames: {
+            actionButton: "min-h-11 sm:min-h-0",
+          },
+        }}
+      />
     </div>
+    </MotionProvider>
   );
 }

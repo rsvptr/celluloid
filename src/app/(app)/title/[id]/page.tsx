@@ -3,9 +3,9 @@ import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Calendar, Clock, Globe, Star } from "lucide-react";
+import { ArrowLeft, Calendar, CalendarClock, Clock, Globe, Star } from "lucide-react";
 import { requireUser } from "@/lib/session";
-import { getTags, getTitleDetail } from "@/lib/data";
+import { dayKeyInZone, getTags, getTitleDetail } from "@/lib/data";
 import { prisma } from "@/lib/prisma";
 import { WatchEventKind } from "@/generated/prisma/client";
 import { Poster } from "@/components/poster";
@@ -26,6 +26,19 @@ import { TagEditor } from "./tag-editor";
 import { TitleExtras, TitleExtrasFallback } from "./title-extras";
 import { WatchHistory } from "./watch-history";
 
+/**
+ * TMDB's TV lifecycle string, softened for display. "Ended" (concluded its
+ * run) and "Canceled" (axed) are deliberately kept distinct — whether a show
+ * got a real ending is exactly what a viewer deciding to start it wants to
+ * know; only the spelling of "Canceled" is normalized. Anything else (e.g.
+ * "Planned", "In Production") is shown exactly as TMDB sent it.
+ */
+function tvStatusLabel(status: string): string {
+  if (status === "Returning Series") return "Returning";
+  if (status === "Canceled") return "Cancelled";
+  return status;
+}
+
 export async function generateMetadata({
   params,
 }: {
@@ -44,7 +57,7 @@ export default async function TitlePage({
 }) {
   const { id } = await params;
   const user = await requireUser();
-  const [title, allTags, watchCount] = await Promise.all([
+  const [title, allTags, watchCount, prefs] = await Promise.all([
     getTitleDetail(user.id, id),
     getTags(user.id),
     // Completion + rewatch count for the "Watched n times" badge and the
@@ -56,6 +69,7 @@ export default async function TitlePage({
         kind: { in: [WatchEventKind.TITLE_COMPLETED, WatchEventKind.REWATCH] },
       },
     }),
+    prisma.user.findUnique({ where: { id: user.id }, select: { timeZone: true } }),
   ]);
   if (!title) notFound();
 
@@ -70,6 +84,26 @@ export default async function TitlePage({
     meta.push({ icon: Globe, text: languageName(title.language) });
   if (title.runtime)
     meta.push({ icon: Clock, text: runtimeText(title.runtime) });
+  // TV lifecycle, kept current by the nightly metadata sync
+  // (lib/metadata-sync.ts) — null until that has synced this title at least
+  // once, and never set for movies.
+  if (isTv && title.tmdbStatus) {
+    // "Still to come" is judged on the owner's calendar, not the server's UTC
+    // one: at 11pm in a zone behind UTC, the server's "today" is already
+    // tomorrow, which read an episode airing tonight as already gone. The air
+    // date column is a plain calendar date (midnight UTC), so its own day key
+    // is taken in UTC and compared with the owner-local day key of now.
+    const todayKey = dayKeyInZone(new Date(), prefs?.timeZone ?? "UTC");
+    const nextEpisode =
+      title.nextEpisodeAirDate &&
+      dayKeyInZone(title.nextEpisodeAirDate, "UTC") >= todayKey
+        ? `Next episode ${fullDate(title.nextEpisodeAirDate)}`
+        : null;
+    meta.push({
+      icon: CalendarClock,
+      text: [tvStatusLabel(title.tmdbStatus), nextEpisode].filter(Boolean).join(" · "),
+    });
+  }
 
   return (
     <div className="flex flex-col gap-6">

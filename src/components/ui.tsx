@@ -53,10 +53,15 @@ export function Button({
 const fieldBase =
   "rounded-lg bg-surface-2 px-3 text-base sm:text-sm text-foreground placeholder:text-faint ring-1 ring-line-strong focus:outline-none focus:ring-2 focus:ring-brand/60 transition";
 
+// ComponentProps<"input"> (not InputHTMLAttributes<HTMLInputElement>): the
+// latter is attributes-only and has no `ref` field, so callers couldn't get a
+// ref to the underlying <input> through this wrapper. React 19 treats `ref` as
+// a plain prop for function components — no forwardRef needed — but the type
+// still has to include it, which ComponentProps<"input"> does.
 export function Input({
   className,
   ...props
-}: React.InputHTMLAttributes<HTMLInputElement>) {
+}: React.ComponentProps<"input">) {
   return <input className={cn(fieldBase, "h-11 sm:h-10 w-full", className)} {...props} />;
 }
 

@@ -108,8 +108,8 @@ export function WatchHistoryList({
         title: "Remove this watch?",
         body:
           total === 1
-            ? "This is the only recorded viewing, so the title will no longer have a watch date. Its status is left as it is."
-            : "This removes it from your history, stats and streaks. No undo.",
+            ? "This is the only recorded viewing. It comes off your history, stats and streaks, but the title keeps its watch date and status. No undo."
+            : "This removes it from your history, stats and streaks, and the title's watch date moves back to the latest remaining viewing. No undo.",
         confirmLabel: "Remove",
         destructive: true,
       }))

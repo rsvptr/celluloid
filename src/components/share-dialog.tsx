@@ -1,6 +1,6 @@
 "use client";
 
-import { type RefObject, useState, useTransition } from "react";
+import { type RefObject, useEffect, useRef, useState, useTransition } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Check, Copy, ExternalLink, Link2, X } from "lucide-react";
 import { toast } from "sonner";
@@ -33,6 +33,14 @@ export function ShareDialog({
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  const resultActionRef = useRef<HTMLButtonElement>(null);
+
+  // Creating the link replaces the focused submit button with the result view.
+  // Move focus into that view so it stays inside the open modal and lands on the
+  // most useful next action instead of falling back to <body> behind the overlay.
+  useEffect(() => {
+    if (url) resultActionRef.current?.focus();
+  }, [url]);
 
   function reset() {
     setName("");
@@ -206,6 +214,7 @@ export function ShareDialog({
                   {url}
                 </span>
                 <button
+                  ref={resultActionRef}
                   onClick={copy}
                   className={cn(
                     "flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/60",

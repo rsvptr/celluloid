@@ -138,8 +138,14 @@ export function RatingStars({
         aria-valuemax={max}
         aria-valuenow={value ?? 0}
         aria-valuetext={value ? `${value} out of ${max}` : "Not rated"}
-        // touch-none stops the browser from scroll-fighting the scrub gesture.
-        className="focus-ring flex touch-none select-none items-center gap-1 rounded"
+        // pan-y, not none: the scrub is horizontal, so the browser only needs to
+        // stay out of the way horizontally. touch-none also claimed VERTICAL
+        // gestures, which meant a thumb-scroll that happened to start on this row
+        // never scrolled — it ran as a press-and-release and onPointerUp committed
+        // whatever rating sat under the lifted finger. With pan-y the browser takes
+        // a vertical swipe for scrolling and fires pointercancel, which drops the
+        // preview without committing (see onPointerCancel).
+        className="focus-ring flex touch-pan-y select-none items-center gap-1 rounded"
         style={{ cursor: disabled ? "default" : "pointer" }}
         onKeyDown={onKeyDown}
         onPointerDown={onPointerDown}

@@ -1,9 +1,9 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy, Download, Sparkles } from "lucide-react";
 import { toast } from "sonner";
-import { Button, Card, Input, Select } from "@/components/ui";
+import { Button, Card, Input, Select, Spinner } from "@/components/ui";
 import { STATUS_META, STATUS_ORDER } from "@/lib/format";
 import {
   FORMATS,
@@ -17,6 +17,11 @@ import {
   toAiPrompt,
 } from "@/lib/export/format";
 import { cn } from "@/lib/utils";
+import {
+  encodeExportRememberedState,
+  REMEMBERED_COOKIE_NAMES,
+  writeRememberedCookie,
+} from "@/lib/remembered-state-client";
 
 const FORMAT_HELP: Record<FormatKey, string> = {
   ai: "A taste summary and recommendation request ready to paste into an AI assistant.",
@@ -30,19 +35,32 @@ export function ExportPanel({
   rows,
   tags,
   initialScope,
+  initialFormat,
+  rememberFilters,
 }: {
   rows: ExportRow[];
   tags: string[];
   /** Raw scope hints from the URL (library deep link); validated before use. */
   initialScope?: Record<string, unknown>;
+  initialFormat?: FormatKey;
+  rememberFilters: boolean;
 }) {
   const [scope, setScope] = useState<ExportScope>(() =>
     sanitizeScope(initialScope ?? {}, rows, tags),
   );
-  const [format, setFormat] = useState<FormatKey>("ai");
+  const [format, setFormat] = useState<FormatKey>(initialFormat ?? "ai");
   const [count, setCount] = useState(15);
   const [copied, setCopied] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  useEffect(() => {
+    if (!rememberFilters) return;
+    writeRememberedCookie(
+      REMEMBERED_COOKIE_NAMES.export,
+      encodeExportRememberedState(format, scope),
+    );
+  }, [format, rememberFilters, scope]);
 
   // Distinct languages (code → display) and genres present in the library, so
   // the filters only ever offer values that actually match something.
@@ -107,6 +125,11 @@ export function ExportPanel({
 
   async function download() {
     if (format === "xlsx") {
+      // Building the workbook is the one export path that hits the network, so
+      // it is the one path that needs a pending state; guard against a second
+      // click firing another request while the first is still in flight.
+      if (downloading) return;
+      setDownloading(true);
       // Fetched, never navigated to: only a successful workbook carries
       // Content-Disposition, so navigating would replace this page with the raw
       // error body on any failure — and coming back re-seeds the scope from the
@@ -133,6 +156,8 @@ export function ExportPanel({
             ? downloadError.message
             : "Celluloid couldn't build the workbook. Try again.",
         );
+      } finally {
+        setDownloading(false);
       }
       return;
     }
@@ -356,8 +381,15 @@ export function ExportPanel({
             {copied ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
             {copied ? "Copied" : format === "ai" ? "Copy AI prompt" : "Copy"}
           </Button>
-          <Button onClick={download} disabled={filtered.length === 0}>
-            <Download size={16} aria-hidden="true" />
+          <Button
+            onClick={download}
+            disabled={filtered.length === 0 || (format === "xlsx" && downloading)}
+          >
+            {format === "xlsx" && downloading ? (
+              <Spinner />
+            ) : (
+              <Download size={16} aria-hidden="true" />
+            )}
             Download {fmt.ext.toUpperCase()}
           </Button>
         </div>

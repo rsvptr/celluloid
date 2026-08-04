@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Check, ChevronDown, ChevronsDown } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui";
+import { useConfirm } from "@/components/confirm-dialog";
 import {
   setAllEpisodesWatched,
   setEpisodeWatched,
@@ -42,24 +43,49 @@ export function SeasonTracker({
   seasons: SeasonVM[];
 }) {
   const router = useRouter();
-  const [, startTransition] = useTransition();
+  const [isPending, startTransition] = useTransition();
+  const { confirm, dialog } = useConfirm();
 
   // Local optimistic watched-state, keyed by episode id.
   const [watched, setWatched] = useState<Record<string, boolean>>(() =>
     watchedFromServer(seasons),
   );
+  // Mirrors `watched` so the mutation queue below (see toggleEpisode etc.) can
+  // diff against the true current value — including edits from clicks that
+  // happened after an earlier job was already queued — rather than a value
+  // closed over when that job was created. `applyWatched` keeps it current
+  // synchronously on every optimistic edit (it only ever runs from an event
+  // handler, never during render, so writing a ref there is fine). Refs may
+  // only be written outside render, though — never inline in the component
+  // body the way the resync block below writes `watched` — so a plain effect
+  // covers that path instead, and this can't be folded into the block above.
+  const latestWatchedRef = useRef(watched);
+  useEffect(() => {
+    latestWatchedRef.current = watched;
+  }, [watched]);
+
+  /** Patches `watched` (and its ref mirror) with `{episodeId: nextValue}` pairs. */
+  function applyWatched(patch: Record<string, boolean>) {
+    const next = { ...latestWatchedRef.current, ...patch };
+    latestWatchedRef.current = next;
+    setWatched(next);
+  }
 
   // Re-sync to authoritative server state only when the actual server data
   // changes. The parent rebuilds the `seasons` array on every render, so we key
   // off a content signature (ids + watched flags) — that way an in-flight
   // optimistic tick isn't clobbered by an unrelated parent re-render. Adjusting
   // state during render (guarded by the previous signature) lets React restart
-  // the render immediately instead of paint-then-re-render via an effect.
+  // the render immediately instead of paint-then-re-render via an effect. Also
+  // skips while the mutation queue below is draining — lastSig is left
+  // untouched so the change is re-detected once the queue settles — otherwise a
+  // resync mid-batch could overwrite an optimistic tick for an episode later in
+  // the same batch with stale pre-batch server data.
   const serverSig = seasons
     .map((s) => s.episodes.map((e) => `${e.id}:${e.watched ? 1 : 0}`).join(","))
     .join("|");
   const [lastSig, setLastSig] = useState(serverSig);
-  if (lastSig !== serverSig) {
+  if (lastSig !== serverSig && !isPending) {
     setLastSig(serverSig);
     setWatched(watchedFromServer(seasons));
   }
@@ -101,18 +127,62 @@ export function SeasonTracker({
     airedEpisodes.length > 0 &&
     airedEpisodes.every((e) => watched[e.id]);
 
-  function toggleEpisode(epId: string) {
-    const next = !watched[epId];
-    setWatched((w) => ({ ...w, [epId]: next }));
+  // Serialized drain queue for the four handlers below (see title-controls.tsx's
+  // immediate-field queue for the pattern this mirrors — read that first). Each
+  // handler used to open its own startTransition and call router.refresh() in
+  // its own finally, so ticking several episodes quickly fired one full-page
+  // RSC re-fetch PER CLICK — N sequential server round-trips behind an already
+  // -instant optimistic UI. Now every click still applies its optimistic change
+  // synchronously via applyWatched (outside the transition, so it never waits
+  // its turn), but the network call it triggers is only queued; drainQueue
+  // drains one call at a time — never more than one in flight — and
+  // router.refresh() fires once, after the queue is empty, instead of once per
+  // click. Each queued job captures its own rollback (which episodes, and what
+  // to revert them to) and only applies it if nothing newer has since touched
+  // those same episodes — see the per-job supersession check in each handler —
+  // so a slow failure can never clobber a later, already-settled change.
+  const queueRef = useRef<Array<() => Promise<void>>>([]);
+  const drainingRef = useRef(false);
+
+  async function drainQueue() {
+    if (drainingRef.current) return; // a drain is already running
+    drainingRef.current = true;
+    try {
+      while (queueRef.current.length > 0) {
+        const job = queueRef.current.shift()!;
+        await job();
+      }
+    } finally {
+      drainingRef.current = false;
+    }
+    router.refresh();
+  }
+
+  // Kick the drain inside a transition so isPending stays true for its whole
+  // run — the resync guard above keys off isPending to avoid clobbering an
+  // in-flight batch. If a drain is already running it simply absorbs the new
+  // job on its next loop iteration.
+  function enqueue(job: () => Promise<void>) {
+    queueRef.current.push(job);
+    if (drainingRef.current) return;
     startTransition(async () => {
+      await drainQueue();
+    });
+  }
+
+  function toggleEpisode(epId: string) {
+    const prev = latestWatchedRef.current[epId];
+    const next = !prev;
+    applyWatched({ [epId]: next });
+    enqueue(async () => {
       try {
         await setEpisodeWatched(epId, next);
       } catch {
-        // Roll back only this episode, not the whole map — a concurrent
-        // successful toggle elsewhere shouldn't be clobbered.
-        setWatched((w) => ({ ...w, [epId]: !next }));
-      } finally {
-        router.refresh();
+        // Roll back only if nothing newer has touched this episode since — a
+        // concurrent successful toggle elsewhere shouldn't be clobbered.
+        if (latestWatchedRef.current[epId] === next) {
+          applyWatched({ [epId]: prev });
+        }
       }
     });
   }
@@ -125,24 +195,22 @@ export function SeasonTracker({
     // the same `hasAired` the rest of this component judges by, so the two can't
     // drift apart. Unmarking still clears everything — so does the server.
     const affected = value ? season.episodes.filter(hasAired) : season.episodes;
-    const prevValues = new Map(affected.map((e) => [e.id, watched[e.id]]));
-    setWatched((w) => {
-      const copy = { ...w };
-      for (const e of affected) copy[e.id] = value;
-      return copy;
-    });
-    startTransition(async () => {
+    const prevValues = new Map(
+      affected.map((e) => [e.id, latestWatchedRef.current[e.id]]),
+    );
+    applyWatched(Object.fromEntries(affected.map((e) => [e.id, value])));
+    enqueue(async () => {
       try {
         await setSeasonWatched(season.id, value);
       } catch {
-        // Roll back only this season's episodes, not the whole map.
-        setWatched((w) => {
-          const copy = { ...w };
-          for (const [id, v] of prevValues) copy[id] = v;
-          return copy;
-        });
-      } finally {
-        router.refresh();
+        // Roll back only episodes still holding the value this call set, not
+        // the whole map — anything a later click already changed again is left
+        // dirty rather than clobbered (that click's own job owns it now).
+        const toRevert: Record<string, boolean> = {};
+        for (const [id, prevValue] of prevValues) {
+          if (latestWatchedRef.current[id] === value) toRevert[id] = prevValue;
+        }
+        if (Object.keys(toRevert).length > 0) applyWatched(toRevert);
       }
     });
   }
@@ -151,55 +219,83 @@ export function SeasonTracker({
     // Aired-only on the way up, everything on the way down — the same rule
     // toggleSeason follows, and the same one the server enforces.
     const affected = value ? airedEpisodes : allEpisodes;
-    const prevValues = new Map(affected.map((e) => [e.id, watched[e.id]]));
-    setWatched((w) => {
-      const copy = { ...w };
-      for (const e of affected) copy[e.id] = value;
-      return copy;
-    });
-    startTransition(async () => {
+    const prevValues = new Map(
+      affected.map((e) => [e.id, latestWatchedRef.current[e.id]]),
+    );
+    applyWatched(Object.fromEntries(affected.map((e) => [e.id, value])));
+    enqueue(async () => {
       try {
         await setAllEpisodesWatched(titleId, value);
       } catch {
-        // Roll back only the episodes this action touched, not the whole map.
-        setWatched((w) => {
-          const copy = { ...w };
-          for (const [id, v] of prevValues) copy[id] = v;
-          return copy;
-        });
-      } finally {
-        router.refresh();
+        // Roll back only the episodes this action touched AND that still hold
+        // the value it set — not the whole map, and not anything re-edited since.
+        const toRevert: Record<string, boolean> = {};
+        for (const [id, prevValue] of prevValues) {
+          if (latestWatchedRef.current[id] === value) toRevert[id] = prevValue;
+        }
+        if (Object.keys(toRevert).length > 0) applyWatched(toRevert);
       }
     });
+  }
+
+  async function confirmMassUnwatch(episodes: EpisodeVM[], scope: string) {
+    const count = episodes.filter((episode) => latestWatchedRef.current[episode.id]).length;
+    // A one-off correction should stay lightweight. The destructive case is a
+    // mass clear, where a sparse hand-curated pattern cannot be reconstructed by
+    // the available "mark watched" bulk action.
+    if (count <= 3) return true;
+    return confirm({
+      title: `Mark ${count} episodes unwatched?`,
+      body: `Unlike unticking one episode, this clears these ticks but keeps their watch activity history. The individual pattern ${scope} can't be restored automatically.`,
+      confirmLabel: "Mark unwatched",
+      destructive: true,
+    });
+  }
+
+  async function requestSeasonToggle(season: SeasonVM, value: boolean) {
+    if (
+      !value &&
+      !(await confirmMassUnwatch(
+        season.episodes,
+        `in ${season.name ?? `Season ${season.seasonNumber}`}`,
+      ))
+    ) {
+      return;
+    }
+    toggleSeason(season, value);
+  }
+
+  async function requestAllToggle(value: boolean) {
+    if (!value && !(await confirmMassUnwatch(allEpisodes, "across this show"))) return;
+    toggleAll(value);
   }
 
   // "I'm up to here": marks every aired episode in this season through `ep`.
   function watchThrough(season: SeasonVM, ep: EpisodeVM) {
     const affected = season.episodes.filter(
-      (e) => e.episodeNumber <= ep.episodeNumber && !watched[e.id] && hasAired(e),
+      (e) =>
+        e.episodeNumber <= ep.episodeNumber &&
+        !latestWatchedRef.current[e.id] &&
+        hasAired(e),
     );
     if (affected.length === 0) return;
-    const prevValues = new Map(affected.map((e) => [e.id, watched[e.id]]));
-    setWatched((w) => {
-      const copy = { ...w };
-      for (const e of affected) copy[e.id] = true;
-      return copy;
-    });
-    startTransition(async () => {
+    const prevValues = new Map(
+      affected.map((e) => [e.id, latestWatchedRef.current[e.id]]),
+    );
+    applyWatched(Object.fromEntries(affected.map((e) => [e.id, true])));
+    enqueue(async () => {
       try {
         const res = await setEpisodesWatchedThrough(ep.id);
         toast.success(
           `Marked ${res.count} ${res.count === 1 ? "episode" : "episodes"} watched`,
         );
       } catch (e) {
-        setWatched((w) => {
-          const copy = { ...w };
-          for (const [id, v] of prevValues) copy[id] = v;
-          return copy;
-        });
+        const toRevert: Record<string, boolean> = {};
+        for (const [id, prevValue] of prevValues) {
+          if (latestWatchedRef.current[id] === true) toRevert[id] = prevValue;
+        }
+        if (Object.keys(toRevert).length > 0) applyWatched(toRevert);
         toast.error((e as Error).message);
-      } finally {
-        router.refresh();
       }
     });
   }
@@ -207,7 +303,9 @@ export function SeasonTracker({
   if (total === 0) return null;
 
   return (
-    <div className="flex flex-col gap-3">
+    <>
+      {dialog}
+      <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold">Episodes</h2>
@@ -226,7 +324,7 @@ export function SeasonTracker({
           size="sm"
           variant={allWatched || caughtUp ? "secondary" : "primary"}
           aria-pressed={allWatched || caughtUp}
-          onClick={() => toggleAll(!(allWatched || caughtUp))}
+          onClick={() => void requestAllToggle(!(allWatched || caughtUp))}
         >
           {allWatched || caughtUp ? "Mark all unwatched" : "Mark show watched"}
         </Button>
@@ -277,7 +375,7 @@ export function SeasonTracker({
                   </span>
                 </button>
                 <button
-                  onClick={() => toggleSeason(season, !sComplete)}
+                  onClick={() => void requestSeasonToggle(season, !sComplete)}
                   aria-pressed={sComplete}
                   className={cn(
                     "focus-ring flex min-h-11 shrink-0 items-center justify-center rounded-md px-2 py-1 text-xs ring-1 transition-colors sm:min-h-0",
@@ -286,7 +384,7 @@ export function SeasonTracker({
                       : "bg-surface-2 text-muted ring-line hover:text-foreground",
                   )}
                 >
-                  {sComplete ? "Watched" : "Mark season"}
+                  {sComplete ? "Mark season unwatched" : "Mark season watched"}
                 </button>
               </div>
 
@@ -364,6 +462,7 @@ export function SeasonTracker({
           );
         })}
       </div>
-    </div>
+      </div>
+    </>
   );
 }

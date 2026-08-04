@@ -18,7 +18,9 @@
   --color-line-strong: #5d6f84;
   --color-foreground: #e7eef6;
   --color-muted: #8a97a8;
-  --color-faint: #7c8795;
+  /* >=4.55:1 against --color-surface-2 (the tightest of the three surfaces),
+     which clears WCAG AA's 4.5:1 for normal text. */
+  --color-faint: #7c8995;
 
   --color-brand: #2dd4ee;
   --color-brand-cyan: #2dd4ee;
@@ -70,16 +72,56 @@ label {
    first paint (once painted, `auto` remembers the real size). */
 .cv-auto {
   content-visibility: auto;
-  contain-intrinsic-size: auto 61px;
+  /* List row floor: w-9 thumb at the poster's 2/3 aspect (36 × 1.5 = 54px)
+     plus py-2.5 (20px) = 74px. Rows that also carry a tag-chip line are
+     taller, but `auto` remembers each row's real height after first paint —
+     the constant only has to be honest for rows never yet painted. */
+  contain-intrinsic-size: auto 74px;
 }
 
-/* Same idea for library GRID cards (poster + title/meta text). The size here
-   is an approximation of a typical rendered card — width/height vary with the
-   grid's column count, but content-visibility only needs a placeholder to
-   avoid scroll-jank before first paint. */
+/* Library GRID cards (poster + title/meta text). Card height is width at the
+   poster's 2/3 aspect ratio (w × 1.5) plus the text block below it (mt-2 8px +
+   text-sm h2 line-height 20px + text-xs p line-height 16px = 44px). Width
+   follows the column count, which changes at every grid breakpoint
+   (library.tsx: 2 / min-[480px]:3 / sm:4 / md:5 / lg:6 / xl:7 columns inside
+   the shell's max-w-7xl px-4 with gap-x-4), so one desktop constant left
+   phone placeholders ~15-25% too tall and made long-library scroll anchoring
+   drift. Each range below uses its mid-range card width; xl is exact because
+   max-w-7xl caps the row at 1248px: (1248 − 6×16) / 7 ≈ 165px. */
 .cv-auto-card {
   content-visibility: auto;
-  contain-intrinsic-size: auto 180px auto 320px;
+  /* <480px, 2 cols — at 375px: (375 − 32 − 16) / 2 ≈ 164px wide */
+  contain-intrinsic-size: auto 164px auto 289px;
+}
+@media (min-width: 480px) {
+  /* 3 cols — at 560px: (560 − 32 − 32) / 3 ≈ 165px */
+  .cv-auto-card {
+    contain-intrinsic-size: auto 165px auto 292px;
+  }
+}
+@media (min-width: 640px) {
+  /* 4 cols — at 704px: (704 − 32 − 48) / 4 = 156px */
+  .cv-auto-card {
+    contain-intrinsic-size: auto 156px auto 278px;
+  }
+}
+@media (min-width: 768px) {
+  /* 5 cols — at 896px: (896 − 32 − 64) / 5 = 160px */
+  .cv-auto-card {
+    contain-intrinsic-size: auto 160px auto 284px;
+  }
+}
+@media (min-width: 1024px) {
+  /* 6 cols — at 1152px: (1152 − 32 − 80) / 6 ≈ 173px */
+  .cv-auto-card {
+    contain-intrinsic-size: auto 173px auto 304px;
+  }
+}
+@media (min-width: 1280px) {
+  /* 7 cols — exact under the max-w-7xl cap: (1248 − 96) / 7 ≈ 165px */
+  .cv-auto-card {
+    contain-intrinsic-size: auto 165px auto 291px;
+  }
 }
 
 /* --- Brand helpers --- */

@@ -1,9 +1,19 @@
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import { requireUser } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { getAccountInfo, getUserShareLists } from "@/lib/data";
+import { getWatchProviders } from "@/lib/tmdb";
 import { DEFAULT_WATCH_REGION } from "@/lib/tmdb-extras";
-import { SettingsClient, type TagSummary } from "./settings-client";
+import {
+  isRememberFiltersEnabled,
+  REMEMBER_FILTERS_TOGGLE_COOKIE,
+} from "@/lib/remembered-state";
+import {
+  SettingsClient,
+  type ProviderOption,
+  type TagSummary,
+} from "./settings-client";
 
 export const metadata: Metadata = { title: "Settings" };
 
@@ -43,14 +53,45 @@ function backupAgeInDays(at: Date | null | undefined): number | null {
 
 export default async function SettingsPage() {
   const user = await requireUser();
-  const [info, shares, tags, prefs] = await Promise.all([
+  const preferencesPromise = prisma.user.findUnique({
+    where: { id: user.id },
+    select: {
+      timeZone: true,
+      watchRegion: true,
+      myProviders: true,
+      lastBackupAt: true,
+    },
+  });
+  // The catalogue depends only on the saved account region. Start every other
+  // independent read before resolving that dependency so Settings does not add
+  // an avoidable database/API waterfall.
+  const providerCataloguePromise = preferencesPromise.then(async (prefs) => {
+    const region = prefs?.watchRegion ?? DEFAULT_WATCH_REGION;
+    try {
+      const providers = await getWatchProviders(region);
+      return {
+        unavailable: false,
+        providers: providers.map(
+          (provider): ProviderOption => ({
+            id: provider.provider_id,
+            name: provider.provider_name,
+            logoPath: provider.logo_path,
+          }),
+        ),
+      };
+    } catch (error) {
+      console.error(`Could not load TMDB watch providers for ${region}:`, error);
+      return { unavailable: true, providers: [] as ProviderOption[] };
+    }
+  });
+
+  const [info, shares, tags, prefs, providerCatalogue, cookieStore] = await Promise.all([
     getAccountInfo(user.id),
     getUserShareLists(user.id),
     getTagSummaries(user.id),
-    prisma.user.findUnique({
-      where: { id: user.id },
-      select: { timeZone: true, watchRegion: true, lastBackupAt: true },
-    }),
+    preferencesPromise,
+    providerCataloguePromise,
+    cookies(),
   ]);
   return (
     // Full shell width (D-UI-17 amendment): no per-page cap.
@@ -62,8 +103,14 @@ export default async function SettingsPage() {
         tags={tags}
         timeZone={prefs?.timeZone ?? "UTC"}
         watchRegion={prefs?.watchRegion ?? DEFAULT_WATCH_REGION}
+        myProviders={prefs?.myProviders ?? []}
+        providers={providerCatalogue.providers}
+        providersUnavailable={providerCatalogue.unavailable}
         lastBackupAt={prefs?.lastBackupAt?.toISOString() ?? null}
         backupAgeDays={backupAgeInDays(prefs?.lastBackupAt)}
+        rememberFilters={isRememberFiltersEnabled(
+          cookieStore.get(REMEMBER_FILTERS_TOGGLE_COOKIE)?.value,
+        )}
       />
     </div>
   );

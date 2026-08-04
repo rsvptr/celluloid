@@ -13,6 +13,7 @@ import {
   ArrowLeft,
   CheckSquare,
   ChevronDown,
+  Clapperboard,
   Dices,
   Download,
   Heart,
@@ -54,7 +55,13 @@ import {
   restoreTitle,
 } from "@/lib/actions";
 import { tagChipClass } from "@/lib/tag-colors";
+import { regionName } from "@/lib/tmdb-extras";
 import { cn } from "@/lib/utils";
+import {
+  encodeLibraryRememberedState,
+  REMEMBERED_COOKIE_NAMES,
+  writeRememberedCookie,
+} from "@/lib/remembered-state-client";
 
 const SORTS: { key: SortKey; label: string }[] = [
   { key: "added", label: "Recently added" },
@@ -99,6 +106,10 @@ export function Library({
   genres,
   trashed,
   initialFilters,
+  myProviders,
+  watchRegion,
+  providerStaleBefore,
+  rememberFilters,
 }: {
   items: LibraryItem[];
   languages: string[];
@@ -112,6 +123,12 @@ export function Library({
   genres: string[];
   trashed: TrashedTitle[];
   initialFilters: LibraryFilters;
+  myProviders: number[];
+  /** Effective per-device region: cookie, then account preference, then default. */
+  watchRegion: string;
+  /** Server-stamped ISO cutoff (page render time minus seven days). */
+  providerStaleBefore: string;
+  rememberFilters: boolean;
 }) {
   const router = useRouter();
   const reduceMotion = useReducedMotion();
@@ -133,6 +150,9 @@ export function Library({
   const [sort, setSort] = useState<SortKey>(initialFilters.sort);
   const [view, setView] = useState<"grid" | "list">(initialFilters.view);
   const [onlyUnmatched, setOnlyUnmatched] = useState(initialFilters.onlyUnmatched);
+  const [onlyOnServices, setOnlyOnServices] = useState(
+    initialFilters.onlyOnServices ?? false,
+  );
   // The single advanced-filters disclosure (all widths); collapsed by default.
   const [showFilters, setShowFilters] = useState(false);
 
@@ -144,12 +164,14 @@ export function Library({
   const shareOpener = useRef<HTMLElement | null>(null);
   // The advanced-filters disclosure trigger, so Escape can return focus to it.
   const filtersTriggerRef = useRef<HTMLButtonElement>(null);
+  // Target of the "/" focus shortcut (see the keydown effect below).
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Mirror the view into the URL (replaceState: no history spam, no server
   // round trip) so the current filters are shareable, bookmarkable, and restored
   // when you come back from a title detail via the browser's Back button.
   useEffect(() => {
-    const qs = filtersToParams({
+    const currentFilters: LibraryFilters = {
       query: query.trim(),
       type,
       status,
@@ -160,14 +182,35 @@ export function Library({
       sort,
       view,
       onlyUnmatched,
-    }).toString();
+      onlyOnServices,
+    };
+    const qs = filtersToParams(currentFilters).toString();
     const next = qs
       ? `${window.location.pathname}?${qs}`
       : window.location.pathname;
     if (`${window.location.pathname}${window.location.search}` !== next) {
       window.history.replaceState(window.history.state, "", next);
     }
-  }, [query, type, status, language, tag, genre, rating, sort, view, onlyUnmatched]);
+    if (rememberFilters) {
+      writeRememberedCookie(
+        REMEMBERED_COOKIE_NAMES.library,
+        encodeLibraryRememberedState(currentFilters),
+      );
+    }
+  }, [
+    query,
+    type,
+    status,
+    language,
+    tag,
+    genre,
+    rating,
+    sort,
+    view,
+    onlyUnmatched,
+    onlyOnServices,
+    rememberFilters,
+  ]);
 
   const hasFilters =
     query !== "" ||
@@ -177,7 +220,8 @@ export function Library({
     tag !== "all" ||
     genre !== "all" ||
     rating !== "all" ||
-    onlyUnmatched;
+    onlyUnmatched ||
+    onlyOnServices;
 
   // Active advanced facets, one removable chip each. Excludes type (its own
   // quick-filter) and sort (ordering, not a filter), so the chip set and the
@@ -221,6 +265,8 @@ export function Library({
     return index;
   }, [items]);
 
+  const myProviderIds = useMemo(() => new Set(myProviders), [myProviders]);
+
   const filtered = useMemo(() => {
     const q = fold(query.trim());
     let list = items.filter((it) => {
@@ -234,6 +280,12 @@ export function Library({
         if (it.rating == null || it.rating < Number(rating)) return false;
       }
       if (onlyUnmatched && it.tmdbId != null) return false;
+      if (
+        onlyOnServices &&
+        (it.providersRegion !== watchRegion ||
+          !it.streamProviderIds.some((id) => myProviderIds.has(id)))
+      )
+        return false;
       if (q && !(searchIndex.get(it.id) ?? fold(it.name)).includes(q)) return false;
       return true;
     });
@@ -267,7 +319,30 @@ export function Library({
     rating,
     sort,
     onlyUnmatched,
+    onlyOnServices,
+    myProviderIds,
+    watchRegion,
   ]);
+
+  // The brief intentionally defines staleness from the newest cached result:
+  // if even that row is older than a week, the whole visible answer is old.
+  const staleServiceDataAt = useMemo(() => {
+    if (!onlyOnServices || filtered.length === 0) return null;
+    let newest: string | null = null;
+    for (const item of filtered) {
+      if (
+        item.providersSyncedAt &&
+        (newest === null || item.providersSyncedAt > newest)
+      ) {
+        newest = item.providersSyncedAt;
+      }
+    }
+    if (!newest) return "not refreshed yet";
+    if (newest < providerStaleBefore) {
+      return `last refreshed ${fullDate(newest)}`;
+    }
+    return null;
+  }, [filtered, onlyOnServices, providerStaleBefore]);
 
   // The authoritative selection for actions: visible AND selected, in view order.
   // Deriving the intersection here (instead of pruning `selected` in an effect)
@@ -306,6 +381,31 @@ export function Library({
     return () => window.removeEventListener("keydown", onKey);
   }, [showFilters]);
 
+  // "/" focuses the search field (the same convention as GitHub, Linear, etc).
+  // Ignored while a modifier is held (so browser/OS shortcuts using "/" still
+  // work), while typing anywhere text can already go, and while a dialog or the
+  // command palette is open — both render a Radix dialog (`[role="dialog"]`),
+  // the same signal the Escape handlers above already check — otherwise the
+  // keystroke would steal focus out from under whatever currently has it.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "/") return;
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName))
+      )
+        return;
+      if (document.querySelector('[role="dialog"],[role="alertdialog"]')) return;
+      // Stop the "/" itself from landing in the field it's about to focus.
+      e.preventDefault();
+      searchInputRef.current?.focus();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // Return to the library automatically once Trash empties (e.g. the last title
   // was restored or purged), so the user isn't stranded on an empty Trash view.
   // Adjusted during render (not in an effect) per React's "adjusting state when a
@@ -325,6 +425,7 @@ export function Library({
     setGenre("all");
     setRating("all");
     setOnlyUnmatched(false);
+    setOnlyOnServices(false);
   }
 
   // useCallback so React.memo(TitleCard) holds and search-as-you-type doesn't
@@ -396,6 +497,7 @@ export function Library({
               className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-faint"
             />
             <Input
+              ref={searchInputRef}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search your library…"
@@ -444,6 +546,25 @@ export function Library({
               </button>
             ))}
           </div>
+          <button
+            type="button"
+            onClick={() => setOnlyOnServices((value) => !value)}
+            aria-pressed={onlyOnServices}
+            title={
+              myProviders.length > 0
+                ? `Show titles available on your ${myProviders.length} selected ${myProviders.length === 1 ? "service" : "services"}`
+                : "Choose your services in Settings"
+            }
+            className={cn(
+              "focus-ring flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-sm ring-1 transition-colors sm:min-h-8",
+              onlyOnServices
+                ? "bg-brand/15 text-brand ring-brand/40"
+                : "text-muted ring-line hover:text-foreground",
+            )}
+          >
+            <Clapperboard aria-hidden="true" size={15} />
+            On my services
+          </button>
           <button
             ref={filtersTriggerRef}
             type="button"
@@ -611,7 +732,7 @@ export function Library({
                     Needs match
                   </button>
                 </div>
-                {(trashedCount > 0 || hasFilters) && (
+                {(trashedCount > 0 || (hasFilters && !onlyOnServices)) && (
                   <div className="flex items-center justify-between gap-2 border-t border-line pt-3">
                     {trashedCount > 0 ? (
                       <button
@@ -624,7 +745,7 @@ export function Library({
                     ) : (
                       <span />
                     )}
-                    {hasFilters && (
+                    {hasFilters && !onlyOnServices && (
                       <Link
                         href={exportHref}
                         title="Open Export with these filters applied"
@@ -716,9 +837,22 @@ export function Library({
         )}
       </div>
 
+      {onlyOnServices && filtered.length > 0 ? (
+        <p className="-mt-2 text-xs text-faint">
+          Availability in {regionName(watchRegion)} via JustWatch
+          {staleServiceDataAt ? ` · ${staleServiceDataAt}` : ""}
+        </p>
+      ) : null}
+
       {/* Results */}
       {filtered.length === 0 ? (
-        <EmptyState hasItems={items.length > 0} onClear={clearFilters} />
+        <EmptyState
+          hasItems={items.length > 0}
+          onClear={clearFilters}
+          onlyOnServices={onlyOnServices}
+          hasConfiguredProviders={myProviders.length > 0}
+          watchRegion={watchRegion}
+        />
       ) : view === "grid" ? (
         <div className="grid grid-cols-2 gap-x-4 gap-y-6 min-[480px]:grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7">
           {filtered.map((it, i) => (
@@ -819,6 +953,49 @@ function BulkBar({
         toast.error((e as Error).message);
       } finally {
         // Always re-sync to the server so a partial failure can't leave stale UI.
+        router.refresh();
+      }
+    });
+  }
+
+  function removeSelected() {
+    // Capture the exact selection before leaving select mode; the toast action
+    // outlives this bar and must not read whatever ids a later selection holds.
+    const removedIds = [...ids];
+    start(async () => {
+      try {
+        const res = await bulkRemoveTitles(removedIds);
+        onDone();
+        toast.success(
+          `Removed ${res.count} ${res.count === 1 ? "title" : "titles"}`,
+          {
+            action: {
+              label: "Undo",
+              onClick: () => {
+                void (async () => {
+                  // Bound the server-action fan-out for a large selection. Each
+                  // restore is ownership-scoped and safely no-ops if a row was
+                  // already restored through Trash in another tab.
+                  for (let index = 0; index < removedIds.length; index += 6) {
+                    await Promise.all(
+                      removedIds.slice(index, index + 6).map((id) => restoreTitle(id)),
+                    );
+                  }
+                  toast.success(
+                    `Restored ${res.count} ${res.count === 1 ? "title" : "titles"}`,
+                  );
+                  router.refresh();
+                })().catch(() => {
+                  toast.error("Couldn't restore every title. Check Trash and retry.");
+                  router.refresh();
+                });
+              },
+            },
+          },
+        );
+      } catch (error) {
+        toast.error((error as Error).message);
+      } finally {
         router.refresh();
       }
     });
@@ -997,7 +1174,7 @@ function BulkBar({
                     }))
                   )
                     return;
-                  run(() => bulkRemoveTitles(ids).then((r) => (onDone(), r)), "Removed");
+                  removeSelected();
                 }}
                 className="min-h-11"
               >
@@ -1158,7 +1335,53 @@ function ListRow({
   );
 }
 
-function EmptyState({ hasItems, onClear }: { hasItems: boolean; onClear: () => void }) {
+function EmptyState({
+  hasItems,
+  onClear,
+  onlyOnServices,
+  hasConfiguredProviders,
+  watchRegion,
+}: {
+  hasItems: boolean;
+  onClear: () => void;
+  onlyOnServices: boolean;
+  hasConfiguredProviders: boolean;
+  watchRegion: string;
+}) {
+  if (hasItems && onlyOnServices) {
+    return (
+      <div className="flex flex-col items-center justify-center rounded-[var(--radius-card)] border border-dashed border-line px-5 py-16 text-center">
+        <p className="text-sm font-medium text-foreground">
+          {hasConfiguredProviders
+            ? `No titles are confirmed on your services in ${regionName(watchRegion)}.`
+            : "Choose your streaming services to see what you can watch tonight."}
+        </p>
+        <p className="mt-2 max-w-xl text-sm text-muted">
+          {hasConfiguredProviders
+            ? "A title may be missing while its provider cache warms overnight, or when its cached region differs from this device's region."
+            : "Add the subscriptions you use in Settings, then this one-tap view will match them against availability refreshed each night."}
+        </p>
+        <div className="mt-3 flex flex-wrap items-center justify-center gap-1">
+          <Link
+            href="/settings"
+            className="focus-ring flex min-h-11 items-center justify-center rounded-lg px-2 py-1.5 text-sm font-medium text-brand hover:underline sm:min-h-0"
+          >
+            {hasConfiguredProviders ? "Review services and region" : "Choose my services"}
+          </Link>
+          <span className="text-faint">·</span>
+          <button
+            type="button"
+            onClick={onClear}
+            className="focus-ring flex min-h-11 items-center justify-center rounded-lg px-2 py-1.5 text-sm text-muted hover:text-foreground sm:min-h-0"
+          >
+            Show full library
+          </button>
+        </div>
+        <p className="mt-3 text-xs text-faint">Availability data via JustWatch</p>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col items-center justify-center gap-3 rounded-[var(--radius-card)] border border-dashed border-line py-20 text-center">
       <p className="text-sm text-muted">

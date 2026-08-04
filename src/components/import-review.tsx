@@ -25,7 +25,8 @@ import {
   type ProposedImportMatch,
   type StagedImportItemView,
   type StagedImportJobView,
-} from "@/lib/import-staging-format";
+} from "@/lib/import-staging-views";
+import { existingImportReviewFacts } from "@/lib/import-merge";
 import { cn } from "@/lib/utils";
 
 /** The one confidence scale in the review screen: the row label, the filter
@@ -59,7 +60,13 @@ function yearOf(item: StagedImportItemView): string {
 
 /** What the sheet said about this title, beyond its name. */
 function sheetFacts(item: StagedImportItemView): string[] {
-  const facts: string[] = [];
+  const status =
+    item.parsed.status === "WATCHED"
+      ? "Watched"
+      : item.parsed.status === "PARTIALLY_WATCHED"
+        ? "Partially watched"
+        : "Watchlist";
+  const facts: string[] = [`Sheet status: ${status}`];
   if (item.parsed.rating != null) facts.push(`Rated ${item.parsed.rating}`);
   if (item.parsed.watchedAt) facts.push(`Watched ${item.parsed.watchedAt}`);
   return facts;
@@ -313,6 +320,12 @@ export function ImportReview({
             <p className="mt-1 text-xs text-muted">
               Confirm each TMDB match, exclude rows you do not want, then commit in safe resumable batches.
             </p>
+            <p className="mt-1.5 max-w-2xl text-xs text-faint">
+              New titles take the sheet&apos;s status, rating, and watch date. Existing titles
+              refresh metadata, fill only a missing rating or watch date, and apply Watching
+              or Watched only while the title is still on your Watchlist. Existing personal
+              choices are never replaced.
+            </p>
           </div>
           <span className="rounded-full bg-surface-2 px-2.5 py-1 text-xs font-medium text-muted ring-1 ring-line">
             {job.items.length} {job.items.length === 1 ? "row" : "rows"}
@@ -473,6 +486,7 @@ export function ImportReview({
             const done = item.titleId !== null;
             const failed = item.action === "FAILED";
             const facts = sheetFacts(item);
+            const mergeFacts = item.action === "UPDATE" ? existingImportReviewFacts(item.parsed) : [];
             return (
               <li
                 key={item.id}
@@ -529,11 +543,11 @@ export function ImportReview({
                           </p>
                           <p className="text-xs text-muted">
                             {done
-                              ? item.action === "CREATE" ? "Added to library" : "Existing title refreshed"
+                              ? item.action === "CREATE" ? "Added to library" : "Existing title safely merged"
                               : excluded
                                 ? "Excluded"
                                 : item.action === "UPDATE"
-                                  ? "Already in your library"
+                                  ? "Already in your library · safe merge on commit"
                                   : confidence(item.matchScore)}
                           </p>
                         </div>
@@ -546,6 +560,12 @@ export function ImportReview({
 
                     {item.warning && !excluded ? (
                       <p className="mt-2 text-xs text-amber-200">{item.warning}</p>
+                    ) : null}
+
+                    {mergeFacts.length > 0 && !excluded ? (
+                      <p className="mt-2 text-xs text-faint">
+                        Existing title: {mergeFacts.join(". ")}.
+                      </p>
                     ) : null}
 
                     {item.parsed.ratingText && !excluded ? (

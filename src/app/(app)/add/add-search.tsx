@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { Check, Plus } from "lucide-react";
 import { toast } from "sonner";
@@ -79,9 +79,28 @@ function AddButton({
   state: AddState;
   onAdd: () => void;
 }) {
+  const resultRef = useRef<HTMLAnchorElement>(null);
+  const focusResult = useRef(false);
+
+  useEffect(() => {
+    if (
+      (state.kind === "added" || state.kind === "exists") &&
+      focusResult.current
+    ) {
+      focusResult.current = false;
+      resultRef.current?.focus();
+    }
+  }, [state.kind]);
+
+  function beginAdd() {
+    focusResult.current = true;
+    onAdd();
+  }
+
   if (state.kind === "added" || state.kind === "exists") {
     return (
       <Link
+        ref={resultRef}
         href={`/title/${state.id}`}
         aria-label={`View ${name} in your library`}
         className="focus-ring flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg bg-emerald-500/15 px-3 py-2 text-sm font-medium text-emerald-300 ring-1 ring-emerald-500/30 hover:bg-emerald-500/25 sm:min-h-0"
@@ -96,7 +115,7 @@ function AddButton({
       <div className="flex shrink-0 flex-col items-end gap-1">
         <button
           type="button"
-          onClick={onAdd}
+          onClick={beginAdd}
           aria-label={`Retry adding ${name}`}
           title={state.message}
           className="focus-ring min-h-11 shrink-0 rounded-lg bg-rose-500/15 px-3 py-2 text-sm text-rose-300 ring-1 ring-rose-500/30 sm:min-h-0"
@@ -112,7 +131,7 @@ function AddButton({
   return (
     <button
       type="button"
-      onClick={onAdd}
+      onClick={beginAdd}
       disabled={state.kind === "adding"}
       aria-label={`Add ${name} to your library`}
       className="focus-ring brand-gradient flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-[#04121c] hover:opacity-90 disabled:opacity-60 sm:min-h-0"
