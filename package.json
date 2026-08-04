@@ -3,8 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "packageManager": "npm@11.17.0",
   "engines": {
-    "node": ">=22"
+    "node": ">=22 <25"
   },
   "scripts": {
     "dev": "next dev",
@@ -16,6 +17,8 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
+    "db:deploy:prod": "node --env-file-if-exists=.env.local scripts/deploy-prod-migrations.mjs",
+    "db:dump": "node --env-file-if-exists=.env.local --import tsx scripts/db-dump.mjs",
     "db:push": "prisma db push && npm run db:indexes",
     "db:indexes": "node --import tsx scripts/ensure-indexes.mjs",
     "db:studio": "prisma studio",
@@ -35,7 +38,7 @@
     "exceljs": "^4.4.0",
     "lucide-react": "^1.17.0",
     "motion": "^12.40.0",
-    "next": "16.2.10",
+    "next": "16.2.12",
     "pg": "^8.21.0",
     "prisma": "^7.8.0",
     "qrcode": "^1.5.4",
@@ -55,7 +58,7 @@
     "@types/react-dom": "^19",
     "dotenv": "^17.4.2",
     "eslint": "^9",
-    "eslint-config-next": "16.2.10",
+    "eslint-config-next": "16.2.12",
     "tailwindcss": "^4",
     "tsx": "^4.22.4",
     "typescript": "^5"

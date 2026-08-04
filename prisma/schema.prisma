@@ -131,6 +131,17 @@ model TwoFactor {
   user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   verified    Boolean @default(true)
 
+  // Better Auth's account-lockout state (NIST SP 800-63B §5.2.2), counted
+  // across challenges and factors rather than per challenge. These are not
+  // optional: on a sign-in TOTP or backup-code verification the plugin ALWAYS
+  // writes them — resetTwoFactorFailures on success, an atomic increment on
+  // failure. While the columns were absent, Prisma rejected that write, so a
+  // correct code returned a 500 and 2FA sign-in could not complete at all;
+  // the lockout itself also never engaged, because lockedUntil read as
+  // undefined. Keep these in step with better-auth's two-factor schema.
+  failedVerificationCount Int       @default(0)
+  lockedUntil             DateTime?
+
   @@index([secret])
   @@index([userId])
   @@map("twoFactor")
@@ -178,6 +189,22 @@ model Verification {
   updatedAt  DateTime @updatedAt
 
   @@map("verification")
+}
+
+// Better Auth's durable rate-limit counters, enabled by `rateLimit.storage:
+// "database"` in src/lib/auth.ts. One short-lived row per (endpoint, client)
+// key; Better Auth creates it with count/lastRequest, rewrites it in place each
+// request within the window, and lets it lapse after. Field names and types are
+// fixed by Better Auth's adapter (key/count/lastRequest, lastRequest a bigint
+// epoch-ms); the model name maps to `prisma.rateLimit`, which is the accessor
+// its Prisma adapter looks up. No application code reads or writes this table.
+model RateLimit {
+  id          String @id
+  key         String @unique
+  count       Int
+  lastRequest BigInt
+
+  @@map("rateLimit")
 }
 
 // ---------------------------------------------------------------------------
@@ -411,7 +438,10 @@ model WatchEvent {
   titleId    String
   title      Title            @relation(fields: [titleId], references: [id], onDelete: Cascade)
   episodeId  String?
-  episode    Episode?         @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  // Watch activity is historical evidence, not episode-owned data. Metadata
+  // refreshes replace Episode rows, so deleting one must detach this optional
+  // locator rather than cascade-delete the event itself.
+  episode    Episode?         @relation(fields: [episodeId], references: [id], onDelete: SetNull)
   kind       WatchEventKind
   occurredAt DateTime
   source     WatchEventSource @default(MANUAL)
@@ -420,6 +450,13 @@ model WatchEvent {
 
   @@index([userId, occurredAt])
   @@index([titleId, occurredAt])
+  // Postgres does not index a foreign key for you, and `episodeId` is read
+  // without userId/titleId in the predicate by two paths that both scale with
+  // the whole log: un-ticking an episode looks up its event directly, and every
+  // Episode row deletion must find referencing events to SET NULL. Episode
+  // deletes happen in bulk (re-match, purge, empty trash), so without this the
+  // cost is one full scan per deleted row inside an interactive transaction.
+  @@index([episodeId])
 }
 
 // A staged bulk-import run: parse -> review -> commit.

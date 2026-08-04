@@ -38,6 +38,9 @@ yarn-error.log*
 # personal data (your own watch history; keep it off a public repo)
 /data/*.xlsx
 
+# database dumps (scripts/db-dump.mjs writes auth tables here — never commit)
+/backups/
+
 # vercel
 .vercel
 
