@@ -55,9 +55,17 @@ export const auth = betterAuth({
     deleteUser: { enabled: true },
   },
 
-  // Best-effort brute-force damping (in-memory, production only by default).
-  // The window/max pairs are deliberately tight on credential endpoints.
+  // Brute-force damping on the credential endpoints. Persisted in Postgres
+  // (the `rateLimit` table) rather than per-instance memory, so the tight
+  // per-endpoint caps below hold across Vercel's serverless instances instead
+  // of being silently multiplied by however many happen to be warm — the one
+  // gap the in-memory default leaves open on the app's most sensitive routes.
+  // Counters are short-lived (one `window` each) and self-expire; nothing reads
+  // the table outside this limiter.
   rateLimit: {
+    enabled: true,
+    storage: "database",
+    modelName: "rateLimit",
     window: 60,
     max: 100,
     customRules: {

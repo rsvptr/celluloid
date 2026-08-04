@@ -5,6 +5,7 @@ import {
   enrichRec,
   isValidRec,
   selectRecentBasis,
+  terminalRecEvents,
   type Recommendation,
   type StreamContext,
 } from "../src/lib/recommend";
@@ -314,5 +315,204 @@ describe("buildRequestBlock", () => {
     const s = buildRequestBlock(9, "all", "cozy mysteries", ["Alien", "Heat"]);
     assert.ok(s.includes('Pay special attention to this request: "cozy mysteries".'));
     assert.ok(s.includes("do NOT suggest any of them again: Alien, Heat."));
+  });
+});
+
+// --- terminalRecEvents -------------------------------------------------------
+
+describe("terminalRecEvents", () => {
+  it("emits a distinct refusal error when nothing was accepted", () => {
+    const events = terminalRecEvents(0, 12, { hitMaxTokens: false, hitRefusal: true });
+    assert.deepEqual(events, [
+      {
+        type: "error",
+        error:
+          "Claude declined this request. This can happen when the brief or focus text trips a safety filter, so reword it and try again.",
+      },
+    ]);
+  });
+
+  it("lets the run finish normally (no error) when a refusal follows at least one accepted pick", () => {
+    const events = terminalRecEvents(3, 12, { hitMaxTokens: false, hitRefusal: true });
+    assert.deepEqual(events, [{ type: "done", total: 3 }]);
+  });
+
+  it("prioritizes the refusal message over max_tokens when both fired with nothing accepted", () => {
+    const events = terminalRecEvents(0, 12, { hitMaxTokens: true, hitRefusal: true });
+    assert.deepEqual(events, [
+      {
+        type: "error",
+        error:
+          "Claude declined this request. This can happen when the brief or focus text trips a safety filter, so reword it and try again.",
+      },
+    ]);
+  });
+
+  it("keeps the existing max_tokens error when nothing was accepted and no refusal fired", () => {
+    const events = terminalRecEvents(0, 12, { hitMaxTokens: true, hitRefusal: false });
+    assert.deepEqual(events, [
+      {
+        type: "error",
+        error:
+          "Claude ran out of room before finishing a single suggestion. Ask for fewer titles, or pick a shorter focus, and try again.",
+      },
+    ]);
+  });
+
+  it("keeps the generic empty-result error when neither flag fired", () => {
+    const events = terminalRecEvents(0, 12, { hitMaxTokens: false, hitRefusal: false });
+    assert.deepEqual(events, [
+      {
+        type: "error",
+        error: "Claude didn't return any usable suggestions. Try again, or tweak your focus.",
+      },
+    ]);
+  });
+
+  it("keeps the max_tokens warning-then-done behavior untouched by the refusal flag", () => {
+    const events = terminalRecEvents(3, 5, { hitMaxTokens: true, hitRefusal: false });
+    assert.deepEqual(events, [
+      {
+        type: "warning",
+        message: "Claude hit its length limit after 3 of 5 suggestions. Ask for fewer titles for a complete set.",
+      },
+      { type: "done", total: 3 },
+    ]);
+  });
+
+  it("emits only done when every requested suggestion was accepted", () => {
+    const events = terminalRecEvents(5, 5, { hitMaxTokens: false, hitRefusal: false });
+    assert.deepEqual(events, [{ type: "done", total: 5 }]);
+  });
+});
+
+// --- hard requirements + lookup outages (CEL-15) ----------------------------
+
+describe("enrichRec hard-requirement enforcement", () => {
+  const tallied = () => ({ filteredOut: 0, lookupFailed: 0 });
+
+  it("emits TMDB's year when it differs from the model's claim", async () => {
+    const out = await enrichRec(
+      rec({ year: 2020 }),
+      ctx(),
+      stubSearch([movie(901, "Whiplash", 2021)]),
+    );
+    assert.equal(out?.year, 2021);
+    assert.equal(out?.tmdbId, 901);
+  });
+
+  it("drops a resolved match that violates the language requirement and tallies it", async () => {
+    const tallies = tallied();
+    const out = await enrichRec(
+      rec(),
+      ctx({ requirements: { language: "ja" }, tallies }),
+      stubSearch([movie(902, "Whiplash", 2014, { original_language: "en" })]),
+    );
+    assert.equal(out, null);
+    assert.equal(tallies.filteredOut, 1);
+  });
+
+  it("keeps a resolved match that satisfies the language requirement", async () => {
+    const tallies = tallied();
+    const out = await enrichRec(
+      rec(),
+      ctx({ requirements: { language: "ja" }, tallies }),
+      stubSearch([movie(903, "Whiplash", 2014, { original_language: "ja" })]),
+    );
+    assert.equal(out?.tmdbId, 903);
+    assert.equal(tallies.filteredOut, 0);
+  });
+
+  it("enforces era against the model's own claim when TMDB has no match", async () => {
+    const tallies = tallied();
+    const out = await enrichRec(
+      rec({ year: 2014 }),
+      ctx({ requirements: { era: { from: 1990, to: 1999 } }, tallies }),
+      stubSearch([]),
+    );
+    assert.equal(out, null);
+    assert.equal(tallies.filteredOut, 1);
+  });
+
+  it("keeps an unresolved suggestion whose claims can't be checked", async () => {
+    const tallies = tallied();
+    const r = rec({ year: null });
+    const out = await enrichRec(
+      r,
+      ctx({ requirements: { language: "ja" }, tallies }),
+      stubSearch([]),
+    );
+    assert.equal(out, r);
+    assert.equal(tallies.filteredOut, 0);
+  });
+
+  it("drops a genre mismatch but keeps matches and unknowns", async () => {
+    const horror = new Set([27]);
+    const tallies = tallied();
+    const mismatch = await enrichRec(
+      rec(),
+      ctx({ requirements: { genreIds: horror }, tallies }),
+      stubSearch([movie(904, "Whiplash", 2014, { genre_ids: [18] })]),
+    );
+    assert.equal(mismatch, null);
+    assert.equal(tallies.filteredOut, 1);
+
+    const match = await enrichRec(
+      rec(),
+      ctx({ requirements: { genreIds: horror }, tallies: tallied() }),
+      stubSearch([movie(905, "Whiplash", 2014, { genre_ids: [27, 53] })]),
+    );
+    assert.equal(match?.tmdbId, 905);
+
+    const unknown = await enrichRec(
+      rec(),
+      ctx({ requirements: { genreIds: horror }, tallies: tallied() }),
+      stubSearch([movie(906, "Whiplash", 2014)]),
+    );
+    assert.equal(unknown?.tmdbId, 906);
+  });
+
+  it("drops a match whose TMDB date is in the future", async () => {
+    const tallies = tallied();
+    const out = await enrichRec(
+      rec(),
+      ctx({ tallies }),
+      stubSearch([movie(907, "Whiplash", 2014, { release_date: "2100-01-01" })]),
+    );
+    assert.equal(out, null);
+    assert.equal(tallies.filteredOut, 1);
+  });
+
+  it("tallies a lookup failure and still returns the suggestion unverified", async () => {
+    const tallies = tallied();
+    const r = rec();
+    const throwing = async () => {
+      throw new Error("TMDB unavailable");
+    };
+    const out = await enrichRec(r, ctx({ tallies }), throwing);
+    assert.equal(out, r);
+    assert.equal(tallies.lookupFailed, 1);
+  });
+});
+
+describe("terminalRecEvents requirement/outage warnings", () => {
+  const base = { hitMaxTokens: false, hitRefusal: false };
+
+  it("warns about lookup failures even when the batch filled", () => {
+    const events = terminalRecEvents(5, 5, { ...base, lookupFailed: 2 });
+    assert.equal(events.length, 2);
+    assert.equal(events[0].type, "warning");
+    assert.match((events[0] as { message: string }).message, /TMDB/);
+    assert.deepEqual(events[1], { type: "done", total: 5 });
+  });
+
+  it("warns about filtered drops only when the batch fell short", () => {
+    const short = terminalRecEvents(3, 10, { ...base, filteredOut: 4 });
+    assert.equal(short[0].type, "warning");
+    assert.match((short[0] as { message: string }).message, /dropped/);
+    assert.deepEqual(short.at(-1), { type: "done", total: 3 });
+
+    const full = terminalRecEvents(10, 10, { ...base, filteredOut: 4 });
+    assert.deepEqual(full, [{ type: "done", total: 10 }]);
   });
 });

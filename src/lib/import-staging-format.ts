@@ -2,15 +2,28 @@ import { z } from "zod";
 import { norm } from "@/lib/tmdb-match";
 import type { ParsedTitle } from "@/lib/import/parse-excel";
 import type { TmdbSearchItem } from "@/lib/tmdb";
+import {
+  isTerminalImportItem,
+  type ImportItemAction,
+  type ProposedImportMatch,
+} from "@/lib/import-staging-views";
 
-/**
- * Rows committed per request. This is also the resume granularity — a batch
- * that dies is re-run from its first row — so it trades restart cost against
- * round trips. Five meant a 250-row import spent 50 requests, each re-reading
- * the whole job, to write what one request's worth of TMDB work could cover.
- */
-export const IMPORT_COMMIT_BATCH_SIZE = 20;
-export const IMPORT_MAX_ATTEMPTS = 3;
+// The view types, pacing constants, and terminal predicate live in
+// import-staging-views.ts so client code can import them without pulling Zod
+// into the /add bundle. Everything is re-exported here so server callers keep
+// one import; proposedMatchSchema below is annotated with the shared type so
+// the two files cannot drift.
+export {
+  IMPORT_COMMIT_BATCH_SIZE,
+  IMPORT_MAX_ATTEMPTS,
+  isTerminalImportItem,
+  type ImportItemAction,
+  type ImportJobStatus,
+  type ProposedImportMatch,
+  type StagedImportItemView,
+  type StagedImportJobView,
+} from "@/lib/import-staging-views";
+
 export const INVALID_STAGED_ROW_ERROR = "INVALID_STAGED_ROW";
 export const INVALID_STAGED_ROW_WARNING =
   "This row contains invalid or oversized data. Choose a match or exclude it.";
@@ -59,7 +72,7 @@ export const parsedTitleSchema = z
   })
   .strict();
 
-export const proposedMatchSchema = z
+export const proposedMatchSchema: z.ZodType<ProposedImportMatch> = z
   .object({
     tmdbId: z.number().int().positive(),
     mediaType: z.enum(["movie", "tv"]),
@@ -159,40 +172,7 @@ export function safeStagedNormalized(
   return { data: fallback, valid: false };
 }
 
-export type ProposedImportMatch = z.infer<typeof proposedMatchSchema>;
 
-export type ImportItemAction = "CREATE" | "UPDATE" | "SKIP" | "CONFLICT" | "FAILED";
-export type ImportJobStatus =
-  | "PARSING"
-  | "READY_FOR_REVIEW"
-  | "COMMITTING"
-  | "COMPLETED"
-  | "PARTIAL"
-  | "FAILED"
-  | "CANCELLED";
-
-export interface StagedImportItemView {
-  id: string;
-  rowNumber: number;
-  parsed: ParsedTitle;
-  proposed: ProposedImportMatch | null;
-  matchScore: number | null;
-  action: ImportItemAction;
-  titleId: string | null;
-  errorCode: string | null;
-  warning: string | null;
-  attempts: number;
-}
-
-export interface StagedImportJobView {
-  id: string;
-  filename: string;
-  status: ImportJobStatus;
-  createdAt: string;
-  committedAt: string | null;
-  summary: Record<string, unknown> | null;
-  items: StagedImportItemView[];
-}
 
 export interface ActionPlanItem {
   id: string;
@@ -299,18 +279,6 @@ export function planImportActions(
   return plan;
 }
 
-export function isTerminalImportItem(item: {
-  action: ImportItemAction;
-  titleId: string | null;
-  attempts: number;
-}): boolean {
-  return (
-    item.titleId !== null ||
-    item.action === "SKIP" ||
-    item.action === "CONFLICT" ||
-    (item.action === "FAILED" && item.attempts >= IMPORT_MAX_ATTEMPTS)
-  );
-}
 
 export function deriveImportJobStatus(
   items: Array<{ action: ImportItemAction; titleId: string | null; attempts: number }>,

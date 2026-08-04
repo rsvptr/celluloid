@@ -222,6 +222,10 @@ export function toText(rows: ExportRow[]): string {
     for (const r of list) {
       const bits = [r.status];
       if (r.myRating != null) bits.push(`★${r.myRating}/10`);
+      // watchedAt carries sub-day precision for tasteSummary's recency sort
+      // (see data.ts); truncate to a plain date here, same as releaseDate.
+      if (r.watchedAt) bits.push(`watched ${r.watchedAt.slice(0, 10)}`);
+      if (r.watchCount >= 2) bits.push(`watched ${r.watchCount}×`);
       const p = progress(r);
       if (p) bits.push(p);
       if (r.languageCode) bits.push(r.language);
@@ -237,6 +241,19 @@ export function toText(rows: ExportRow[]): string {
 
 // --- Markdown --------------------------------------------------------------
 
+/**
+ * "My rating" table cell: the rating plus the same watched-date and
+ * rewatch-count bits toText shows, folded into the existing column rather
+ * than adding new ones (the table stays a fixed 7 columns).
+ */
+function ratingCell(r: ExportRow): string {
+  const bits: string[] = [];
+  if (r.myRating != null) bits.push(`${r.myRating}/10`);
+  if (r.watchedAt) bits.push(`watched ${r.watchedAt.slice(0, 10)}`);
+  if (r.watchCount >= 2) bits.push(`watched ${r.watchCount}×`);
+  return bits.join(" · ");
+}
+
 export function toMarkdown(rows: ExportRow[]): string {
   const lines: string[] = [
     "# My Celluloid Library",
@@ -248,7 +265,7 @@ export function toMarkdown(rows: ExportRow[]): string {
   ];
   for (const r of rows) {
     lines.push(
-      `| ${escapeMd(r.name)} | ${r.mediaType === "tv" ? "TV" : "Movie"} | ${r.year ?? ""} | ${r.status} | ${r.myRating != null ? `${r.myRating}/10` : ""} | ${progress(r)} | ${r.languageCode ? r.language : ""} |`,
+      `| ${escapeMd(r.name)} | ${r.mediaType === "tv" ? "TV" : "Movie"} | ${r.year ?? ""} | ${r.status} | ${ratingCell(r)} | ${progress(r)} | ${r.languageCode ? r.language : ""} |`,
     );
   }
   lines.push("");
@@ -271,6 +288,10 @@ export function toJson(rows: ExportRow[]): string {
       language: r.language,
       status: r.status,
       myRating: r.myRating,
+      // watchedAt carries sub-day precision for tasteSummary's recency sort
+      // (see data.ts); sliced to a plain date here, same as releaseDate.
+      watchedAt: r.watchedAt ? r.watchedAt.slice(0, 10) : null,
+      watchCount: r.watchCount,
       tmdbRating: r.tmdbRating,
       genres: r.genres,
       ...(r.mediaType === "tv"
@@ -297,22 +318,47 @@ export function toJson(rows: ExportRow[]): string {
  */
 export function tasteSummary(
   rows: ExportRow[],
-  opts?: { watchlist?: ExportRow[]; abandoned?: ExportRow[] },
+  opts?: {
+    watchlist?: ExportRow[];
+    abandoned?: ExportRow[];
+    /**
+     * Render the watchlist/abandoned blocks as bare "Name (Year)" identity
+     * lines. Those two blocks exist to EXCLUDE titles, and when the basis is a
+     * scoped subset (recent watches / hand-picked titles) their rows are
+     * outside what the owner chose to share — sending their notes, ratings and
+     * tags to the model would leak personal data the run's own disclosure says
+     * stays out. Identity is all exclusion needs.
+     */
+    exclusionIdentityOnly?: boolean;
+  },
 ): string {
   // Bound each block so a large library yields a focused, signal-dense prompt
   // (the extremes of the rating scale carry the most taste signal; the lukewarm
   // middle and long secondary lists mostly dilute it).
-  const rated = rows
-    .filter(
-      (r) =>
-        r.myRating != null &&
-        r.statusKey !== "WATCHLIST" &&
-        r.statusKey !== "DROPPED",
-    )
-    .sort((a, b) => (b.myRating ?? 0) - (a.myRating ?? 0));
+  const rated = rows.filter(
+    (r) =>
+      r.myRating != null &&
+      r.statusKey !== "WATCHLIST" &&
+      r.statusKey !== "DROPPED",
+  );
   // Split the rated list so low scores read as an explicit negative signal, not
-  // just "more data" the model has to infer the polarity of.
-  const ratedSeen = rated.filter((r) => (r.myRating ?? 0) > 4).slice(0, 50);
+  // just "more data" the model has to infer the polarity of. Admission into the
+  // capped positive block follows the declared signal hierarchy — rewatches
+  // above any rating, then favorites, then the rating itself — because a
+  // rating-only sort let 50 ordinary 10/10 rows crowd out a favorite watched
+  // nine times, silently dropping the exact titles the legend calls strongest.
+  // Name breaks remaining ties so the brief is deterministic run to run.
+  const rewatchWeight = (r: ExportRow) => (r.watchCount >= 2 ? r.watchCount : 0);
+  const ratedSeen = rated
+    .filter((r) => (r.myRating ?? 0) > 4)
+    .sort(
+      (a, b) =>
+        rewatchWeight(b) - rewatchWeight(a) ||
+        Number(b.favorite) - Number(a.favorite) ||
+        (b.myRating ?? 0) - (a.myRating ?? 0) ||
+        a.name.localeCompare(b.name),
+    )
+    .slice(0, 50);
   const ratedLow = rated
     .filter((r) => (r.myRating ?? 0) <= 4)
     .sort((a, b) => (a.myRating ?? 0) - (b.myRating ?? 0))
@@ -374,16 +420,22 @@ export function tasteSummary(
     );
   }
 
-  const block = (heading: string, list: ExportRow[], withRating = true) => {
+  const block = (heading: string, list: ExportRow[], withRating = true, bare = false) => {
     if (!list.length) return;
     out.push(heading);
     for (const r of list) {
+      if (bare) {
+        // Identity only — no rating/favorite/rewatch decoration and no note.
+        out.push(`- ${r.year ? `${r.name} (${r.year})` : r.name}`);
+        continue;
+      }
       out.push(`- ${compactLine(r, withRating)}`);
       const note = noteHint(r.notes);
       if (note) out.push(`  note: ${note}`);
     }
     out.push("");
   };
+  const bareExclusions = opts?.exclusionIdentityOnly === true;
 
   block("★ WATCHED & RATED (my strongest taste signal, higher = better):", ratedSeen);
   block(
@@ -399,11 +451,17 @@ export function tasteSummary(
     "ON HOLD (started, paused for now — don't recommend these, and note I stalled on them):",
     onHold,
   );
-  block("ABANDONED / didn't finish (do NOT recommend things like these):", abandoned);
+  block(
+    "ABANDONED / didn't finish (do NOT recommend things like these):",
+    abandoned,
+    true,
+    bareExclusions,
+  );
   block(
     "ON MY WATCHLIST (already planned, so do NOT recommend these, and don't repeat anything above):",
     watchlist,
     false,
+    bareExclusions,
   );
 
   return out.join("\n").trimEnd();

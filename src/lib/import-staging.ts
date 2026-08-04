@@ -16,6 +16,11 @@ import {
 import { pickBest } from "@/lib/tmdb-match";
 import type { ParsedTitle } from "@/lib/import/parse-excel";
 import {
+  importStatusForParsed,
+  planExistingImportMerge,
+  type ExistingLibraryStatus,
+} from "@/lib/import-merge";
+import {
   deriveImportJobStatus,
   IMPORT_COMMIT_BATCH_SIZE,
   IMPORT_MAX_ATTEMPTS,
@@ -544,12 +549,6 @@ export async function excludeImportItems(input: {
   return reconcileImportActions(input.userId, input.jobId);
 }
 
-function statusForParsed(parsed: ParsedTitle): "WATCHLIST" | "WATCHING" | "WATCHED" {
-  if (parsed.status === "WATCHED") return "WATCHED";
-  if (parsed.status === "PARTIALLY_WATCHED") return "WATCHING";
-  return "WATCHLIST";
-}
-
 /**
  * The personal fields a staged row can seat on a title it just created. A rating
  * and a watch date are facts the owner supplied in the file, so they are written
@@ -589,7 +588,7 @@ async function applyStagedStatus(
   dbMediaType: "MOVIE" | "TV",
   parsed: ParsedTitle,
 ): Promise<void> {
-  const status = statusForParsed(parsed);
+  const status = importStatusForParsed(parsed);
   const personal = personalFieldsFor(parsed);
   if (dbMediaType !== "TV" || status !== "WATCHED") {
     await prisma.title.updateMany({
@@ -642,6 +641,88 @@ async function applyStagedStatus(
         status:
           total === 0
             ? status
+            : watched >= total
+              ? "WATCHED"
+              : watched > 0
+                ? "WATCHING"
+                : "WATCHLIST",
+      },
+    });
+  });
+}
+
+/**
+ * Apply the conservative existing-title policy under a fresh Title lock after
+ * metadata refresh/Trash restore. Rereading here means a rating or status saved
+ * concurrently with the refresh wins over the spreadsheet. This is deliberately
+ * separate from the new-title path above: existing notes, favorite, tags,
+ * source, episode progress, and every non-WATCHLIST status stay authoritative.
+ */
+async function mergeExistingStagedFacts(
+  userId: string,
+  titleId: string,
+  dbMediaType: "MOVIE" | "TV",
+  parsed: ParsedTitle,
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<
+      Array<{
+        id: string;
+        status: ExistingLibraryStatus;
+        rating: number | null;
+        watchedAt: Date | null;
+      }>
+    >`
+      SELECT id, status, rating, "watchedAt"
+      FROM "Title"
+      WHERE id = ${titleId} AND "userId" = ${userId}
+      FOR UPDATE`;
+    const current = rows[0];
+    if (!current) return; // title removed concurrently
+
+    const patch = planExistingImportMerge(current, parsed);
+    const personal = {
+      ...(patch.rating !== undefined ? { rating: patch.rating } : {}),
+      ...(patch.watchedAt !== undefined
+        ? { watchedAt: new Date(`${patch.watchedAt}T00:00:00.000Z`) }
+        : {}),
+    };
+
+    if (dbMediaType !== "TV" || patch.status !== "WATCHED") {
+      if (Object.keys(patch).length === 0) return;
+      await tx.title.update({
+        where: { id: titleId },
+        data: {
+          ...personal,
+          ...(patch.status !== undefined ? { status: patch.status } : {}),
+        },
+      });
+      return;
+    }
+
+    // A WATCHED TV import is episode-backed just like a new staged title. Only
+    // aired/unknown-date episodes are advanced; future episodes remain unwatched.
+    const now = new Date();
+    await tx.episode.updateMany({
+      where: {
+        season: { titleId },
+        watched: false,
+        OR: [{ airDate: null }, { airDate: { lte: now } }],
+      },
+      data: { watched: true, watchedAt: null },
+    });
+    const [total, watched] = await Promise.all([
+      tx.episode.count({ where: { season: { titleId } } }),
+      tx.episode.count({ where: { season: { titleId }, watched: true } }),
+    ]);
+    await tx.title.update({
+      where: { id: titleId },
+      data: {
+        ...personal,
+        watchedEpisodes: watched,
+        status:
+          total === 0
+            ? "WATCHED"
             : watched >= total
               ? "WATCHED"
               : watched > 0
@@ -732,9 +813,12 @@ async function commitOneImportItem(
       titleId = result.id;
       action = result.existing ? "UPDATE" : "CREATE";
       warning = result.warning ?? null;
-      if (!result.existing) {
-        await applyStagedStatus(userId, titleId, dbMediaType, normalized.parsed);
-      }
+    }
+
+    if (action === "UPDATE") {
+      await mergeExistingStagedFacts(userId, titleId, dbMediaType, normalized.parsed);
+    } else {
+      await applyStagedStatus(userId, titleId, dbMediaType, normalized.parsed);
     }
 
     await prisma.importItem.update({

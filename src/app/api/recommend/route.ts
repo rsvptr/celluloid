@@ -10,6 +10,12 @@ import { z } from "zod";
 const boundedId = z.string().min(1).max(64);
 const recentCountSchema = z.union([z.literal(10), z.literal(20), z.literal(50)]);
 
+// Every field below is already bounded, but that schema only runs after the
+// full body has been read into memory — reject an oversized declared length
+// up front instead. Mirrors the Content-Length pre-check in the backup
+// restore route (411 for a missing/invalid header, 413 over the cap).
+const MAX_BODY_BYTES = 64 * 1024;
+
 export const recommendRequestSchema = z
   .object({
     count: z.number().int().min(1).max(30).optional(),
@@ -53,6 +59,24 @@ export async function POST(request: Request) {
 
   const rl = rateLimit(`rec:${session.user.id}`, 10, 60_000);
   if (!rl.ok) return tooManyRequests(rl.retryAfter);
+
+  const contentLength = request.headers.get("content-length");
+  if (contentLength === null || !/^\d+$/.test(contentLength.trim())) {
+    return Response.json(
+      { error: "A valid Content-Length header is required for recommendation requests." },
+      { status: 411 },
+    );
+  }
+  const declaredLength = Number(contentLength);
+  if (!Number.isSafeInteger(declaredLength) || declaredLength <= 0) {
+    return Response.json(
+      { error: "A valid Content-Length header is required for recommendation requests." },
+      { status: 411 },
+    );
+  }
+  if (declaredLength > MAX_BODY_BYTES) {
+    return Response.json({ error: "That request is too large." }, { status: 413 });
+  }
 
   let rawBody: unknown = {};
   try {
@@ -103,8 +127,23 @@ export async function POST(request: Request) {
           // Controller already closed (client went away) — nothing to do.
         }
       };
+      // The function dies at maxDuration (60s) with whatever bytes made it
+      // out; the SDK alone would happily keep streaming past that. A 50s
+      // server deadline leaves room for in-flight TMDB enrichment to settle
+      // and for a terminal line to actually reach the client, so a slow run
+      // ends with partial results and an explanation instead of a socket that
+      // just stops.
+      const deadline = AbortSignal.timeout(50_000);
+      const signal = AbortSignal.any([request.signal, deadline]);
       try {
-        await runRecommendationStream(userId, opts, emit, request.signal);
+        await runRecommendationStream(userId, opts, emit, signal);
+        if (deadline.aborted && !request.signal.aborted) {
+          emit({
+            type: "error",
+            error:
+              "This run hit the server's time limit. Anything already suggested is kept. Run it again for the rest, or ask for fewer titles.",
+          });
+        }
       } catch (err) {
         console.error("Recommendation stream crashed:", err);
         emit({ type: "error", error: "Recommendations failed to start. Try again in a moment." });

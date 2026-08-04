@@ -127,6 +127,15 @@ async function tmdbGet<T>(
       // the clock is what tells the two aborts apart: past the deadline this is
       // the budget stopping the title, not TMDB failing it.
       if (Date.now() >= deadline) throw new SyncBudgetExhaustedError(path);
+      // A thrown fetch — timeout, DNS, TLS, connection reset — is every bit as
+      // transient as the 429/5xx handled below, but it used to fail the title
+      // on the spot, so "two attempts" was only half-kept: a status-code blip
+      // got its retry while a transport blip did not. Same single retry, and
+      // only when the budget can pay for the backoff.
+      if (attempt < 1 && Date.now() + 800 < deadline) {
+        await sleep(800);
+        continue;
+      }
       throw err;
     }
     if ((res.status === 429 || res.status >= 500) && attempt < 1) {
@@ -172,6 +181,24 @@ function fetchSeason(
   );
 }
 
+interface TmdbWatchProvidersResponse {
+  results?: Record<string, TmdbRegionProviders>;
+}
+
+/** One cheap provider-only request for a title that needs no other metadata. */
+function fetchWatchProviders(
+  mediaType: MediaType,
+  tmdbId: number,
+  deadline: number,
+): Promise<TmdbWatchProvidersResponse> {
+  const kind = mediaType === MediaType.TV ? "tv" : "movie";
+  return tmdbGet<TmdbWatchProvidersResponse>(
+    `/${kind}/${tmdbId}/watch/providers`,
+    {},
+    deadline,
+  );
+}
+
 // --- Candidate selection ----------------------------------------------------
 
 /**
@@ -203,12 +230,16 @@ interface SyncCandidate {
   id: string;
   tmdbId: number;
   name: string;
+  mediaType: MediaType;
+  kind: "TV_METADATA" | "PROVIDERS_ONLY";
+  /** Oldest cache this operation will refresh; used to merge the two queues fairly. */
+  dueAt: number;
   /** Immutable, and the date back-catalogue episodes are dated to. See upsertSeasons. */
   createdAt: Date;
 }
 
 /** Everything the candidate query needs beyond the sync-state split below. */
-function candidateWhere(userId: string): Prisma.TitleWhereInput {
+function metadataCandidateWhere(userId: string): Prisma.TitleWhereInput {
   return {
     userId,
     deletedAt: null,
@@ -230,11 +261,23 @@ function candidateWhere(userId: string): Prisma.TitleWhereInput {
   };
 }
 
-const CANDIDATE_SELECT = {
+const METADATA_CANDIDATE_SELECT = {
   id: true,
   tmdbId: true,
   name: true,
   createdAt: true,
+  mediaType: true,
+  metadataSyncedAt: true,
+} as const;
+
+const PROVIDER_CANDIDATE_SELECT = {
+  id: true,
+  tmdbId: true,
+  name: true,
+  createdAt: true,
+  mediaType: true,
+  providersSyncedAt: true,
+  providersRegion: true,
 } as const;
 
 /**
@@ -251,14 +294,17 @@ const CANDIDATE_SELECT = {
  * running them in that order. The id tiebreak keeps the rotation stable between
  * runs when a batch shares a timestamp.
  */
-async function selectCandidates(userId: string, limit: number): Promise<SyncCandidate[]> {
-  const where = candidateWhere(userId);
+async function selectMetadataCandidates(
+  userId: string,
+  limit: number,
+): Promise<SyncCandidate[]> {
+  const where = metadataCandidateWhere(userId);
 
   const neverSynced = await prisma.title.findMany({
     where: { ...where, metadataSyncedAt: null },
     orderBy: { id: "asc" },
     take: limit,
-    select: CANDIDATE_SELECT,
+    select: METADATA_CANDIDATE_SELECT,
   });
 
   const rows =
@@ -270,7 +316,7 @@ async function selectCandidates(userId: string, limit: number): Promise<SyncCand
             where: { ...where, metadataSyncedAt: { not: null } },
             orderBy: [{ metadataSyncedAt: "asc" }, { id: "asc" }],
             take: limit - neverSynced.length,
-            select: CANDIDATE_SELECT,
+            select: METADATA_CANDIDATE_SELECT,
           })),
         ];
 
@@ -278,8 +324,124 @@ async function selectCandidates(userId: string, limit: number): Promise<SyncCand
   return rows.flatMap((r) =>
     r.tmdbId === null
       ? []
-      : [{ id: r.id, tmdbId: r.tmdbId, name: r.name, createdAt: r.createdAt }],
+      : [
+          {
+            id: r.id,
+            tmdbId: r.tmdbId,
+            name: r.name,
+            createdAt: r.createdAt,
+            mediaType: r.mediaType,
+            kind: "TV_METADATA" as const,
+            dueAt: r.metadataSyncedAt?.getTime() ?? 0,
+          },
+        ],
   );
+}
+
+/**
+ * Watchlist titles whose provider cache should rotate through the nightly run.
+ * Missing and wrong-region rows go first because their current cache cannot
+ * answer the active device at all; correct-region rows then rotate oldest first.
+ */
+async function selectProviderCandidates(
+  userId: string,
+  region: string,
+  limit: number,
+): Promise<SyncCandidate[]> {
+  const where: Prisma.TitleWhereInput = {
+    userId,
+    deletedAt: null,
+    tmdbId: { not: null },
+    mediaType: { in: [MediaType.MOVIE, MediaType.TV] },
+    status: WatchStatus.WATCHLIST,
+  };
+
+  const missing = await prisma.title.findMany({
+    where: { ...where, providersSyncedAt: null },
+    orderBy: { id: "asc" },
+    take: limit,
+    select: PROVIDER_CANDIDATE_SELECT,
+  });
+  const afterMissing = limit - missing.length;
+  const wrongRegion =
+    afterMissing <= 0
+      ? []
+      : await prisma.title.findMany({
+          where: {
+            ...where,
+            providersSyncedAt: { not: null },
+            OR: [{ providersRegion: null }, { providersRegion: { not: region } }],
+          },
+          orderBy: [{ providersSyncedAt: "asc" }, { id: "asc" }],
+          take: afterMissing,
+          select: PROVIDER_CANDIDATE_SELECT,
+        });
+  const afterWrongRegion = afterMissing - wrongRegion.length;
+  const currentRegion =
+    afterWrongRegion <= 0
+      ? []
+      : await prisma.title.findMany({
+          where: {
+            ...where,
+            providersSyncedAt: { not: null },
+            providersRegion: region,
+          },
+          orderBy: [{ providersSyncedAt: "asc" }, { id: "asc" }],
+          take: afterWrongRegion,
+          select: PROVIDER_CANDIDATE_SELECT,
+        });
+
+  return [...missing, ...wrongRegion, ...currentRegion].flatMap((row) =>
+    row.tmdbId === null
+      ? []
+      : [
+          {
+            id: row.id,
+            tmdbId: row.tmdbId,
+            name: row.name,
+            createdAt: row.createdAt,
+            mediaType: row.mediaType,
+            kind: "PROVIDERS_ONLY" as const,
+            // Wrong-region data is unusable regardless of how recently it was
+            // fetched, so it shares the never-synced front of the queue.
+            dueAt:
+              row.providersSyncedAt === null || row.providersRegion !== region
+                ? 0
+                : row.providersSyncedAt.getTime(),
+          },
+        ],
+  );
+}
+
+/**
+ * Merge metadata and provider rotations under one title limit. A TV title due
+ * in both queues takes one full refresh (providers ride along); otherwise the
+ * oldest cache wins. This avoids fixed quota splits that can starve either
+ * queue as a large library converges over successive nights.
+ */
+async function selectCandidates(
+  userId: string,
+  region: string,
+  limit: number,
+): Promise<SyncCandidate[]> {
+  const [metadata, providers] = await Promise.all([
+    selectMetadataCandidates(userId, limit),
+    selectProviderCandidates(userId, region, limit),
+  ]);
+  const byTitle = new Map<string, SyncCandidate>();
+
+  for (const candidate of providers) byTitle.set(candidate.id, candidate);
+  for (const candidate of metadata) {
+    const providerCandidate = byTitle.get(candidate.id);
+    byTitle.set(candidate.id, {
+      ...candidate,
+      dueAt: Math.min(candidate.dueAt, providerCandidate?.dueAt ?? candidate.dueAt),
+    });
+  }
+
+  return [...byTitle.values()]
+    .sort((a, b) => a.dueAt - b.dueAt || a.id.localeCompare(b.id))
+    .slice(0, limit);
 }
 
 // --- Pure helpers -----------------------------------------------------------
@@ -442,6 +604,11 @@ export function discoveredAtForNewEpisode(
   // which is forward-looking rather than back catalogue. (The badge also
   // requires an air date already past, so such a row cannot fire it either way.)
   if (airDate === null) return now;
+  // Advance-published schedules may arrive weeks or months before broadcast.
+  // Dating those rows to the sync run lets the 14-day badge window expire
+  // before they become watchable; dating them to air day activates the signal
+  // exactly when the episode can first satisfy the badge's airDate <= now guard.
+  if (airDate.getTime() > now.getTime()) return airDate;
   return airDate.getTime() >= now.getTime() - RECENT_AIR_WINDOW_MS ? now : titleCreatedAt;
 }
 
@@ -606,6 +773,46 @@ async function syncOneTitle(
   };
 }
 
+/** Refresh only the included/free/ad-supported provider ids for one title. */
+async function syncProviderOnly(
+  userId: string,
+  region: string,
+  candidate: SyncCandidate,
+  now: Date,
+  deadline: number,
+): Promise<TitleSyncOutcome> {
+  const providers = await fetchWatchProviders(
+    candidate.mediaType,
+    candidate.tmdbId,
+    deadline,
+  );
+  // A valid empty regional result is represented by a populated results map
+  // without the requested region. A missing map means the response itself was
+  // incomplete, so preserve the last known cache and retry on a later run.
+  if (!providers.results) throw new Error("TMDB provider response omitted results.");
+  const updated = await prisma.title.updateMany({
+    where: {
+      id: candidate.id,
+      userId,
+      deletedAt: null,
+      tmdbId: candidate.tmdbId,
+      mediaType: candidate.mediaType,
+    },
+    data: {
+      streamProviderIds: streamProviderIdsForRegion(providers.results, region),
+      providersRegion: region,
+      providersSyncedAt: now,
+    },
+  });
+
+  return {
+    titleId: candidate.id,
+    name: candidate.name,
+    state: updated.count === 0 ? "VANISHED" : MetadataSyncState.OK,
+    newEpisodes: 0,
+  };
+}
+
 /**
  * Upserts seasons and their episodes by number, returning how many episode rows
  * were created. Existing rows keep their identity — and with it `discoveredAt`,
@@ -739,11 +946,14 @@ export interface SyncRunResult {
   considered: number;
   /** Titles that finished with OK or PARTIAL. */
   synced: number;
+  /** Titles whose refresh failed after being selected. */
   failed: number;
-  /** Titles not started, or abandoned mid-fetch, because the run ran out of time. */
+  /** Titles not completed because the budget expired or the row vanished mid-run. */
   skipped: number;
   /** Episode rows materialized for the first time across the whole run. */
   newEpisodes: number;
+  /** Account-level failure before title outcomes existed; counters remain title-only. */
+  runError?: string;
 }
 
 function clamp(value: number | undefined, fallback: number, min: number, max: number) {
@@ -751,7 +961,39 @@ function clamp(value: number | undefined, fallback: number, min: number, max: nu
   return Math.min(max, Math.max(min, Math.trunc(value)));
 }
 
-/** Refresh one owner's TV metadata. Safe to call repeatedly; it is idempotent. */
+/**
+ * Reduce title outcomes into the public run counters.
+ *
+ * VANISHED is skipped rather than silently disappearing from the totals: a
+ * concurrently deleted title was considered but no longer exists to sync.
+ * Keeping this pure makes the invariant explicit and regression-testable.
+ */
+export function tallySyncOutcomes(
+  userId: string,
+  considered: number,
+  outcomes: ReadonlyArray<TitleSyncOutcome | null>,
+): SyncRunResult {
+  const result: SyncRunResult = {
+    userId,
+    considered,
+    synced: 0,
+    failed: 0,
+    skipped: 0,
+    newEpisodes: 0,
+  };
+  for (const outcome of outcomes) {
+    if (outcome === null || outcome.state === "VANISHED") {
+      result.skipped++;
+      continue;
+    }
+    if (outcome.state === MetadataSyncState.FAILED) result.failed++;
+    else result.synced++;
+    result.newEpisodes += outcome.newEpisodes;
+  }
+  return result;
+}
+
+/** Refresh one owner's TV metadata and watchlist provider cache. Idempotent. */
 export async function syncUserMetadata(
   userId: string,
   options: SyncRunOptions = {},
@@ -770,7 +1012,7 @@ export async function syncUserMetadata(
     ? owner.watchRegion
     : DEFAULT_WATCH_REGION;
 
-  const candidates = await selectCandidates(userId, limit);
+  const candidates = await selectCandidates(userId, region, limit);
   const now = new Date();
 
   const outcomes = await mapLimit<SyncCandidate, TitleSyncOutcome | null>(
@@ -779,7 +1021,9 @@ export async function syncUserMetadata(
     async (candidate) => {
       if (Date.now() >= deadline) return null;
       try {
-        return await syncOneTitle(userId, region, candidate, now, deadline);
+        return candidate.kind === "TV_METADATA"
+          ? await syncOneTitle(userId, region, candidate, now, deadline)
+          : await syncProviderOnly(userId, region, candidate, now, deadline);
       } catch (err) {
         // A title abandoned because the budget ran out is skipped, not failed:
         // nothing is wrong with it, and recording FAILED would both stamp
@@ -788,19 +1032,21 @@ export async function syncUserMetadata(
         if (err instanceof SyncBudgetExhaustedError) return null;
         const message = errorMessage(err);
         console.error(
-          `metadata sync failed (titleId=${candidate.id}, tmdbId=${candidate.tmdbId}):`,
+          `metadata sync failed (titleId=${candidate.id}, tmdbId=${candidate.tmdbId}, kind=${candidate.kind}):`,
           err,
         );
-        // Recording the failure must not itself abort the run — if the database
-        // is the thing that is unwell, the next title will report it too.
-        await recordFailure(userId, candidate.id, message, new Date()).catch(
-          (writeErr) => {
-            console.error(
-              `metadata sync could not record failure (titleId=${candidate.id}):`,
-              writeErr,
-            );
-          },
-        );
+        if (candidate.kind === "TV_METADATA") {
+          // Recording the failure must not itself abort the run — if the database
+          // is the thing that is unwell, the next title will report it too.
+          await recordFailure(userId, candidate.id, message, new Date()).catch(
+            (writeErr) => {
+              console.error(
+                `metadata sync could not record failure (titleId=${candidate.id}):`,
+                writeErr,
+              );
+            },
+          );
+        }
         return {
           titleId: candidate.id,
           name: candidate.name,
@@ -812,30 +1058,33 @@ export async function syncUserMetadata(
     },
   );
 
-  const result: SyncRunResult = {
-    userId,
-    considered: candidates.length,
-    synced: 0,
-    failed: 0,
-    skipped: 0,
-    newEpisodes: 0,
-  };
-  for (const outcome of outcomes) {
-    if (outcome === null) {
-      result.skipped++;
-      continue;
-    }
-    if (outcome.state === MetadataSyncState.FAILED) result.failed++;
-    else if (outcome.state !== "VANISHED") result.synced++;
-    result.newEpisodes += outcome.newEpisodes;
-  }
-  return result;
+  return tallySyncOutcomes(userId, candidates.length, outcomes);
 }
 
 export interface ScheduledSyncResult {
   startedAt: string;
   durationMs: number;
   users: SyncRunResult[];
+}
+
+/**
+ * Health verdict for one scheduled run (AUD-OPS-04). An account counts as
+ * failed when it died before title work began (runError) or when every title
+ * it selected failed; an account with nothing to consider is healthy, not
+ * vacuously failed. `totalFailure` means every account failed — the cron
+ * route maps it to a non-2xx status because Vercel's cron dashboard
+ * distinguishes runs by status code alone. `degraded` flags any failure at
+ * all, so log searches have one field to match.
+ */
+export function summarizeScheduledRun(result: ScheduledSyncResult): {
+  totalFailure: boolean;
+  degraded: boolean;
+} {
+  const failedUser = (u: SyncRunResult) =>
+    u.runError !== undefined || (u.considered > 0 && u.synced === 0 && u.failed > 0);
+  const totalFailure = result.users.length > 0 && result.users.every(failedUser);
+  const degraded = result.users.some((u) => failedUser(u) || u.failed > 0);
+  return { totalFailure, degraded };
 }
 
 /**
@@ -873,7 +1122,24 @@ export async function runScheduledSync(
         ? undefined
         : Date.now() +
           Math.round(Math.max(0, options.deadline - Date.now()) / (users.length - index));
-    results.push(await syncUserMetadata(user.id, { ...options, deadline }));
+    try {
+      results.push(await syncUserMetadata(user.id, { ...options, deadline }));
+    } catch (err) {
+      // Candidate selection and owner lookup happen outside the title-level
+      // recovery loop. Keep their failure scoped to this account so one broken
+      // library cannot prevent later owners from receiving their turn.
+      const message = errorMessage(err);
+      console.error(`metadata sync failed (userId=${user.id}):`, err);
+      results.push({
+        userId: user.id,
+        considered: 0,
+        synced: 0,
+        failed: 0,
+        skipped: 0,
+        newEpisodes: 0,
+        runError: message,
+      });
+    }
   }
 
   return {

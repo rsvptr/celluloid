@@ -72,6 +72,27 @@ export function parseHumanDate(text: string | null): string | null {
   // UTC yyyy-mm-dd): return as-is. Re-parsing via new Date() + local getters
   // shifts the day back one in timezones behind UTC, so short-circuit it.
   if (/^\d{4}-\d{2}-\d{2}$/.test(cleaned)) return cleaned;
+  // Numeric day/month/year: read day-first. new Date() assumes American
+  // month-first, which silently swapped every day <= 12 ("03/04/2026" became
+  // March 4th) and REJECTED every real day above 12 ("23/04/2004" parsed as
+  // month 23, invalid, so the date was dropped entirely). The sheets this app
+  // imports are day-first; a file that really is month-first shows its dates
+  // on the review screen before anything commits.
+  const dmy = cleaned.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/);
+  if (dmy) {
+    const day = Number(dmy[1]);
+    const month = Number(dmy[2]);
+    const year = Number(dmy[3].length === 2 ? `20${dmy[3]}` : dmy[3]);
+    const candidate = new Date(year, month - 1, day);
+    if (
+      candidate.getFullYear() !== year ||
+      candidate.getMonth() !== month - 1 ||
+      candidate.getDate() !== day
+    ) {
+      return null; // impossible combination, e.g. day 32 or month 13
+    }
+    return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  }
   const d = new Date(cleaned);
   if (Number.isNaN(d.getTime())) return null;
   const yyyy = d.getFullYear();

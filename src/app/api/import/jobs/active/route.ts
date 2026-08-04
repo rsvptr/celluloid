@@ -18,10 +18,9 @@ export async function GET() {
     console.error("Unable to resume the active import job:", error);
     return Response.json(
       {
-        job: null,
-        error: "Celluloid couldn't resume the active import. Start a new upload or try again.",
+        error: "Celluloid couldn't verify unfinished imports. Uploads are paused; try again.",
       },
-      { headers: { "Cache-Control": "private, no-store" } },
+      { status: 503, headers: { "Cache-Control": "private, no-store" } },
     );
   }
 }

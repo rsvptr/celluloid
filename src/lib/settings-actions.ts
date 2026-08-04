@@ -41,6 +41,9 @@ function isSupportedTimeZone(tz: string): boolean {
 const profileSchema = z.object({ name: z.string().max(2000) });
 const anthropicKeySchema = z.object({ key: z.string().max(2000) });
 const recommendModelSchema = z.object({ model: z.string().max(200) });
+const myProvidersSchema = z
+  .array(z.number().int().positive().max(2_147_483_647))
+  .max(100, "Choose no more than 100 services.");
 
 const preferencesSchema = z.object({
   timeZone: z
@@ -89,6 +92,28 @@ export async function removeAnthropicKey(): Promise<ActionResult> {
   });
   revalidatePath("/settings");
   revalidatePath("/recommend");
+  return { ok: true };
+}
+
+/** Saves the streaming services used by the library's "On my services" view. */
+export async function updateMyProviders(providerIds: number[]): Promise<ActionResult> {
+  const userId = await requireUserId();
+  const parsed = myProvidersSchema.safeParse(providerIds);
+  if (!parsed.success) {
+    return {
+      error:
+        parsed.error.issues[0]?.message ??
+        "Celluloid couldn't save your services. Refresh and try again.",
+    };
+  }
+
+  // The UI behaves like a set, but the server action is public and may receive
+  // duplicates or an arbitrary order. Canonicalize before persisting so dirty
+  // checks and backups stay deterministic.
+  const myProviders = [...new Set(parsed.data)].sort((a, b) => a - b);
+  await prisma.user.update({ where: { id: userId }, data: { myProviders } });
+  revalidatePath("/settings");
+  revalidatePath("/");
   return { ok: true };
 }
 

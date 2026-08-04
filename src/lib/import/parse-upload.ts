@@ -51,6 +51,20 @@ function mapStatus(text: string | null): ParsedStatus {
   const s = (text ?? "").toLowerCase();
   if (s.includes("partial") || s.includes("watching") || s.includes("progress"))
     return "PARTIALLY_WATCHED";
+  // Negative forms must be ruled out before the positive tokens, because each
+  // one CONTAINS its positive counterpart as a substring: "Unwatched" ⊃
+  // "watched", "unseen" ⊃ "seen", "incomplete" ⊃ "complete". The trailing
+  // space on the free-standing negators keeps words like "notable" out.
+  if (
+    s.includes("unwatch") ||
+    s.includes("unseen") ||
+    s.includes("unfinished") ||
+    s.includes("incomplete") ||
+    s.includes("not ") ||
+    s.includes("never ") ||
+    s.includes("n't ")
+  )
+    return "UNWATCHED";
   if (
     s.includes("watched") ||
     s.includes("seen") ||

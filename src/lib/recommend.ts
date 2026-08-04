@@ -2,7 +2,12 @@ import { prisma } from "@/lib/prisma";
 import { MediaType } from "@/generated/prisma/client";
 import { getExportRows } from "@/lib/data";
 import { tasteSummary, type ExportRow } from "@/lib/export/format";
-import { searchByType, type SearchOptions, type TmdbSearchItem } from "@/lib/tmdb";
+import {
+  getGenreIdsByName,
+  searchByType,
+  type SearchOptions,
+  type TmdbSearchItem,
+} from "@/lib/tmdb";
 import { norm, yearOf, pickBest, nameYearKey } from "@/lib/tmdb-match";
 import {
   anthropicClient,
@@ -318,6 +323,24 @@ export interface StreamContext {
    * suppression load behaves exactly as it did before this layer existed.
    */
   suppressed?: SuppressionContext;
+  /**
+   * The run's hard requirements, enforced against TMDB's authoritative fields
+   * after enrichment — the prompt calls them hard, so the server must too.
+   * `genreIds` is the TMDB id set for the requested genre name; null means the
+   * mapping lookup failed and genre stays prompt-only for this run rather than
+   * failing the whole stream.
+   */
+  requirements?: {
+    language?: string;
+    era?: { from: number; to: number };
+    genreIds?: Set<number> | null;
+  };
+  /**
+   * Mutable run tallies behind the terminal warnings: suggestions dropped for
+   * violating a hard requirement, and TMDB lookups that errored (outage), which
+   * must read differently to the user than a genuine no-match.
+   */
+  tallies?: { filteredOut: number; lookupFailed: number };
 }
 
 /** The TMDB lookup enrichRec depends on; injectable so it can be stubbed in tests. */
@@ -335,6 +358,41 @@ type TitleSearch = (
  * only overridden in tests. `signal` is the run's abort signal, so a stopped
  * run cancels TMDB lookups already in flight instead of paying them out.
  */
+/**
+ * Enforce the run's hard requirements against the best available facts —
+ * TMDB's fields once a suggestion resolves, the model's own claims when it
+ * does not. A violation counts toward the terminal shortfall warning. Fields
+ * nobody can verify (an unresolved title with no claimed language, a match
+ * with no genre ids) pass: dropping the unverifiable would silently erase the
+ * regional titles that resolve worst, which are often the point.
+ */
+function violatesRequirements(
+  ctx: StreamContext,
+  facts: { language: string | null; year: number | null; genreIds?: number[] },
+): boolean {
+  const req = ctx.requirements;
+  if (!req) return false;
+  if (req.language && facts.language && facts.language !== req.language) return true;
+  if (req.era && facts.year != null && (facts.year < req.era.from || facts.year > req.era.to)) {
+    return true;
+  }
+  if (
+    req.genreIds instanceof Set &&
+    req.genreIds.size > 0 &&
+    facts.genreIds &&
+    facts.genreIds.length > 0 &&
+    !facts.genreIds.some((id) => (req.genreIds as Set<number>).has(id))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function dropFiltered(ctx: StreamContext): null {
+  if (ctx.tallies) ctx.tallies.filteredOut += 1;
+  return null;
+}
+
 export async function enrichRec(
   r: Recommendation,
   ctx: StreamContext,
@@ -346,26 +404,58 @@ export async function enrichRec(
     // resolves to whichever entry TMDB ranks most popular, not the one asked for.
     const results = await search(r.mediaType, r.title, 1, { year: r.year, signal });
     const best = pickBest(results, r.title, r.year);
-    if (!best) return r;
+    if (!best) {
+      // Unresolved: hard requirements still apply to what the model CLAIMED —
+      // a claim that already violates the ask cannot ship just because TMDB
+      // couldn't confirm it.
+      return violatesRequirements(ctx, { language: r.language ?? null, year: r.year })
+        ? dropFiltered(ctx)
+        : r;
+    }
     const mt = r.mediaType === "tv" ? MediaType.TV : MediaType.MOVIE;
     if (ctx.existingSet.has(`${mt}:${best.id}`)) return null; // already in library
     // The refusal may have been recorded against a TMDB id, in which case only
     // the resolved match can see it — a name the model spelled differently, or
     // a year it got wrong, would have slipped past the name check upstream.
     if (ctx.suppressed?.tmdbKeys.has(`${mt}:${best.id}`)) return null;
-    const resolvedYear = r.year ?? yearOf(best);
+    // TMDB's year is authoritative once a match is credible: the model's claim
+    // narrowed the SEARCH, but emitting it verbatim shipped wrong years to the
+    // card and the dedupe whenever the claim was off by a year or two.
+    const resolvedYear = yearOf(best) ?? r.year;
     // TMDB may supply a year the model omitted; re-check ownership with it.
     if (ctx.libNameYear.has(nameYearKey(r.mediaType, r.title, resolvedYear))) return null;
     if (isSuppressedByName(ctx.suppressed, r.mediaType, r.title, resolvedYear)) return null;
+    const resolvedLanguage = best.original_language ?? r.language ?? null;
+    if (
+      violatesRequirements(ctx, {
+        language: resolvedLanguage,
+        year: resolvedYear,
+        genreIds: best.genre_ids,
+      })
+    ) {
+      return dropFiltered(ctx);
+    }
+    // "Only released titles" is a standing rule, not a per-run filter: a match
+    // whose TMDB date sits in the future is an announcement, not a
+    // recommendation. A missing date is left alone — plenty of obscure,
+    // perfectly-released titles simply lack one.
+    const dateStr = r.mediaType === "tv" ? best.first_air_date : best.release_date;
+    if (dateStr && dateStr.slice(0, 10) > new Date().toISOString().slice(0, 10)) {
+      return dropFiltered(ctx);
+    }
     return {
       ...r,
       tmdbId: best.id,
       posterPath: best.poster_path ?? null,
       year: resolvedYear,
       // TMDB's language is authoritative; fall back to the model's claim.
-      language: best.original_language ?? r.language ?? null,
+      language: resolvedLanguage,
     };
   } catch {
+    // An outage is not a no-match: the suggestion ships unverified, and the
+    // run's terminal warning says so once — silently conflating the two made
+    // "TMDB was down" indistinguishable from "this title doesn't exist".
+    if (!signal?.aborted && ctx.tallies) ctx.tallies.lookupFailed += 1;
     return r;
   }
 }
@@ -384,6 +474,82 @@ const MODEL_OUTPUT_CEILING: Record<string, number> = {
 // brief is title names and short notes. Only used to decide whether to attach
 // the prompt-cache breakpoint, so erring low costs at most one missed cache.
 const APPROX_CHARS_PER_TOKEN = 4;
+
+/**
+ * What to emit once the model stream ends, given how many suggestions were
+ * accepted and which stop-reason flags fired during the run. Pure — no stream
+ * or network access — so the refusal/max_tokens/plain-empty priority is
+ * unit-testable without a live Anthropic stream. runRecommendationStream's
+ * tail is just `for (const e of terminalRecEvents(...)) emit(e)`.
+ *
+ * A refusal only produces its own error when nothing usable came out of the
+ * run. If suggestions were already accepted before the model declined,
+ * partial results beat an error: the run falls through to the ordinary
+ * warning/done handling below and hitRefusal is ignored.
+ */
+export function terminalRecEvents(
+  accepted: number,
+  count: number,
+  flags: {
+    hitMaxTokens: boolean;
+    hitRefusal: boolean;
+    /** Suggestions dropped for violating a hard language/genre/era requirement. */
+    filteredOut?: number;
+    /** TMDB lookups that errored — those suggestions shipped unverified. */
+    lookupFailed?: number;
+  },
+): RecStreamEvent[] {
+  if (accepted === 0) {
+    if (flags.hitRefusal) {
+      return [
+        {
+          type: "error",
+          error:
+            "Claude declined this request. This can happen when the brief or focus text trips a safety filter, so reword it and try again.",
+        },
+      ];
+    }
+    return [
+      {
+        type: "error",
+        error: flags.hitMaxTokens
+          ? "Claude ran out of room before finishing a single suggestion. Ask for fewer titles, or pick a shorter focus, and try again."
+          : "Claude didn't return any usable suggestions. Try again, or tweak your focus.",
+      },
+    ];
+  }
+  const events: RecStreamEvent[] = [];
+  // Got some, but the model hit the token ceiling before the full batch — let
+  // the user know the short list is a budget limit, not a lack of ideas.
+  if (flags.hitMaxTokens && accepted < count) {
+    events.push({
+      type: "warning",
+      message: `Claude hit its length limit after ${accepted} of ${count} suggestions. Ask for fewer titles for a complete set.`,
+    });
+  }
+  // A TMDB outage must read differently to a genuine no-match: these
+  // suggestions shipped as the model described them, unverified.
+  if ((flags.lookupFailed ?? 0) > 0) {
+    const n = flags.lookupFailed!;
+    events.push({
+      type: "warning",
+      message: `TMDB couldn't be reached to verify ${n === 1 ? "one suggestion" : `${n} suggestions`}, so ${n === 1 ? "it's" : "they're"} shown as Claude described ${n === 1 ? "it" : "them"}. Details may be off.`,
+    });
+  }
+  // Hard-requirement drops explain a short list; when the batch still filled,
+  // the drops cost nothing worth interrupting the user about. "Requirements"
+  // covers the user's language/genre/era filters AND the standing released-only
+  // rule, so the copy names the check, not just the filters.
+  if ((flags.filteredOut ?? 0) > 0 && accepted < count) {
+    const n = flags.filteredOut!;
+    events.push({
+      type: "warning",
+      message: `${n === 1 ? "One suggestion was" : `${n} suggestions were`} dropped for not meeting the request (unreleased, or outside your language/genre/era filters). Run again, or loosen a filter for a fuller list.`,
+    });
+  }
+  events.push({ type: "done", total: accepted });
+  return events;
+}
 
 /**
  * Run one recommendation request end to end, emitting events as results become
@@ -475,14 +641,43 @@ export async function runRecommendationStream(
   const baseAsk = type === "all" ? count * 2 : count * 3 + 10;
   const askCount = Math.min(50, hasPref ? baseAsk + 10 : baseAsk);
 
+  // The prompt calls language/genre/era HARD requirements, so the server
+  // enforces them against TMDB's fields after enrichment rather than trusting
+  // the model's compliance. The genre name→id mapping is best-effort: if the
+  // lookup fails, genre stays prompt-only for this run instead of failing it.
+  let requirements: StreamContext["requirements"];
+  if (hasPref) {
+    requirements = {};
+    if (opts.language) requirements.language = opts.language;
+    if (opts.era) {
+      const era = eraById(opts.era);
+      requirements.era = { from: era.range[0], to: era.range[1] };
+    }
+    if (opts.genre) {
+      requirements.genreIds = await getGenreIdsByName(
+        opts.genre,
+        type === "all" ? ["movie", "tv"] : [type],
+      ).catch(() => null);
+    }
+  }
+  if (signal?.aborted) return;
+
   // The durable "not interested" list. It goes into the volatile request block
   // and the run-time filters only — never into the brief, whose bytes have to
   // stay identical run to run for the prompt-cache breakpoint below to hit.
   const suppressed = await loadSuppressions(userId);
   if (signal?.aborted) return;
 
+  // A scoped basis means the watchlist/abandoned rows are OUTSIDE what the
+  // owner chose to share this run — they enter the brief as bare identities
+  // (exclusion needs nothing more), never with notes, ratings or tags.
+  const scopedBasis = basis?.mode === "recent" || basis?.mode === "pick";
   const brief = buildBriefBlock(
-    tasteSummary(basisRows, { watchlist: fullWatchlist, abandoned: fullAbandoned }),
+    tasteSummary(basisRows, {
+      watchlist: fullWatchlist,
+      abandoned: fullAbandoned,
+      exclusionIdentityOnly: scopedBasis,
+    }),
   );
   const request = buildRequestBlock(
     askCount,
@@ -511,6 +706,8 @@ export async function runRecommendationStream(
     excludeSet: new Set((opts.exclude ?? []).map((t) => norm(t))),
     seenKeys: new Set(),
     suppressed,
+    requirements,
+    tallies: { filteredOut: 0, lookupFailed: 0 },
   };
 
   // Scale the output budget with the ask so a large batch (askCount up to 50)
@@ -587,6 +784,7 @@ export async function runRecommendationStream(
   let statusSent: "thinking" | "generating" | null = null;
   let stopped = false; // no further emits once set (enough results, or a failure)
   let hitMaxTokens = false; // model ran into the output ceiling (budget exhausted)
+  let hitRefusal = false; // safety classifier declined the request (HTTP 200, not a thrown error)
   // Prompt-cache counters, read off the opening usage. They are settled by
   // message_start, so they survive the abort we fire once enough suggestions
   // land — which is the normal path, and one that leaves no final message.
@@ -660,6 +858,10 @@ export async function runRecommendationStream(
         // budget was exhausted mid-generation (likely truncating the JSON), which
         // needs a specific message rather than the generic "no results" below.
         if (event.delta.stop_reason === "max_tokens") hitMaxTokens = true;
+        // Opus 5's safety classifier can decline with a normal HTTP 200 rather
+        // than a thrown error — same event, stop_reason "refusal" instead of an
+        // exception, so it's detected here rather than in the catch block below.
+        else if (event.delta.stop_reason === "refusal") hitRefusal = true;
       }
     }
   } catch (e) {
@@ -683,22 +885,12 @@ export async function runRecommendationStream(
       `Recommend prompt cache (${model}): written=${cacheCreated ?? 0}, read=${cacheRead ?? 0}`,
     );
   }
-  if (accepted === 0) {
-    emit({
-      type: "error",
-      error: hitMaxTokens
-        ? "Claude ran out of room before finishing a single suggestion. Ask for fewer titles, or pick a shorter focus, and try again."
-        : "Claude didn't return any usable suggestions. Try again, or tweak your focus.",
-    });
-    return;
+  for (const e of terminalRecEvents(accepted, count, {
+    hitMaxTokens,
+    hitRefusal,
+    filteredOut: ctx.tallies?.filteredOut ?? 0,
+    lookupFailed: ctx.tallies?.lookupFailed ?? 0,
+  })) {
+    emit(e);
   }
-  // Got some, but the model hit the token ceiling before the full batch — let the
-  // user know the short list is a budget limit, not a lack of ideas.
-  if (hitMaxTokens && accepted < count) {
-    emit({
-      type: "warning",
-      message: `Claude hit its length limit after ${accepted} of ${count} suggestions. Ask for fewer titles for a complete set.`,
-    });
-  }
-  emit({ type: "done", total: accepted });
 }

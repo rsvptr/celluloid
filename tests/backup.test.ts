@@ -1,5 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { createHash, createHmac } from "node:crypto";
+import { register } from "node:module";
 import {
   backupEnvelopeSchema,
   mergeBackupTitle,
@@ -7,6 +9,8 @@ import {
   planRestoreTitles,
   type BackupEnvelope,
   type BackupTitle,
+  type RestoreMode,
+  type RestorePreviewCounts,
 } from "../src/lib/backup-format";
 
 const stamp = "2026-07-17T12:00:00.000Z";
@@ -112,7 +116,12 @@ const envelope: BackupEnvelope = {
   app: "celluloid",
   schemaVersion: 2,
   exportedAt: stamp,
-  user: { timeZone: "Europe/London", watchRegion: "GB" },
+  user: {
+    timeZone: "Europe/London",
+    watchRegion: "GB",
+    myProviders: [8, 337],
+    recommendModel: "claude-opus-5",
+  },
   titles: [movie, tv],
   tags: [
     { sourceId: "tag-favourite", name: "Favourites", color: "#f59e0b", createdAt: stamp },
@@ -157,6 +166,18 @@ const envelope: BackupEnvelope = {
       createdAt: stamp,
     },
   ],
+  suppressions: [
+    {
+      sourceId: "suppression-source",
+      matchKey: "tmdb:TV:909",
+      tmdbId: 909,
+      mediaType: "TV",
+      name: "A Refused Series",
+      year: 2025,
+      reason: "NOT_INTERESTED",
+      createdAt: stamp,
+    },
+  ],
 };
 
 describe("Celluloid backup envelope", () => {
@@ -169,11 +190,48 @@ describe("Celluloid backup envelope", () => {
     assert.deepEqual(parsed.titles[1].tags, ["Weekend"]);
     assert.equal(parsed.watchEvents[1].episodeId, "episode-one-source");
     assert.equal(parsed.user.timeZone, "Europe/London");
+    assert.deepEqual(parsed.user.myProviders, [8, 337]);
+    assert.equal(parsed.user.recommendModel, "claude-opus-5");
+    assert.equal(parsed.suppressions?.[0].matchKey, "tmdb:TV:909");
     assert.deepEqual(parsed.shares[0].items.map((item) => item.titleId), [
       movie.sourceId,
       tv.sourceId,
     ]);
     assert.equal("slug" in parsed.shares[0], false);
+  });
+
+  it("parses old v2 TMDB prose but also accepts the lean shape new exports emit", () => {
+    const verboseV2 = structuredClone(envelope);
+    const verboseSeason = verboseV2.titles[1].seasons[0];
+    verboseSeason.overview = "Season synopsis ".repeat(2_000);
+    verboseSeason.episodes[0].overview = "Episode synopsis ".repeat(2_000);
+    verboseSeason.episodes[0].stillPath = "/large-derived-still.jpg";
+
+    const oldParsed = parseBackupEnvelope(verboseV2);
+    assert.equal(oldParsed.titles[1].seasons[0].overview, verboseSeason.overview);
+    assert.equal(
+      oldParsed.titles[1].seasons[0].episodes[0].stillPath,
+      "/large-derived-still.jpg",
+    );
+
+    const leanV2 = structuredClone(verboseV2);
+    for (const title of leanV2.titles) {
+      for (const season of title.seasons) {
+        delete season.overview;
+        for (const episode of season.episodes) {
+          delete episode.overview;
+          delete episode.stillPath;
+        }
+      }
+    }
+    const leanParsed = parseBackupEnvelope(leanV2);
+    assert.equal(leanParsed.titles[1].seasons[0].overview, undefined);
+    assert.equal(leanParsed.titles[1].seasons[0].episodes[0].overview, undefined);
+    assert.equal(leanParsed.titles[1].seasons[0].episodes[0].stillPath, undefined);
+    assert.ok(
+      JSON.stringify(leanParsed).length < JSON.stringify(oldParsed).length / 2,
+      "omitting re-fetchable prose should materially shrink the envelope",
+    );
   });
 
   it("rejects the wrong app/version, unknown secret fields, and broken joins", () => {
@@ -217,6 +275,24 @@ describe("Celluloid backup envelope", () => {
     assert.match(
       parsed.success ? "" : parsed.error.issues.map((issue) => issue.message).join(" "),
       /duplicate tag name/,
+    );
+  });
+
+  it("rejects duplicate suppression keys before restore", () => {
+    const parsed = backupEnvelopeSchema.safeParse({
+      ...envelope,
+      suppressions: [
+        ...(envelope.suppressions ?? []),
+        {
+          ...(envelope.suppressions ?? [])[0],
+          sourceId: "suppression-copy",
+        },
+      ],
+    });
+    assert.equal(parsed.success, false);
+    assert.match(
+      parsed.success ? "" : parsed.error.issues.map((issue) => issue.message).join(" "),
+      /duplicate suppression matchKey/,
     );
   });
 
@@ -288,6 +364,20 @@ describe("Celluloid backup envelope", () => {
       { titleId: movie.sourceId, position: 1 },
       { titleId: tv.sourceId, position: 2 },
     ]);
+  });
+
+  it("still parses v2 files downloaded before preference and suppression fields existed", () => {
+    const legacyV2 = structuredClone(envelope);
+    delete legacyV2.user.myProviders;
+    delete legacyV2.user.recommendModel;
+    delete legacyV2.suppressions;
+
+    const parsed = parseBackupEnvelope(legacyV2);
+
+    assert.equal(parsed.schemaVersion, 2);
+    assert.equal(parsed.user.myProviders, undefined);
+    assert.equal(parsed.user.recommendModel, undefined);
+    assert.equal(parsed.suppressions, undefined);
   });
 });
 
@@ -590,5 +680,271 @@ describe("backup merge policy — denormalized episode counters", () => {
 
     assert.equal(plan.counts.update, 1);
     assert.equal(plan.counts.skip, 0);
+  });
+});
+
+// --- Restore confirmation (SB-4) ---------------------------------------------
+//
+// createRestoreConfirmation/verifyRestoreConfirmation (src/lib/backup.ts) sign
+// the token that gates "preview a restore" from "actually mutate the library",
+// so this section needs two bits of setup the rest of the file doesn't:
+//
+// 1. backup.ts starts with `import "server-only"`. That package's export map
+//    sends plain Node to `index.js`, which throws unconditionally — it only
+//    resolves to the no-op `empty.js` under the "react-server" export
+//    condition, which is a condition Next's own bundler sets and a plain
+//    `node --test` process never does. Left alone, statically importing
+//    backup.ts here would throw at module load and take the whole file down.
+//    The resolve hook below makes plain Node treat "server-only" the same way
+//    Next treats it inside server code: a no-op.
+// 2. backup.ts imports `env` from "@/lib/env", which parses and validates the
+//    *entire* process environment the moment it is first evaluated. So
+//    DATABASE_URL, BETTER_AUTH_SECRET, and TMDB_ACCESS_TOKEN must already be
+//    set before that first import — set directly here, same as
+//    crypto.test.ts's ENCRYPTION_KEY, with values that are obviously not real
+//    credentials.
+//
+// Both have to happen before backup.ts loads, so the import below is a
+// (top-level-awaited) dynamic import rather than the usual static one — the
+// only reason this section doesn't just `import { ... } from "../src/lib/backup"`
+// at the top of the file like everything else.
+//
+// No changes were made to src/lib/backup.ts: everything here goes through the
+// same createRestoreConfirmation/verifyRestoreConfirmation the app calls.
+
+const RESTORE_TEST_SECRET = "restore-confirmation-test-secret-not-a-real-value";
+process.env.DATABASE_URL = "postgresql://user:pass@localhost:5432/celluloid_test";
+process.env.BETTER_AUTH_SECRET = RESTORE_TEST_SECRET;
+process.env.TMDB_ACCESS_TOKEN = "test-tmdb-token";
+
+const serverOnlyShim = `
+export async function resolve(specifier, context, nextResolve) {
+  if (specifier === "server-only") {
+    return nextResolve(specifier, {
+      ...context,
+      conditions: [...context.conditions, "react-server"],
+    });
+  }
+  return nextResolve(specifier, context);
+}
+`;
+// `register` (not the newer `registerHooks`) is deliberate: the installed
+// @types/node (^20) doesn't know about `registerHooks` yet even though the
+// Node binary running these tests does, so `registerHooks` fails `tsc`/
+// `next build` type-checking. `register` is older and slated for eventual
+// removal in favor of `registerHooks`, but it is fully typed today and this
+// process only needs the hook for the lifetime of this one test file.
+register(`data:text/javascript,${encodeURIComponent(serverOnlyShim)}`, import.meta.url);
+
+const { createRestoreConfirmation, verifyRestoreConfirmation } = await import(
+  "../src/lib/backup"
+);
+
+/**
+ * Mirrors confirmationPayload() plus the signing half of
+ * createRestoreConfirmation() (backup.ts, just above verifyRestoreConfirmation)
+ * using the same primitives, so a test can mint a token with an arbitrary
+ * issuedAt — in particular, one stale enough to have already expired — without
+ * reaching into the module's unexported functions.
+ */
+function signRestoreToken(
+  userId: string,
+  mode: RestoreMode,
+  bytes: Uint8Array,
+  counts: RestorePreviewCounts,
+  stateDigest: string,
+  issuedAt: number,
+): string {
+  const digest = createHash("sha256").update(bytes).digest("base64url");
+  const countValues = [
+    counts.create,
+    counts.update,
+    counts.skip,
+    counts.conflict,
+    counts.suppressionsCreate,
+    counts.suppressionsUpdate,
+    counts.suppressionsSkip,
+    counts.providerSelections,
+    counts.providerPreferenceIncluded,
+    counts.providerPreferenceUpdate,
+    counts.recommendModelPreferenceIncluded,
+    counts.recommendModelPreferenceUpdate,
+  ];
+  const payload = [
+    userId,
+    mode,
+    digest,
+    stateDigest,
+    issuedAt,
+    ...countValues,
+  ].join(":");
+  const signature = createHmac("sha256", RESTORE_TEST_SECRET)
+    .update(payload)
+    .digest("base64url");
+  return [issuedAt, ...countValues, signature].join(".");
+}
+
+describe("restore confirmation", () => {
+  const userId = "user-restore-1";
+  const mode: RestoreMode = "merge";
+  const bytes = new TextEncoder().encode("backup-file-bytes");
+  const stateDigest = "current-restore-state-digest";
+  const counts: RestorePreviewCounts = {
+    create: 2,
+    update: 1,
+    skip: 3,
+    conflict: 0,
+    suppressionsCreate: 4,
+    suppressionsUpdate: 0,
+    suppressionsSkip: 1,
+    providerSelections: 2,
+    providerPreferenceIncluded: 1,
+    providerPreferenceUpdate: 1,
+    recommendModelPreferenceIncluded: 1,
+    recommendModelPreferenceUpdate: 1,
+  };
+
+  it("round-trips: verify succeeds for the same userId, mode, bytes, and counts", () => {
+    const token = createRestoreConfirmation(userId, mode, bytes, counts, stateDigest);
+    assert.equal(
+      verifyRestoreConfirmation(token, userId, mode, bytes, counts, stateDigest),
+      true,
+    );
+  });
+
+  it("rejects a token past the 15-minute TTL", () => {
+    const staleIssuedAt = Date.now() - (15 * 60 * 1000 + 1_000);
+    const token = signRestoreToken(userId, mode, bytes, counts, stateDigest, staleIssuedAt);
+    assert.equal(
+      verifyRestoreConfirmation(token, userId, mode, bytes, counts, stateDigest),
+      false,
+    );
+  });
+
+  it("still accepts a token minted just inside the 15-minute TTL", () => {
+    // Same hand-signed path as the expiry test, just under the wire instead of
+    // over it — pins the boundary as inclusive (backup.ts compares with `>`,
+    // not `>=`) rather than merely "old tokens eventually stop working".
+    const freshIssuedAt = Date.now() - 14 * 60 * 1000;
+    const token = signRestoreToken(userId, mode, bytes, counts, stateDigest, freshIssuedAt);
+    assert.equal(
+      verifyRestoreConfirmation(token, userId, mode, bytes, counts, stateDigest),
+      true,
+    );
+  });
+
+  it("rejects a token whose signature has been tampered with", () => {
+    const token = createRestoreConfirmation(userId, mode, bytes, counts, stateDigest);
+    const parts = token.split(".");
+    const signature = parts.at(-1) ?? "";
+    const flipped = signature.slice(0, -2) + (signature.endsWith("AA") ? "BB" : "AA");
+    const tampered = [...parts.slice(0, -1), flipped].join(".");
+    assert.equal(
+      verifyRestoreConfirmation(tampered, userId, mode, bytes, counts, stateDigest),
+      false,
+    );
+  });
+
+  it("rejects a stale preview: any single count field drifting from the token's", () => {
+    const token = createRestoreConfirmation(userId, mode, bytes, counts, stateDigest);
+    const countKeys: Array<keyof RestorePreviewCounts> = [
+      "create",
+      "update",
+      "skip",
+      "conflict",
+      "suppressionsCreate",
+      "suppressionsUpdate",
+      "suppressionsSkip",
+      "providerSelections",
+      "providerPreferenceIncluded",
+      "providerPreferenceUpdate",
+      "recommendModelPreferenceIncluded",
+      "recommendModelPreferenceUpdate",
+    ];
+    for (const key of countKeys) {
+      const drifted: RestorePreviewCounts = { ...counts, [key]: counts[key] + 1 };
+      assert.equal(
+        verifyRestoreConfirmation(token, userId, mode, bytes, drifted, stateDigest),
+        false,
+        `expected rejection when ${key} drifts from ${counts[key]} to ${drifted[key]}`,
+      );
+    }
+  });
+
+  it("rejects verification for a different userId", () => {
+    const token = createRestoreConfirmation(userId, mode, bytes, counts, stateDigest);
+    assert.equal(
+      verifyRestoreConfirmation(
+        token,
+        "a-different-user",
+        mode,
+        bytes,
+        counts,
+        stateDigest,
+      ),
+      false,
+    );
+  });
+
+  it("rejects verification for a different restore mode", () => {
+    const token = createRestoreConfirmation(userId, "merge", bytes, counts, stateDigest);
+    assert.equal(
+      verifyRestoreConfirmation(
+        token,
+        userId,
+        "replace-personal",
+        bytes,
+        counts,
+        stateDigest,
+      ),
+      false,
+    );
+  });
+
+  it("rejects verification against different file bytes", () => {
+    const token = createRestoreConfirmation(userId, mode, bytes, counts, stateDigest);
+    const differentBytes = new TextEncoder().encode("a completely different backup file");
+    assert.equal(
+      verifyRestoreConfirmation(token, userId, mode, differentBytes, counts, stateDigest),
+      false,
+    );
+  });
+
+  it("rejects the same counts when the current restore state has changed", () => {
+    const token = createRestoreConfirmation(userId, mode, bytes, counts, stateDigest);
+    assert.equal(
+      verifyRestoreConfirmation(
+        token,
+        userId,
+        mode,
+        bytes,
+        counts,
+        "different-current-state-digest",
+      ),
+      false,
+    );
+  });
+
+  it("rejects a malformed token that doesn't have the complete count payload", () => {
+    assert.equal(
+      verifyRestoreConfirmation(
+        "not-a-real-token",
+        userId,
+        mode,
+        bytes,
+        counts,
+        stateDigest,
+      ),
+      false,
+    );
+  });
+
+  it("rejects a token issued in the future (clock skew)", () => {
+    const futureIssuedAt = Date.now() + 5 * 60 * 1000;
+    const token = signRestoreToken(userId, mode, bytes, counts, stateDigest, futureIssuedAt);
+    assert.equal(
+      verifyRestoreConfirmation(token, userId, mode, bytes, counts, stateDigest),
+      false,
+    );
   });
 });

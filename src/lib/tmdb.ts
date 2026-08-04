@@ -355,6 +355,106 @@ export interface TmdbProvider {
   provider_name: string;
   logo_path: string | null;
   display_priority?: number;
+  /** Region-specific ordering returned by the provider-catalogue endpoints. */
+  display_priorities?: Record<string, number>;
+}
+
+interface TmdbProviderCatalogue {
+  results?: TmdbProvider[];
+}
+
+/**
+ * Merge the movie and TV catalogues into one stable picker list.
+ *
+ * TMDB returns the same service from both endpoints and occasionally gives the
+ * two rows different priorities. Keep one row per provider id, preserve any
+ * logo either row supplied, and use the best regional priority so familiar
+ * services stay near the top of Settings.
+ */
+export function mergeWatchProviderCatalogues(
+  catalogues: readonly (readonly TmdbProvider[])[],
+  region: string,
+): TmdbProvider[] {
+  const byId = new Map<number, TmdbProvider>();
+
+  for (const catalogue of catalogues) {
+    for (const provider of catalogue) {
+      if (!Number.isInteger(provider.provider_id) || provider.provider_id <= 0) continue;
+      const priority =
+        provider.display_priorities?.[region] ?? provider.display_priority ?? Number.MAX_SAFE_INTEGER;
+      const existing = byId.get(provider.provider_id);
+      if (!existing) {
+        byId.set(provider.provider_id, { ...provider, display_priority: priority });
+        continue;
+      }
+
+      const existingPriority = existing.display_priority ?? Number.MAX_SAFE_INTEGER;
+      const preferred = priority < existingPriority ? provider : existing;
+      byId.set(provider.provider_id, {
+        ...preferred,
+        logo_path: preferred.logo_path ?? existing.logo_path ?? provider.logo_path,
+        display_priority: Math.min(priority, existingPriority),
+      });
+    }
+  }
+
+  return [...byId.values()].sort(
+    (a, b) =>
+      (a.display_priority ?? Number.MAX_SAFE_INTEGER) -
+        (b.display_priority ?? Number.MAX_SAFE_INTEGER) ||
+      a.provider_name.localeCompare(b.provider_name) ||
+      a.provider_id - b.provider_id,
+  );
+}
+
+/**
+ * Region-appropriate services for the Settings picker. Provider catalogues
+ * change much less often than title availability, so a one-day cache keeps the
+ * picker quick without making renamed/new services linger for long.
+ */
+export async function getWatchProviders(region: string): Promise<TmdbProvider[]> {
+  if (!/^[A-Z]{2}$/.test(region)) throw new Error("Invalid TMDB watch region.");
+
+  const params = { language: "en-US", watch_region: region };
+  const [movies, tv] = await Promise.all([
+    tmdb<TmdbProviderCatalogue>("/watch/providers/movie", params, {
+      revalidate: 60 * 60 * 24,
+    }),
+    tmdb<TmdbProviderCatalogue>("/watch/providers/tv", params, {
+      revalidate: 60 * 60 * 24,
+    }),
+  ]);
+
+  return mergeWatchProviderCatalogues([movies.results ?? [], tv.results ?? []], region);
+}
+
+/**
+ * TMDB ids for a genre named in the app (Title.genres stores TMDB's display
+ * names, so the match is by name, case-insensitively). Both catalogues are
+ * consulted because one name can carry different ids per medium ("Action &
+ * Adventure" is TV-only; movie "Action" is a different id). The lists are
+ * near-static, so a one-day cache is plenty. Returns every matching id across
+ * the requested kinds; empty means TMDB doesn't know the name at all.
+ */
+export async function getGenreIdsByName(
+  name: string,
+  kinds: ReadonlyArray<"movie" | "tv">,
+): Promise<Set<number>> {
+  const wanted = name.trim().toLowerCase();
+  const lists = await Promise.all(
+    kinds.map((kind) =>
+      tmdb<{ genres: TmdbGenre[] }>(`/genre/${kind}/list`, { language: "en-US" }, {
+        revalidate: 60 * 60 * 24,
+      }),
+    ),
+  );
+  const ids = new Set<number>();
+  for (const list of lists) {
+    for (const genre of list.genres ?? []) {
+      if (genre.name.toLowerCase() === wanted) ids.add(genre.id);
+    }
+  }
+  return ids;
 }
 
 export interface TmdbRegionProviders {

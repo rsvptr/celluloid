@@ -27,6 +27,10 @@ export interface LibraryItem {
   tags: string[];
   watchedAt: string | null;
   createdAt: string;
+  /** Included/free/ad-supported provider ids cached by the nightly sync. */
+  streamProviderIds: number[];
+  providersRegion: string | null;
+  providersSyncedAt: string | null;
   /** TV only: unwatched episodes that already aired and were discovered recently (D-F5). */
   hasNewEpisodes: boolean;
 }
@@ -46,7 +50,7 @@ const NEW_EPISODE_BACKFILL_CUTOFF = new Date("2026-07-18T00:00:00Z");
 const NEW_EPISODE_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 
 /** The later of (now - 14 days) and the backfill cutoff — the floor `discoveredAt` must clear. */
-function newEpisodeDiscoveredAfter(now: Date): Date {
+export function newEpisodeDiscoveredAfter(now: Date): Date {
   const windowStart = new Date(now.getTime() - NEW_EPISODE_WINDOW_MS);
   return windowStart > NEW_EPISODE_BACKFILL_CUTOFF ? windowStart : NEW_EPISODE_BACKFILL_CUTOFF;
 }
@@ -75,6 +79,9 @@ export async function getLibraryItems(userId: string): Promise<LibraryItem[]> {
         genres: true,
         watchedAt: true,
         createdAt: true,
+        streamProviderIds: true,
+        providersRegion: true,
+        providersSyncedAt: true,
         tags: { select: { tag: { select: { name: true } } } },
       },
     }),
@@ -126,8 +133,26 @@ export async function getLibraryItems(userId: string): Promise<LibraryItem[]> {
     tags: t.tags.map((x) => x.tag.name),
     watchedAt: t.watchedAt ? t.watchedAt.toISOString() : null,
     createdAt: t.createdAt.toISOString(),
+    streamProviderIds: t.streamProviderIds,
+    providersRegion: t.providersRegion,
+    providersSyncedAt: t.providersSyncedAt?.toISOString() ?? null,
     hasNewEpisodes: newEpisodeTitleIds.has(t.id),
   }));
+}
+
+export interface LibraryProviderPreferences {
+  watchRegion: string;
+  myProviders: number[];
+}
+
+/** Small owner preference read kept separate from the much wider account card. */
+export async function getLibraryProviderPreferences(
+  userId: string,
+): Promise<LibraryProviderPreferences | null> {
+  return prisma.user.findUnique({
+    where: { id: userId },
+    select: { watchRegion: true, myProviders: true },
+  });
 }
 
 export interface TitleIndexEntry {

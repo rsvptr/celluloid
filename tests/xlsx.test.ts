@@ -63,4 +63,28 @@ describe("buildWorkbookBuffer", () => {
     await wb.xlsx.load(buf as unknown as Parameters<typeof wb.xlsx.load>[0]);
     assert.ok(wb.getWorksheet("Movies"));
   });
+
+  it("adds Date Watched and Times Watched columns right after My Rating", async () => {
+    const rows = [
+      row({ name: "Rewatched", watchedAt: "2024-01-12T00:00:00.000Z", watchCount: 4 }),
+      row({ name: "Never Logged", watchedAt: null, watchCount: 0 }),
+    ];
+    const buf = await buildWorkbookBuffer(rows);
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buf as unknown as Parameters<typeof wb.xlsx.load>[0]);
+    const movies = wb.getWorksheet("Movies")!;
+
+    // Columns: SI.No, Name, Release Date, Language, Status, My Rating, then
+    // the two new ones — cells 7 and 8.
+    assert.equal(movies.getRow(1).getCell(7).value, "Date Watched");
+    assert.equal(movies.getRow(1).getCell(8).value, "Times Watched");
+
+    // watchedAt is a full ISO timestamp upstream; the cell shows a plain date.
+    assert.equal(movies.getRow(2).getCell(7).value, "2024-01-12");
+    assert.equal(movies.getRow(2).getCell(8).value, 4);
+
+    // Neither logged: blank cells, not 0 / empty-string artifacts.
+    assert.equal(movies.getRow(3).getCell(7).value, "");
+    assert.equal(movies.getRow(3).getCell(8).value, "");
+  });
 });

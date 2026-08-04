@@ -7,6 +7,9 @@ import {
   sanitizeScope,
   tasteSummary,
   toAiPrompt,
+  toJson,
+  toMarkdown,
+  toText,
   type ExportRow,
   type ExportScope,
 } from "../src/lib/export/format";
@@ -233,5 +236,136 @@ describe("toAiPrompt", () => {
   it("asks for the requested number of titles", () => {
     const s = toAiPrompt([row({ myRating: 8 })], 25);
     assert.ok(s.includes("recommend 25 titles"));
+  });
+});
+
+describe("toText", () => {
+  it("shows the watched date and rewatch count next to the rating", () => {
+    const rows = [
+      row({
+        name: "Rewatched",
+        myRating: 8,
+        watchedAt: "2024-01-12T00:00:00.000Z",
+        watchCount: 3,
+        languageCode: null,
+      }),
+    ];
+    const line = toText(rows)
+      .split("\n")
+      .find((l) => l.includes("Rewatched"));
+    assert.equal(line, "- Rewatched (2020) · Watched · ★8/10 · watched 2024-01-12 · watched 3×");
+  });
+
+  it("shows a watched date without a rewatch marker for a single logged watch", () => {
+    const rows = [
+      row({ name: "Seen Once", watchedAt: "2023-05-01T00:00:00.000Z", watchCount: 1, languageCode: null }),
+    ];
+    const line = toText(rows)
+      .split("\n")
+      .find((l) => l.includes("Seen Once"))!;
+    assert.ok(line.includes("watched 2023-05-01"));
+    // A single logged watch isn't a rewatch, so it carries no "N×" marker.
+    assert.ok(!line.includes("×"));
+  });
+
+  it("omits both bits cleanly, with no stray separators, when neither is present", () => {
+    const rows = [row({ name: "Plain", myRating: null, watchedAt: null, watchCount: 0, languageCode: null })];
+    const line = toText(rows)
+      .split("\n")
+      .find((l) => l.includes("Plain"));
+    assert.equal(line, "- Plain (2020) · Watched");
+  });
+});
+
+describe("toMarkdown", () => {
+  it("folds the watched date and rewatch count into the My rating cell", () => {
+    const rows = [
+      row({ name: "Rewatched", myRating: 8, watchedAt: "2024-01-12T00:00:00.000Z", watchCount: 3 }),
+    ];
+    const line = toMarkdown(rows)
+      .split("\n")
+      .find((l) => l.startsWith("| Rewatched"))!;
+    const cells = line.split("|").map((c) => c.trim());
+    assert.equal(cells[5], "8/10 · watched 2024-01-12 · watched 3×");
+  });
+
+  it("leaves the rating cell blank, not a stray separator, when nothing is logged", () => {
+    const rows = [row({ name: "Plain", myRating: null, watchedAt: null, watchCount: 0 })];
+    const line = toMarkdown(rows)
+      .split("\n")
+      .find((l) => l.startsWith("| Plain"))!;
+    const cells = line.split("|").map((c) => c.trim());
+    assert.equal(cells[5], "");
+  });
+});
+
+describe("toJson", () => {
+  it("includes watchedAt truncated to a plain date, and watchCount", () => {
+    const rows = [row({ name: "Rewatched", watchedAt: "2024-01-12T00:00:00.000Z", watchCount: 3 })];
+    const parsed = JSON.parse(toJson(rows));
+    assert.equal(parsed[0].watchedAt, "2024-01-12");
+    assert.equal(parsed[0].watchCount, 3);
+  });
+
+  it("nulls watchedAt and keeps watchCount at 0 when nothing is logged", () => {
+    const rows = [row({ name: "Plain", watchedAt: null, watchCount: 0 })];
+    const parsed = JSON.parse(toJson(rows));
+    assert.equal(parsed[0].watchedAt, null);
+    assert.equal(parsed[0].watchCount, 0);
+  });
+});
+
+// --- taste-brief admission ranking + scoped-run privacy (CEL-15) ------------
+
+describe("tasteSummary admission and scoped privacy", () => {
+  it("admits a rewatched favorite ahead of fifty ordinary same-rating rows", () => {
+    const ordinary = Array.from({ length: 50 }, () => row({ myRating: 10 }));
+    const strongest = row({
+      name: "Return Trip",
+      myRating: 10,
+      favorite: true,
+      watchCount: 9,
+    });
+    const s = tasteSummary([...ordinary, strongest]);
+    assert.match(s, /Return Trip/);
+    assert.match(s, /watched 9×/);
+  });
+
+  it("strips notes and decorations from exclusion blocks in scoped runs", () => {
+    const planned = row({
+      name: "Planned Thing",
+      statusKey: "WATCHLIST",
+      status: "Watchlist",
+      notes: "extremely private planning note",
+      tags: ["secret"],
+      favorite: true,
+    });
+    const dropped = row({
+      name: "Dropped Thing",
+      statusKey: "DROPPED",
+      status: "Dropped",
+      notes: "why I hated it",
+      myRating: 2,
+    });
+    const basis = [row({ name: "In Basis", myRating: 9 })];
+
+    const scoped = tasteSummary(basis, {
+      watchlist: [planned],
+      abandoned: [dropped],
+      exclusionIdentityOnly: true,
+    });
+    // Identity survives — exclusion still works…
+    assert.match(scoped, /Planned Thing \(2020\)/);
+    assert.match(scoped, /Dropped Thing \(2020\)/);
+    // …but nothing personal rides along.
+    assert.doesNotMatch(scoped, /extremely private planning note/);
+    assert.doesNotMatch(scoped, /why I hated it/);
+    assert.doesNotMatch(scoped, /#secret/);
+    assert.doesNotMatch(scoped, /★ Planned Thing/);
+    assert.doesNotMatch(scoped, /2\/10/);
+
+    // The default (full-basis) path is unchanged: notes still inform taste.
+    const full = tasteSummary([...basis, planned, dropped]);
+    assert.match(full, /why I hated it/);
   });
 });

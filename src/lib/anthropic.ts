@@ -39,7 +39,13 @@ export async function resolveAnthropicKey(userId: string): Promise<ResolvedAnthr
 }
 
 export function anthropicClient(apiKey: string): Anthropic {
-  return new Anthropic({ apiKey });
+  // A server-side ceiling independent of any caller signal: the recommend
+  // route runs under a 60s function limit, and the SDK's own default timeout
+  // (10 minutes) would let a stalled upstream ride straight into platform
+  // termination with no terminal NDJSON line ever reaching the client. Callers
+  // still abort earlier through their own signals; this is the backstop for
+  // any path where no signal is threaded.
+  return new Anthropic({ apiKey, timeout: 55_000 });
 }
 
 /**

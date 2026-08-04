@@ -14,6 +14,16 @@ const COMMON: Col[] = [
   { header: "Language", width: 14, value: (r) => (r.languageCode ? r.language : "") },
   { header: "Status", width: 16, value: (r) => r.status },
   { header: "My Rating", width: 10, value: (r) => (r.myRating != null ? r.myRating : "") },
+  // watchedAt carries full sub-day precision (kept for tasteSummary's recency
+  // sort in format.ts — see data.ts), so it's sliced to a plain date here the
+  // same way releaseDate is already sliced upstream, rather than dumped as a
+  // raw timestamp into the cell.
+  {
+    header: "Date Watched",
+    width: 14,
+    value: (r) => (r.watchedAt ? r.watchedAt.slice(0, 10) : ""),
+  },
+  { header: "Times Watched", width: 14, value: (r) => (r.watchCount > 0 ? r.watchCount : "") },
   { header: "TMDB", width: 8, value: (r) => (r.tmdbRating != null ? r.tmdbRating : "") },
   { header: "Genres", width: 28, value: (r) => r.genres.join(", ") },
   { header: "Favorite", width: 10, value: (r) => (r.favorite ? "Yes" : "") },

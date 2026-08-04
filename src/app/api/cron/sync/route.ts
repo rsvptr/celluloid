@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
-import { runScheduledSync } from "@/lib/metadata-sync";
+import { runScheduledSync, summarizeScheduledRun } from "@/lib/metadata-sync";
+import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -20,17 +21,30 @@ const RUN_BUDGET_MS = 45_000;
 export const dynamic = "force-dynamic";
 
 /**
+ * Same floor lib/env.ts enforces for BETTER_AUTH_SECRET/ENCRYPTION_KEY
+ * (MIN_SECRET_LENGTH there). A CRON_SECRET shorter than this is weak enough to
+ * guess or brute-force, so it's treated as equivalent to no secret at all.
+ */
+const MIN_SECRET_LENGTH = 32;
+
+/**
  * Constant-time comparison of the Vercel Cron bearer token.
  *
  * timingSafeEqual throws on a length mismatch, so lengths are checked first;
- * that leaks the secret's length and nothing else. An absent CRON_SECRET is a
- * refusal, never a pass — an endpoint that mutates the whole library on an
- * unauthenticated GET is not something to fall back to.
+ * that leaks the secret's length and nothing else. An absent or too-short
+ * CRON_SECRET is a refusal, never a pass — an endpoint that mutates the whole
+ * library on an unauthenticated GET is not something to fall back to.
  */
 function isAuthorizedCron(request: Request): boolean {
   const secret = process.env.CRON_SECRET;
   if (!secret) {
     console.error("CRON_SECRET is not set — refusing to run the scheduled sync.");
+    return false;
+  }
+  if (secret.length < MIN_SECRET_LENGTH) {
+    console.error(
+      `CRON_SECRET is shorter than ${MIN_SECRET_LENGTH} characters — refusing to run the scheduled sync.`,
+    );
     return false;
   }
   const provided = request.headers.get("authorization");
@@ -39,6 +53,12 @@ function isAuthorizedCron(request: Request): boolean {
   const actual = Buffer.from(provided, "utf8");
   if (actual.length !== expected.length) return false;
   return timingSafeEqual(actual, expected);
+}
+
+/** First `x-forwarded-for` hop, or "unknown" if the request arrived without one. */
+function clientIp(request: Request): string {
+  const forwardedFor = request.headers.get("x-forwarded-for");
+  return forwardedFor?.split(",")[0]?.trim() || "unknown";
 }
 
 /**
@@ -51,6 +71,17 @@ function isAuthorizedCron(request: Request): boolean {
  * so there is no argument surface to validate or to abuse.
  */
 export async function GET(request: Request) {
+  // IP-keyed limiter so CRON_SECRET can't be brute-forced by hammering this
+  // endpoint. rateLimit() checks and increments in a single call — there's no
+  // way to "peek" the count without also consuming it — so consulting it here,
+  // before the comparison, is the simplest approach that reliably counts every
+  // failed guess. Tradeoff, deliberately accepted: a successful call sharing a
+  // hot IP with recent failures (e.g. behind the same NAT/proxy) is also
+  // blocked and has to wait out the window. A delayed scheduled run is cheap;
+  // letting failed guesses go uncounted is not.
+  const limited = rateLimit(`cron-auth:${clientIp(request)}`, 5, 60_000);
+  if (!limited.ok) return tooManyRequests(limited.retryAfter);
+
   if (!isAuthorizedCron(request)) {
     return Response.json(
       { error: "Unauthorized" },
@@ -60,9 +91,15 @@ export async function GET(request: Request) {
 
   try {
     const result = await runScheduledSync({ deadline: Date.now() + RUN_BUDGET_MS });
-    return Response.json(result, {
-      headers: { "Cache-Control": "private, no-store" },
-    });
+    // A totally-failed run must not report 200 — see summarizeScheduledRun.
+    const { totalFailure, degraded } = summarizeScheduledRun(result);
+    return Response.json(
+      { ...result, degraded },
+      {
+        status: totalFailure ? 502 : 200,
+        headers: { "Cache-Control": "private, no-store" },
+      },
+    );
   } catch (error) {
     console.error("Scheduled metadata sync failed:", error);
     return Response.json(

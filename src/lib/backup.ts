@@ -13,12 +13,13 @@ import {
   type BackupEpisode,
   type BackupSeason,
   type BackupShare,
+  type BackupSuppression,
   type BackupTag,
   type BackupTitle,
   type BackupWatchEvent,
-  type RestoreCounts,
   type RestoreMode,
   type RestorePlan,
+  type RestorePreviewCounts,
 } from "@/lib/backup-format";
 
 const titleBackupInclude = {
@@ -30,7 +31,13 @@ type TitleWithRelations = Prisma.TitleGetPayload<{
   include: typeof titleBackupInclude;
 }>;
 
-export interface RestoreResult extends RestoreCounts {
+export interface BackupRestorePlan extends Omit<RestorePlan, "counts"> {
+  counts: RestorePreviewCounts;
+  /** Digest of the deterministic plan plus current state it may overwrite. */
+  stateDigest: string;
+}
+
+export interface RestoreResult extends RestorePreviewCounts {
   sharesCreated: number;
   sharesSkipped: number;
   eventsCreated: number;
@@ -49,7 +56,10 @@ function tagNameKey(value: string): string {
   return value.toLocaleLowerCase("en-US");
 }
 
-function snapshotTitle(title: TitleWithRelations): BackupTitle {
+function snapshotTitle(
+  title: TitleWithRelations,
+  includeDerivedEpisodeMetadata = true,
+): BackupTitle {
   return {
     sourceId: title.id,
     tmdbId: title.tmdbId,
@@ -82,7 +92,7 @@ function snapshotTitle(title: TitleWithRelations): BackupTitle {
         tmdbId: season.tmdbId,
         seasonNumber: season.seasonNumber,
         name: season.name,
-        overview: season.overview,
+        ...(includeDerivedEpisodeMetadata ? { overview: season.overview } : {}),
         airDate: nullableIso(season.airDate),
         posterPath: season.posterPath,
         episodeCount: season.episodeCount,
@@ -92,10 +102,14 @@ function snapshotTitle(title: TitleWithRelations): BackupTitle {
             tmdbId: episode.tmdbId,
             episodeNumber: episode.episodeNumber,
             name: episode.name,
-            overview: episode.overview,
+            ...(includeDerivedEpisodeMetadata
+              ? {
+                  overview: episode.overview,
+                  stillPath: episode.stillPath,
+                }
+              : {}),
             airDate: nullableIso(episode.airDate),
             runtime: episode.runtime,
-            stillPath: episode.stillPath,
             watched: episode.watched,
             watchedAt: nullableIso(episode.watchedAt),
           }))
@@ -109,74 +123,110 @@ function snapshotTitle(title: TitleWithRelations): BackupTitle {
 }
 
 export async function createBackupEnvelope(userId: string): Promise<BackupEnvelope> {
-  const [user, titleRows, tagRows, shareRows, watchEventRows] = await Promise.all([
-    prisma.user.findUnique({
-      where: { id: userId },
-      select: { timeZone: true, watchRegion: true },
-    }),
-    prisma.title.findMany({
-      where: { userId },
-      include: titleBackupInclude,
-      orderBy: { createdAt: "asc" },
-    }),
-    prisma.tag.findMany({ where: { userId }, orderBy: { name: "asc" } }),
-    prisma.shareList.findMany({
-      where: { userId },
-      include: { items: { orderBy: { position: "asc" } } },
-      orderBy: { createdAt: "asc" },
-    }),
-    prisma.watchEvent.findMany({
-      where: { userId },
-      orderBy: [{ occurredAt: "asc" }, { createdAt: "asc" }],
-    }),
-  ]);
-  if (!user) throw new Error("Cannot back up a missing user.");
+  return prisma.$transaction(
+    async (tx) => {
+      // The first read establishes the REPEATABLE READ snapshot. Stamp it
+      // immediately afterwards rather than after a potentially long export.
+      const user = await tx.user.findUnique({
+        where: { id: userId },
+        select: {
+          timeZone: true,
+          watchRegion: true,
+          myProviders: true,
+          recommendModel: true,
+        },
+      });
+      if (!user) throw new Error("Cannot back up a missing user.");
+      const exportedAt = new Date().toISOString();
+      // These reads may be grouped for latency, but they all use this transaction
+      // client and therefore the same snapshot established above.
+      const [titleRows, tagRows, shareRows, watchEventRows, suppressionRows] =
+        await Promise.all([
+          tx.title.findMany({
+            where: { userId },
+            include: titleBackupInclude,
+            orderBy: { createdAt: "asc" },
+          }),
+          tx.tag.findMany({ where: { userId }, orderBy: { name: "asc" } }),
+          tx.shareList.findMany({
+            where: { userId },
+            include: { items: { orderBy: { position: "asc" } } },
+            orderBy: { createdAt: "asc" },
+          }),
+          tx.watchEvent.findMany({
+            where: { userId },
+            orderBy: [{ occurredAt: "asc" }, { createdAt: "asc" }],
+          }),
+          tx.suppression.findMany({
+            where: { userId },
+            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          }),
+        ]);
 
-  const backup: BackupEnvelope = {
-    app: BACKUP_APP,
-    schemaVersion: BACKUP_SCHEMA_VERSION,
-    exportedAt: new Date().toISOString(),
-    user,
-    titles: titleRows.map(snapshotTitle),
-    tags: tagRows.map((tag) => ({
-      sourceId: tag.id,
-      name: tag.name,
-      color: tag.color,
-      createdAt: iso(tag.createdAt),
-    })),
-    shares: shareRows.map((share) => {
-      const titleIds =
-        share.scope === "WHOLE_LIBRARY"
-          ? []
-          : share.items.length > 0
-            ? share.items.map((item) => item.titleId)
-            : share.titleIds;
-      return {
-        sourceId: share.id,
-        name: share.name,
-        titleIds,
-        includeNotes: share.includeNotes,
-        includeWatchlist: share.includeWatchlist,
-        scope: share.scope,
-        expiresAt: nullableIso(share.expiresAt),
-        revokedAt: nullableIso(share.revokedAt),
-        items: titleIds.map((titleId, index) => ({ titleId, position: index + 1 })),
-        createdAt: iso(share.createdAt),
+      const backup: BackupEnvelope = {
+        app: BACKUP_APP,
+        schemaVersion: BACKUP_SCHEMA_VERSION,
+        exportedAt,
+        user,
+        // Season/episode prose and stills are TMDB-derived and can be refreshed
+        // by metadata sync. Omitting them keeps new v2 exports materially leaner.
+        titles: titleRows.map((title) => snapshotTitle(title, false)),
+        tags: tagRows.map((tag) => ({
+          sourceId: tag.id,
+          name: tag.name,
+          color: tag.color,
+          createdAt: iso(tag.createdAt),
+        })),
+        shares: shareRows.map((share) => {
+          const titleIds =
+            share.scope === "WHOLE_LIBRARY"
+              ? []
+              : share.items.length > 0
+                ? share.items.map((item) => item.titleId)
+                : share.titleIds;
+          return {
+            sourceId: share.id,
+            name: share.name,
+            titleIds,
+            includeNotes: share.includeNotes,
+            includeWatchlist: share.includeWatchlist,
+            scope: share.scope,
+            expiresAt: nullableIso(share.expiresAt),
+            revokedAt: nullableIso(share.revokedAt),
+            items: titleIds.map((titleId, index) => ({ titleId, position: index + 1 })),
+            createdAt: iso(share.createdAt),
+          };
+        }),
+        watchEvents: watchEventRows.map((event): BackupWatchEvent => ({
+          sourceId: event.id,
+          titleId: event.titleId,
+          episodeId: event.episodeId,
+          kind: event.kind,
+          occurredAt: iso(event.occurredAt),
+          source: event.source,
+          note: event.note,
+          createdAt: iso(event.createdAt),
+        })),
+        suppressions: suppressionRows.map((suppression): BackupSuppression => ({
+          sourceId: suppression.id,
+          matchKey: suppression.matchKey,
+          tmdbId: suppression.tmdbId,
+          mediaType: suppression.mediaType,
+          name: suppression.name,
+          year: suppression.year,
+          reason: suppression.reason,
+          createdAt: iso(suppression.createdAt),
+        })),
       };
-    }),
-    watchEvents: watchEventRows.map((event): BackupWatchEvent => ({
-      sourceId: event.id,
-      titleId: event.titleId,
-      episodeId: event.episodeId,
-      kind: event.kind,
-      occurredAt: iso(event.occurredAt),
-      source: event.source,
-      note: event.note,
-      createdAt: iso(event.createdAt),
-    })),
-  };
 
-  return backupEnvelopeSchema.parse(backup);
+      return backupEnvelopeSchema.parse(backup);
+    },
+    {
+      isolationLevel: "RepeatableRead",
+      maxWait: 10_000,
+      timeout: 45_000,
+    },
+  );
 }
 
 async function currentTitleSnapshots(userId: string): Promise<BackupTitle[]> {
@@ -185,19 +235,163 @@ async function currentTitleSnapshots(userId: string): Promise<BackupTitle[]> {
     include: titleBackupInclude,
     orderBy: { createdAt: "asc" },
   });
-  return rows.map(snapshotTitle);
+  return rows.map((title) => snapshotTitle(title));
+}
+
+function restorePlanStateDigest(plan: RestorePlan, currentState: unknown): string {
+  const planFingerprint = plan.items.map((item) => ({
+    action: item.action,
+    incomingSourceId: item.incoming.sourceId,
+    ...("existingId" in item ? { existingId: item.existingId } : {}),
+    ...(item.action === "update" ? { merged: item.merged } : {}),
+  }));
+  return createHash("sha256")
+    .update(JSON.stringify({ plan: planFingerprint, currentState }))
+    .digest("base64url");
 }
 
 export async function analyzeBackupRestore(
   userId: string,
   backup: BackupEnvelope,
   mode: RestoreMode,
-): Promise<RestorePlan> {
-  return planRestoreTitles(backup.titles, await currentTitleSnapshots(userId), mode);
+): Promise<BackupRestorePlan> {
+  const [titles, suppressions, user, tags] = await Promise.all([
+    currentTitleSnapshots(userId),
+    prisma.suppression.findMany({
+      where: { userId },
+      select: {
+        id: true,
+        matchKey: true,
+        tmdbId: true,
+        mediaType: true,
+        name: true,
+        year: true,
+        reason: true,
+        createdAt: true,
+      },
+    }),
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        timeZone: true,
+        watchRegion: true,
+        myProviders: true,
+        recommendModel: true,
+      },
+    }),
+    prisma.tag.findMany({
+      where: { userId },
+      select: { id: true, name: true, color: true, createdAt: true },
+    }),
+  ]);
+  const titlePlan = planRestoreTitles(backup.titles, titles, mode);
+  const currentByMatchKey = new Map(
+    suppressions.map((suppression) => [suppression.matchKey, suppression]),
+  );
+  let suppressionsCreate = 0;
+  let suppressionsUpdate = 0;
+  let suppressionsSkip = 0;
+  for (const incoming of backup.suppressions ?? []) {
+    const current = currentByMatchKey.get(incoming.matchKey);
+    if (!current) suppressionsCreate += 1;
+    else if (mode === "replace-personal" && !sameSuppression(current, incoming)) {
+      suppressionsUpdate += 1;
+    } else suppressionsSkip += 1;
+  }
+  const providerPreferenceIncluded = backup.user.myProviders === undefined ? 0 : 1;
+  const providerPreferenceUpdate =
+    user &&
+    backup.user.myProviders !== undefined &&
+    (mode === "replace-personal" || user.myProviders.length === 0) &&
+    !sameNumberIds(user.myProviders, backup.user.myProviders)
+      ? 1
+      : 0;
+  const recommendModelPreferenceIncluded =
+    backup.user.recommendModel === undefined ? 0 : 1;
+  const recommendModelPreferenceUpdate =
+    user &&
+    backup.user.recommendModel !== undefined &&
+    (mode === "replace-personal" || user.recommendModel === null) &&
+    user.recommendModel !== backup.user.recommendModel
+      ? 1
+      : 0;
+  const stateDigest = restorePlanStateDigest(titlePlan, {
+    titles: [...titles].sort((left, right) => left.sourceId.localeCompare(right.sourceId)),
+    suppressions: suppressions
+      .map((suppression) => ({
+        ...suppression,
+        createdAt: suppression.createdAt.toISOString(),
+      }))
+      .sort((left, right) =>
+        left.matchKey.localeCompare(right.matchKey) || left.id.localeCompare(right.id),
+      ),
+    user: user
+      ? {
+          timeZone: user.timeZone,
+          watchRegion: user.watchRegion,
+          myProviders: [...user.myProviders],
+          recommendModel: user.recommendModel,
+        }
+      : null,
+    tags: tags
+      .map((tag) => ({ ...tag, createdAt: tag.createdAt.toISOString() }))
+      .sort((left, right) => left.id.localeCompare(right.id)),
+  });
+
+  return {
+    ...titlePlan,
+    stateDigest,
+    counts: {
+      ...titlePlan.counts,
+      suppressionsCreate,
+      suppressionsUpdate,
+      suppressionsSkip,
+      providerSelections: backup.user.myProviders?.length ?? 0,
+      providerPreferenceIncluded,
+      providerPreferenceUpdate,
+      recommendModelPreferenceIncluded,
+      recommendModelPreferenceUpdate,
+    },
+  };
 }
 
 function nullableDate(value: string | null): Date | null {
   return value ? new Date(value) : null;
+}
+
+function suppressionScalars(suppression: BackupSuppression) {
+  return {
+    matchKey: suppression.matchKey,
+    tmdbId: suppression.tmdbId,
+    mediaType: suppression.mediaType,
+    name: suppression.name,
+    year: suppression.year,
+    reason: suppression.reason,
+    createdAt: new Date(suppression.createdAt),
+  };
+}
+
+function sameSuppression(
+  current: {
+    matchKey: string;
+    tmdbId: number | null;
+    mediaType: BackupSuppression["mediaType"];
+    name: string;
+    year: number | null;
+    reason: BackupSuppression["reason"];
+    createdAt: Date;
+  },
+  incoming: BackupSuppression,
+): boolean {
+  return (
+    current.matchKey === incoming.matchKey &&
+    current.tmdbId === incoming.tmdbId &&
+    current.mediaType === incoming.mediaType &&
+    current.name === incoming.name &&
+    current.year === incoming.year &&
+    current.reason === incoming.reason &&
+    current.createdAt.getTime() === new Date(incoming.createdAt).getTime()
+  );
 }
 
 function titleScalars(title: BackupTitle) {
@@ -297,6 +491,65 @@ async function restoreTags(
       await prisma.tag.update({ where: { id: existing.id }, data: { color } });
     }
   }
+}
+
+async function restoreSuppressions(
+  userId: string,
+  suppressions: BackupSuppression[],
+  mode: RestoreMode,
+): Promise<Pick<
+  RestorePreviewCounts,
+  "suppressionsCreate" | "suppressionsUpdate" | "suppressionsSkip"
+>> {
+  let suppressionsCreate = 0;
+  let suppressionsUpdate = 0;
+  let suppressionsSkip = 0;
+
+  // Suppressions are keyed by owner + matchKey, not by their exported id. That
+  // is the durable identity used by the recommendation engine and it also
+  // avoids a source-id collision when restoring into a database that already
+  // contains another owner's rows.
+  for (const suppression of suppressions) {
+    let existing = await prisma.suppression.findUnique({
+      where: { userId_matchKey: { userId, matchKey: suppression.matchKey } },
+    });
+    if (!existing) {
+      try {
+        await prisma.suppression.create({
+          data: { userId, ...suppressionScalars(suppression) },
+        });
+        suppressionsCreate += 1;
+        continue;
+      } catch (error) {
+        if (
+          error === null ||
+          typeof error !== "object" ||
+          !("code" in error) ||
+          error.code !== "P2002"
+        ) {
+          throw error;
+        }
+        // A concurrent restore may win the unique-key race. Re-read and reuse
+        // that row; suppress only when the owner/matchKey collision now exists.
+        existing = await prisma.suppression.findUnique({
+          where: { userId_matchKey: { userId, matchKey: suppression.matchKey } },
+        });
+        if (!existing) throw error;
+      }
+    }
+
+    if (mode === "replace-personal" && !sameSuppression(existing, suppression)) {
+      await prisma.suppression.update({
+        where: { id: existing.id },
+        data: suppressionScalars(suppression),
+      });
+      suppressionsUpdate += 1;
+    } else {
+      suppressionsSkip += 1;
+    }
+  }
+
+  return { suppressionsCreate, suppressionsUpdate, suppressionsSkip };
 }
 
 async function createTitle(
@@ -475,10 +728,10 @@ async function updateTitle(
     await tx.title.update({
       where: { id: current.id },
       data: {
-        watchedEpisodes,
-        // Only adopt the row count when rows exist, so a movie-shaped or
-        // episodeless title keeps whatever total the merge decided on.
-        ...(totalEpisodes > 0 ? { totalEpisodes } : {}),
+        // Counter-only TV imports legitimately have progress without materialized
+        // Episode rows. In that state the merge's counters are the only durable
+        // source, so a zero-row recount must not erase watchedEpisodes.
+        ...(totalEpisodes > 0 ? { watchedEpisodes, totalEpisodes } : {}),
       },
     });
   }
@@ -509,10 +762,10 @@ function sameEpisodeScalars(
   return (
     existing.tmdbId === next.tmdbId &&
     existing.name === next.name &&
-    existing.overview === next.overview &&
+    (next.overview === undefined || existing.overview === next.overview) &&
     sameDate(existing.airDate, next.airDate) &&
     existing.runtime === next.runtime &&
-    existing.stillPath === next.stillPath &&
+    (next.stillPath === undefined || existing.stillPath === next.stillPath) &&
     existing.watched === next.watched &&
     sameDate(existing.watchedAt, next.watchedAt)
   );
@@ -527,6 +780,10 @@ function chunks<T>(values: T[], size: number): T[][] {
 }
 
 function sameIds(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function sameNumberIds(left: number[], right: number[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
@@ -634,7 +891,12 @@ async function restoreUserPreferences(
 ) {
   const current = await prisma.user.findUnique({
     where: { id: userId },
-    select: { timeZone: true, watchRegion: true },
+    select: {
+      timeZone: true,
+      watchRegion: true,
+      myProviders: true,
+      recommendModel: true,
+    },
   });
   if (!current) return;
   await prisma.user.update({
@@ -648,6 +910,22 @@ async function restoreUserPreferences(
         mode === "replace-personal" || current.watchRegion === "US"
           ? backup.user.watchRegion
           : current.watchRegion,
+      ...(backup.user.myProviders !== undefined
+        ? {
+            myProviders:
+              mode === "replace-personal" || current.myProviders.length === 0
+                ? backup.user.myProviders
+                : current.myProviders,
+          }
+        : {}),
+      ...(backup.user.recommendModel !== undefined
+        ? {
+            recommendModel:
+              mode === "replace-personal" || current.recommendModel === null
+                ? backup.user.recommendModel
+                : current.recommendModel,
+          }
+        : {}),
     },
   });
 }
@@ -686,6 +964,24 @@ async function mapRestoredEpisodes(
   return episodeIds;
 }
 
+function watchEventDedupKey(event: {
+  titleId: string;
+  episodeId: string | null;
+  kind: BackupWatchEvent["kind"];
+  occurredAt: Date;
+  source: BackupWatchEvent["source"];
+  note: string | null;
+}): string {
+  return JSON.stringify([
+    event.titleId,
+    event.episodeId,
+    event.kind,
+    event.occurredAt.toISOString(),
+    event.source,
+    event.note,
+  ]);
+}
+
 async function restoreWatchEvents(
   userId: string,
   events: BackupWatchEvent[],
@@ -695,55 +991,97 @@ async function restoreWatchEvents(
   let eventsCreated = 0;
   let eventsSkipped = 0;
   for (const batch of chunks(events, 50)) {
+    const candidates: Array<{
+      sourceId: string;
+      data: {
+        userId: string;
+        titleId: string;
+        episodeId: string | null;
+        kind: BackupWatchEvent["kind"];
+        occurredAt: Date;
+        source: BackupWatchEvent["source"];
+        note: string | null;
+        createdAt: Date;
+      };
+    }> = [];
+    for (const event of batch) {
+      const titleId = sourceToLocalTitleId.get(event.titleId);
+      const episodeId = event.episodeId
+        ? sourceToLocalEpisodeId.get(event.episodeId)
+        : null;
+      if (!titleId || (event.episodeId !== null && !episodeId)) {
+        eventsSkipped += 1;
+        continue;
+      }
+      candidates.push({
+        sourceId: event.sourceId,
+        data: {
+          userId,
+          titleId,
+          episodeId: episodeId ?? null,
+          kind: event.kind,
+          occurredAt: new Date(event.occurredAt),
+          source: event.source,
+          note: event.note,
+          createdAt: new Date(event.createdAt),
+        },
+      });
+    }
+    if (candidates.length === 0) continue;
+
     const result = await prisma.$transaction(
       async (tx) => {
-        let created = 0;
-        let skipped = 0;
-        for (const event of batch) {
-          const titleId = sourceToLocalTitleId.get(event.titleId);
-          const episodeId = event.episodeId
-            ? sourceToLocalEpisodeId.get(event.episodeId)
-            : null;
-          if (!titleId || (event.episodeId !== null && !episodeId)) {
-            skipped += 1;
-            continue;
-          }
-          const occurredAt = new Date(event.occurredAt);
-          const duplicate = await tx.watchEvent.findFirst({
+        // Two reads for the whole chunk: one for the semantic dedup tuple and
+        // one for source-id occupancy. The previous path ran both plus a create
+        // for every event, making the query count grow at 3N.
+        const [existingRows, occupiedRows] = await Promise.all([
+          tx.watchEvent.findMany({
             where: {
               userId,
-              titleId,
-              episodeId,
-              kind: event.kind,
-              occurredAt,
-              source: event.source,
-              note: event.note,
+              OR: candidates.map(({ data }) => ({
+                titleId: data.titleId,
+                episodeId: data.episodeId,
+                kind: data.kind,
+                occurredAt: data.occurredAt,
+                source: data.source,
+                note: data.note,
+              })),
             },
+            select: {
+              titleId: true,
+              episodeId: true,
+              kind: true,
+              occurredAt: true,
+              source: true,
+              note: true,
+            },
+          }),
+          tx.watchEvent.findMany({
+            where: { id: { in: candidates.map((candidate) => candidate.sourceId) } },
             select: { id: true },
-          });
-          if (duplicate) {
+          }),
+        ]);
+        const seenKeys = new Set(existingRows.map(watchEventDedupKey));
+        const occupiedIds = new Set(occupiedRows.map((row) => row.id));
+        const creates: Prisma.WatchEventCreateManyInput[] = [];
+        let skipped = 0;
+        for (const candidate of candidates) {
+          const key = watchEventDedupKey(candidate.data);
+          // Also suppress duplicate tuples within this batch. The old sequential
+          // loop observed its own earlier create on the next duplicate probe.
+          if (seenKeys.has(key)) {
             skipped += 1;
             continue;
           }
-          const occupiedId = await tx.watchEvent.findUnique({
-            where: { id: event.sourceId },
-            select: { id: true },
+          seenKeys.add(key);
+          creates.push({
+            ...candidate.data,
+            id: occupiedIds.has(candidate.sourceId) ? undefined : candidate.sourceId,
           });
-          await tx.watchEvent.create({
-            data: {
-              id: occupiedId ? undefined : event.sourceId,
-              userId,
-              titleId,
-              episodeId,
-              kind: event.kind,
-              occurredAt,
-              source: event.source,
-              note: event.note,
-              createdAt: new Date(event.createdAt),
-            },
-          });
-          created += 1;
         }
+        const created = creates.length > 0
+          ? (await tx.watchEvent.createMany({ data: creates })).count
+          : 0;
         return { created, skipped };
       },
       { maxWait: 10_000, timeout: 30_000 },
@@ -758,9 +1096,14 @@ export async function restoreBackup(
   userId: string,
   backup: BackupEnvelope,
   mode: RestoreMode,
-  plan: RestorePlan,
+  plan: BackupRestorePlan,
 ): Promise<RestoreResult> {
   await restoreUserPreferences(userId, backup, mode);
+  const suppressionResult = await restoreSuppressions(
+    userId,
+    backup.suppressions ?? [],
+    mode,
+  );
   for (const tagBatch of chunks(backup.tags, 100)) {
     await restoreTags(userId, tagBatch, mode);
   }
@@ -819,10 +1162,33 @@ export async function restoreBackup(
       sourceToLocalEpisodeId,
     ),
   ]);
-  return { ...plan.counts, ...shareResult, ...eventResult };
+  return {
+    ...plan.counts,
+    ...suppressionResult,
+    ...shareResult,
+    ...eventResult,
+  };
 }
 
 const CONFIRMATION_TTL_MS = 15 * 60 * 1_000;
+const RESTORE_COUNT_KEYS = [
+  "create",
+  "update",
+  "skip",
+  "conflict",
+  "suppressionsCreate",
+  "suppressionsUpdate",
+  "suppressionsSkip",
+  "providerSelections",
+  "providerPreferenceIncluded",
+  "providerPreferenceUpdate",
+  "recommendModelPreferenceIncluded",
+  "recommendModelPreferenceUpdate",
+] as const satisfies readonly (keyof RestorePreviewCounts)[];
+
+function restoreCountValues(counts: RestorePreviewCounts): number[] {
+  return RESTORE_COUNT_KEYS.map((key) => counts[key]);
+}
 
 function backupDigest(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("base64url");
@@ -833,17 +1199,16 @@ function confirmationPayload(
   mode: RestoreMode,
   bytes: Uint8Array,
   issuedAt: number,
-  counts: RestoreCounts,
+  counts: RestorePreviewCounts,
+  stateDigest: string,
 ): string {
   return [
     userId,
     mode,
     backupDigest(bytes),
+    stateDigest,
     issuedAt,
-    counts.create,
-    counts.update,
-    counts.skip,
-    counts.conflict,
+    ...restoreCountValues(counts),
   ].join(":");
 }
 
@@ -851,21 +1216,22 @@ export function createRestoreConfirmation(
   userId: string,
   mode: RestoreMode,
   bytes: Uint8Array,
-  counts: RestoreCounts,
+  counts: RestorePreviewCounts,
+  stateDigest: string,
 ): string {
   const issuedAt = Date.now();
-  const payload = confirmationPayload(userId, mode, bytes, issuedAt, counts);
+  const payload = confirmationPayload(
+    userId,
+    mode,
+    bytes,
+    issuedAt,
+    counts,
+    stateDigest,
+  );
   const signature = createHmac("sha256", env.BETTER_AUTH_SECRET)
     .update(payload)
     .digest("base64url");
-  return [
-    issuedAt,
-    counts.create,
-    counts.update,
-    counts.skip,
-    counts.conflict,
-    signature,
-  ].join(".");
+  return [issuedAt, ...restoreCountValues(counts), signature].join(".");
 }
 
 export function verifyRestoreConfirmation(
@@ -873,32 +1239,37 @@ export function verifyRestoreConfirmation(
   userId: string,
   mode: RestoreMode,
   bytes: Uint8Array,
-  counts: RestoreCounts,
+  counts: RestorePreviewCounts,
+  stateDigest: string,
 ): boolean {
   const parts = token.split(".");
-  if (parts.length !== 6) return false;
-  const [issuedRaw, createRaw, updateRaw, skipRaw, conflictRaw, signature] = parts;
+  if (parts.length !== RESTORE_COUNT_KEYS.length + 2) return false;
+  const [issuedRaw, ...countParts] = parts;
+  const signature = countParts.pop();
+  if (!signature) return false;
   const issuedAt = Number(issuedRaw);
-  const tokenCounts = {
-    create: Number(createRaw),
-    update: Number(updateRaw),
-    skip: Number(skipRaw),
-    conflict: Number(conflictRaw),
-  };
+  const tokenCountValues = countParts.map(Number);
+  const tokenCounts = Object.fromEntries(
+    RESTORE_COUNT_KEYS.map((key, index) => [key, tokenCountValues[index]]),
+  ) as unknown as RestorePreviewCounts;
   if (
     !Number.isSafeInteger(issuedAt) ||
     Date.now() - issuedAt < 0 ||
     Date.now() - issuedAt > CONFIRMATION_TTL_MS ||
-    Object.values(tokenCounts).some((value) => !Number.isSafeInteger(value) || value < 0) ||
-    tokenCounts.create !== counts.create ||
-    tokenCounts.update !== counts.update ||
-    tokenCounts.skip !== counts.skip ||
-    tokenCounts.conflict !== counts.conflict
+    tokenCountValues.some((value) => !Number.isSafeInteger(value) || value < 0) ||
+    RESTORE_COUNT_KEYS.some((key) => tokenCounts[key] !== counts[key])
   ) {
     return false;
   }
 
-  const payload = confirmationPayload(userId, mode, bytes, issuedAt, tokenCounts);
+  const payload = confirmationPayload(
+    userId,
+    mode,
+    bytes,
+    issuedAt,
+    tokenCounts,
+    stateDigest,
+  );
   const expected = createHmac("sha256", env.BETTER_AUTH_SECRET)
     .update(payload)
     .digest();

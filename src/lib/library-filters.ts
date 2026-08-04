@@ -19,6 +19,8 @@ export interface LibraryFilters {
   sort: SortKey;
   view: "grid" | "list";
   onlyUnmatched: boolean;
+  /** Opt-in so older saved/default filter objects remain valid. */
+  onlyOnServices?: boolean;
 }
 
 export const DEFAULT_FILTERS: LibraryFilters = {
@@ -102,6 +104,7 @@ export function parseLibraryFilters(
 
   if (first(raw.view) === "list") f.view = "list";
   if (first(raw.unmatched) === "1") f.onlyUnmatched = true;
+  if (first(raw.services) === "1") f.onlyOnServices = true;
 
   return f;
 }
@@ -119,5 +122,6 @@ export function filtersToParams(f: LibraryFilters): URLSearchParams {
   if (f.sort !== "added") p.set("sort", f.sort);
   if (f.view !== "grid") p.set("view", f.view);
   if (f.onlyUnmatched) p.set("unmatched", "1");
+  if (f.onlyOnServices) p.set("services", "1");
   return p;
 }

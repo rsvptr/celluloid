@@ -9,6 +9,10 @@ import {
   scoreImportMatch,
 } from "../src/lib/import-staging-format";
 import type { ParsedTitle } from "../src/lib/import/parse-excel";
+import {
+  existingImportReviewFacts,
+  planExistingImportMerge,
+} from "../src/lib/import-merge";
 import type { TmdbSearchItem } from "../src/lib/tmdb";
 
 const parsed: ParsedTitle = {
@@ -161,6 +165,65 @@ describe("staged import resumability", () => {
         { action: "CONFLICT", titleId: null, attempts: 0 },
       ]),
       "PARTIAL",
+    );
+  });
+});
+
+describe("existing-title import merge policy", () => {
+  it("fills missing facts and advances only the neutral Watchlist status", () => {
+    assert.deepEqual(
+      planExistingImportMerge(
+        { status: "WATCHLIST", rating: null, watchedAt: null },
+        { ...parsed, rating: 9, watchedAt: "2025-04-03" },
+      ),
+      { rating: 9, watchedAt: "2025-04-03", status: "WATCHED" },
+    );
+    assert.deepEqual(
+      planExistingImportMerge(
+        { status: "WATCHLIST", rating: null, watchedAt: null },
+        { ...parsed, status: "PARTIALLY_WATCHED" },
+      ),
+      { status: "WATCHING" },
+    );
+  });
+
+  it("never overwrites existing facts or a deliberate non-Watchlist status", () => {
+    for (const status of ["WATCHING", "WATCHED", "ON_HOLD", "DROPPED"] as const) {
+      assert.deepEqual(
+        planExistingImportMerge(
+          { status, rating: 8, watchedAt: new Date("2024-01-01T00:00:00.000Z") },
+          { ...parsed, rating: 10, watchedAt: "2025-04-03" },
+        ),
+        {},
+      );
+    }
+  });
+
+  it("treats an Unwatched row as a status no-op while still filling null facts", () => {
+    const unwatched = {
+      ...parsed,
+      status: "UNWATCHED" as const,
+      rating: 7.5,
+      watchedAt: "2023-06-02",
+    };
+    assert.deepEqual(
+      planExistingImportMerge(
+        { status: "WATCHED", rating: null, watchedAt: null },
+        unwatched,
+      ),
+      { rating: 7.5, watchedAt: "2023-06-02" },
+    );
+    assert.match(existingImportReviewFacts(unwatched).join(" "), /never regresses/);
+  });
+
+  it("describes every supplied mergeable fact on the affected row", () => {
+    assert.deepEqual(
+      existingImportReviewFacts({ ...parsed, rating: 9, watchedAt: "2025-04-03" }),
+      [
+        "fills your missing rating and keeps any rating already set",
+        "fills your missing watch date and keeps any date already set",
+        "uses Watched only if your current status is Watchlist; otherwise keeps it",
+      ],
     );
   });
 });

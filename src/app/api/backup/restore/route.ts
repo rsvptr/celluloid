@@ -97,6 +97,7 @@ export async function POST(request: Request) {
           mode,
           bytes,
           plan.counts,
+          plan.stateDigest,
         ),
       });
     }
@@ -110,6 +111,7 @@ export async function POST(request: Request) {
         mode,
         bytes,
         plan.counts,
+        plan.stateDigest,
       )
     ) {
       return json(

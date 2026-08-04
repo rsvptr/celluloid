@@ -32,10 +32,12 @@ export const backupEpisodeSchema = z
     tmdbId: nullableInt,
     episodeNumber: z.number().int().min(0).max(100_000),
     name: nullableText(500),
-    overview: nullableText(200_000),
+    // TMDB-derived prose is omitted from new backups for size, but remains
+    // optional so older v2 files that carried it continue to parse.
+    overview: nullableText(200_000).optional(),
     airDate: nullableTimestampSchema,
     runtime: z.number().int().min(0).max(100_000).nullable(),
-    stillPath: nullableText(1_000),
+    stillPath: nullableText(1_000).optional(),
     watched: z.boolean(),
     watchedAt: nullableTimestampSchema,
   })
@@ -56,7 +58,8 @@ export const backupSeasonSchema = z
     tmdbId: nullableInt,
     seasonNumber: z.number().int().min(0).max(10_000),
     name: nullableText(500),
-    overview: nullableText(200_000),
+    // Re-fetchable from TMDB after restore; optional preserves old v2 input.
+    overview: nullableText(200_000).optional(),
     airDate: nullableTimestampSchema,
     posterPath: nullableText(1_000),
     episodeCount: z.number().int().min(0).max(100_000).nullable(),
@@ -218,6 +221,19 @@ export const backupWatchEventSchema = z
   })
   .strict();
 
+export const backupSuppressionSchema = z
+  .object({
+    sourceId: sourceIdSchema,
+    matchKey: z.string().min(1).max(1_000),
+    tmdbId: z.number().int().positive().nullable(),
+    mediaType: z.enum(["MOVIE", "TV"]),
+    name: z.string().trim().min(1).max(500),
+    year: z.number().int().min(0).max(9_999).nullable(),
+    reason: z.enum(["NOT_INTERESTED", "SEEN_ELSEWHERE"]),
+    createdAt: timestampSchema,
+  })
+  .strict();
+
 export const backupUserSchema = z
   .object({
     timeZone: z
@@ -227,6 +243,15 @@ export const backupUserSchema = z
       .max(100)
       .refine(isValidTimeZone, "invalid IANA time zone"),
     watchRegion: z.string().regex(/^[A-Z]{2}$/),
+    // Optional rather than defaulted so a pre-CEL-6 v2 backup remains
+    // distinguishable from a newer backup that deliberately stores an empty
+    // selection or the default recommendation model. Restore can then leave
+    // preferences that the older file never represented untouched.
+    myProviders: z
+      .array(z.number().int().positive().max(2_147_483_647))
+      .max(100)
+      .optional(),
+    recommendModel: nullableText(200).optional(),
   })
   .strict();
 
@@ -237,6 +262,7 @@ type EnvelopeForRefinement = {
     z.infer<typeof backupShareV1Schema> | z.infer<typeof backupShareSchema>
   >;
   watchEvents?: Array<z.infer<typeof backupWatchEventSchema>>;
+  suppressions?: Array<z.infer<typeof backupSuppressionSchema>>;
 };
 
 function refineBackupEnvelope(backup: EnvelopeForRefinement, ctx: z.RefinementCtx) {
@@ -401,6 +427,27 @@ function refineBackupEnvelope(backup: EnvelopeForRefinement, ctx: z.RefinementCt
       });
     }
   }
+
+  const suppressionIds = new Set<string>();
+  const suppressionKeys = new Set<string>();
+  for (const [index, suppression] of (backup.suppressions ?? []).entries()) {
+    if (suppressionIds.has(suppression.sourceId)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["suppressions", index, "sourceId"],
+        message: "duplicate suppression sourceId",
+      });
+    }
+    if (suppressionKeys.has(suppression.matchKey)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["suppressions", index, "matchKey"],
+        message: "duplicate suppression matchKey",
+      });
+    }
+    suppressionIds.add(suppression.sourceId);
+    suppressionKeys.add(suppression.matchKey);
+  }
 }
 
 export const backupEnvelopeSchema = z
@@ -413,6 +460,10 @@ export const backupEnvelopeSchema = z
     tags: z.array(backupTagSchema).max(10_000),
     shares: z.array(backupShareSchema).max(5_000),
     watchEvents: z.array(backupWatchEventSchema).max(100_000),
+    // Kept optional within v2 so backups downloaded before suppressions were
+    // added remain valid durable artifacts. Every newly-created envelope emits
+    // this field, including when the array is empty.
+    suppressions: z.array(backupSuppressionSchema).max(100_000).optional(),
   })
   .strict()
   .superRefine(refineBackupEnvelope);
@@ -435,6 +486,7 @@ export type BackupTitle = z.infer<typeof backupTitleSchema>;
 export type BackupTag = z.infer<typeof backupTagSchema>;
 export type BackupShare = z.infer<typeof backupShareSchema>;
 export type BackupWatchEvent = z.infer<typeof backupWatchEventSchema>;
+export type BackupSuppression = z.infer<typeof backupSuppressionSchema>;
 export type BackupUser = z.infer<typeof backupUserSchema>;
 export type BackupEnvelope = z.infer<typeof backupEnvelopeSchema>;
 export type BackupV1Envelope = z.infer<typeof backupV1EnvelopeSchema>;
@@ -446,6 +498,20 @@ export interface RestoreCounts {
   skip: number;
   conflict: number;
 }
+
+/** Non-title data shown in, and cryptographically bound to, a restore preview. */
+export interface SupplementalRestoreCounts {
+  suppressionsCreate: number;
+  suppressionsUpdate: number;
+  suppressionsSkip: number;
+  providerSelections: number;
+  providerPreferenceIncluded: number;
+  providerPreferenceUpdate: number;
+  recommendModelPreferenceIncluded: number;
+  recommendModelPreferenceUpdate: number;
+}
+
+export type RestorePreviewCounts = RestoreCounts & SupplementalRestoreCounts;
 
 export type RestorePlanItem =
   | { action: "create"; incoming: BackupTitle }
@@ -499,6 +565,13 @@ function fillNullable<T>(current: T | null, incoming: T | null): T | null {
   return current !== null ? current : incoming;
 }
 
+function fillOptionalNullable<T>(
+  current: T | null | undefined,
+  incoming: T | null | undefined,
+): T | null | undefined {
+  return current !== null && current !== undefined ? current : incoming;
+}
+
 function mergeEpisode(
   existing: BackupEpisode,
   incoming: BackupEpisode,
@@ -508,10 +581,10 @@ function mergeEpisode(
     ...existing,
     tmdbId: fillNullable(existing.tmdbId, incoming.tmdbId),
     name: fillNullable(existing.name, incoming.name),
-    overview: fillNullable(existing.overview, incoming.overview),
+    overview: fillOptionalNullable(existing.overview, incoming.overview),
     airDate: fillNullable(existing.airDate, incoming.airDate),
     runtime: fillNullable(existing.runtime, incoming.runtime),
-    stillPath: fillNullable(existing.stillPath, incoming.stillPath),
+    stillPath: fillOptionalNullable(existing.stillPath, incoming.stillPath),
     watched: mode === "replace-personal" ? incoming.watched : existing.watched,
     watchedAt:
       mode === "replace-personal"
@@ -543,7 +616,7 @@ function mergeSeason(
     ...existing,
     tmdbId: fillNullable(existing.tmdbId, incoming.tmdbId),
     name: fillNullable(existing.name, incoming.name),
-    overview: fillNullable(existing.overview, incoming.overview),
+    overview: fillOptionalNullable(existing.overview, incoming.overview),
     airDate: fillNullable(existing.airDate, incoming.airDate),
     posterPath: fillNullable(existing.posterPath, incoming.posterPath),
     episodeCount: fillNullable(existing.episodeCount, incoming.episodeCount),

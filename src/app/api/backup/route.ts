@@ -17,7 +17,9 @@ export async function GET() {
 
   try {
     const backup = await createBackupEnvelope(session.user.id);
-    const encoded = new TextEncoder().encode(`${JSON.stringify(backup, null, 2)}\n`);
+    // Backups are machine-restored artifacts. Compact JSON buys substantially
+    // more headroom under the restore route's fixed serverless body limit.
+    const encoded = new TextEncoder().encode(JSON.stringify(backup));
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(encoded);

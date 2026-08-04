@@ -6,11 +6,21 @@ const optionalString = z.preprocess(
   z.string().trim().optional(),
 );
 
-// Strictness keys on the actual DEPLOYMENT, not NODE_ENV: `next build` always
-// sets NODE_ENV=production, so keying on it breaks local builds against
-// localhost URLs. VERCEL_ENV === "production" matches the repo's vercel-build
-// guard and fires only on real production deploys.
-const isProductionDeployment = process.env.VERCEL_ENV === "production";
+// Strictness keys on the actual DEPLOYMENT, not NODE_ENV alone: `next build`
+// always sets NODE_ENV=production, so keying on NODE_ENV by itself would break
+// local builds against localhost URLs. Two shapes count as production:
+// - Vercel: VERCEL_ENV === "production" (matches the vercel-build guard;
+//   preview deploys stay relaxed on purpose).
+// - Self-hosted `next start`: NODE_ENV=production at RUNTIME, excluding the
+//   build phase via NEXT_PHASE (set only while `next build` runs). Keying on
+//   VERCEL_ENV alone silently disabled every production check — required
+//   origins, HTTPS, the no-key-reuse rule — for anyone running this off
+//   Vercel with plain `npm start`.
+const isProductionDeployment =
+  process.env.VERCEL_ENV === "production" ||
+  (!process.env.VERCEL &&
+    process.env.NODE_ENV === "production" &&
+    process.env.NEXT_PHASE !== "phase-production-build");
 
 /**
  * Floor for anything used as key material. 32 characters is what the documented
