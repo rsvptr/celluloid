@@ -118,6 +118,9 @@ A few details that make the output better:
 - **Recency reflects mood.** Titles you finished recently are weighted as your current direction. That includes a watch date an imported sheet supplied, because it is a real date; what the app will not do is invent one for a row that arrived without it.
 - **No repeats.** Suggestions are checked against your whole library by TMDB id and by a normalized name plus year, which also catches regional titles that were never matched to TMDB.
 - **Honest confidence.** Each pick comes back with a confidence level, and the list is sorted high to low before it is trimmed, so a strong pick is never dropped in favor of a weak one.
+- **Scoped runs stay scoped.** Base a run on recent watches or hand picked titles and the rest of your library enters the brief only as names and years to avoid. Notes, ratings, and tags on titles outside the basis never leave the app.
+- **Requirements are checked, not just requested.** A language, genre, or era pick is verified against TMDB's own record for every suggestion that resolves, and a pick that fails is dropped, along with anything TMDB dates in the future. When that shortens a batch, the run says so rather than quietly padding the list with near misses.
+- **An outage is not a no-match.** When TMDB cannot be reached, the affected suggestions still appear, flagged once as unverified. A title TMDB has never heard of arrives with a "find on TMDB" link instead, because for regional cinema that absence is normal.
 
 **Where suggestions come from**
 
@@ -127,7 +130,7 @@ A few details that make the output better:
 | Recent watches | Your most recent finishes (last 10, 20, or 50) | Matching your current mood |
 | Pick titles | A set you choose by hand | "More things like these three" |
 
-You can steer a run with a free text focus ("cozy mysteries", "something like Bramayugam", "90s sci fi") or tap a mood preset. Three dropdowns narrow the pool further: original language, genre, and era, from the 2020s back to before 1970. A preference becomes a hard requirement in the brief, confirmed matches float to the top of the results, and your dial settings persist for the browsing session. A "show different" button keeps the same brief but excludes everything already shown, so you can keep pulling fresh ideas. Unmatched suggestions still appear with a "find on TMDB" link so you can add them by hand.
+You can steer a run with a free text focus ("cozy mysteries", "something like Bramayugam", "90s sci fi") or tap a mood preset. Three dropdowns narrow the pool further: original language, genre, and era, from the 2020s back to before 1970. A preference becomes a hard requirement, enforced against TMDB's record for every suggestion that resolves, and your dial settings are remembered on this device between visits (the Settings toggle described under The library turns that off). A "show different" button keeps the same brief but excludes everything already shown, so you can keep pulling fresh ideas. Unmatched suggestions still appear with a "find on TMDB" link so you can add them by hand.
 
 **Results stream in live.** The app doesn't wait for the whole batch: Claude's response is parsed as it streams, each suggestion is validated, deduplicated, and matched to TMDB the moment it completes, and cards appear one by one with a status line ("thinking", "curating picks", a running count) and a Stop button. Once enough suggestions have been accepted, generation is aborted server-side, so you never pay for output past what you asked for.
 
@@ -187,6 +190,8 @@ The home screen is your whole collection, in a poster grid or a dense list.
 
 On phones the filters collapse behind a single toggle and lay out as a clean two column drawer. Your filter, sort, and layout choices live in the URL, so a filtered view is bookmarkable and shareable, and pressing Back after opening a title returns you to exactly the view you left while you work through a backlog. In the dense list view, offscreen rows skip rendering entirely (`content-visibility`), so even a very long list stays fast.
 
+**Filters that remember themselves.** Arrive with a plain URL and the library restores the filters, sort, and layout you last used on that device; an explicit link always wins over the memory, so a URL you share shows the recipient what the URL says, not what your device remembers. The recommend page's dials and the export page's format and scope are remembered the same way. Search text is never saved. All of it sits behind one Settings toggle, on by default, and switching the toggle off deletes everything already remembered on that device.
+
 **Bulk editing.** Switch on select mode and act on many titles at once: set a status, add or remove a tag, favorite or unfavorite, share, or remove. Selection is always scoped to what is visible, so a bulk action can never touch a hidden title.
 
 **Surprise me.** One press picks a random title from the current view, preferring whatever is still on your watchlist, and takes you straight to it. Filter down to unwatched Malayalam horror first and the dice roll respects it.
@@ -238,6 +243,8 @@ To restore, select the JSON file and a mode, then choose **Preview restore**. Th
 
 Treat the JSON as private library data. Keep at least one copy off the deployment, preferably in encrypted storage, and download a fresh copy before migrations or large imports. This file complements Neon recovery; it does not replace a database restore point because it intentionally omits authentication state and secrets.
 
+For a full operator snapshot immediately before a schema migration, run `npm run db:dump -- --target dev` or `npm run db:dump -- --target prod`. The target is mandatory: development reads `DATABASE_URL`, production reads `PROD_DATABASE_URL`, and the script prints only the database host/name before asking you to type the target back. It refuses a non-interactive shell unless you deliberately pass `--yes`. The resulting file under the gitignored `backups/` directory includes authentication credentials and sessions as well as library data, so treat it as a short-lived secret. Its manifest lists every model in the generated Prisma metadata, row counts for every table present in the pre-migration schema, and any newly-added model whose table does not exist until the pending migration runs. Any table read or model-coverage error aborts without writing a partial snapshot.
+
 ### Neon operator actions
 
 These steps are manual owner responsibilities, not actions the application performs:
@@ -271,6 +278,8 @@ This is your data on your infrastructure.
 - Public sign ups are closed by default. Set `ALLOW_SIGNUPS=true` only long enough to create your own account, then remove it, which is the recommended locked down state for a personal deployment.
 - The one unauthenticated endpoint, the scheduled sync, is gated on a bearer token compared in constant time, and refuses to run at all when that secret is not configured rather than falling back to open access.
 - Security headers are set for every response: frame denial, no sniff, a strict referrer policy, a content security policy covering framing, plugins, base tags, and form targets, a permissions policy that turns off browser capabilities the app never uses, and HSTS on the production domain.
+- Remembered filters are plain cookies on your own device. They hold filter values and nothing else, never search text, and the Settings toggle that governs them deletes them when switched off.
+- A recommendation run scoped to part of your library sends Anthropic that part's details only. Every other title appears in the prompt as a bare name and year on an exclusion list, so notes and ratings outside the chosen scope stay home.
 - Server side input validation bounds every free text field, and `npm audit` runs clean with pinned overrides for transitive advisories.
 
 ## Architecture
@@ -375,7 +384,7 @@ Two side tables hang off the user without being part of the core model above. A 
 
 ## Getting started
 
-You need Node.js 22 or newer, a Neon Postgres database, a TMDB API Read Access Token, and (for AI features) an Anthropic API key.
+You need Node.js 22 or 24 (the package pins `>=22 <25`, and CI tests both majors), a Neon Postgres database, a TMDB API Read Access Token, and (for AI features) an Anthropic API key.
 
 **1. Install dependencies.** This also generates the Prisma client through a postinstall step.
 
@@ -467,6 +476,8 @@ The legacy workbook importer bypasses the review step entirely (it is meant for 
 | `npm run lint` | Run ESLint |
 | `npm test` | Run the test suite on Node's built in runner (Node 22 or newer) |
 | `npm run db:deploy` | Apply migrations to the database |
+| `npm run db:dump -- --target dev\|prod` | Create a confirmed, fail-closed full database snapshot under `backups/` before a migration |
+| `npm run db:deploy:prod` | Apply pending migrations to the production database named by `PROD_DATABASE_URL`, after showing the target host and asking for typed confirmation |
 | `npm run db:migrate` | Create and apply a new migration in development |
 | `npm run db:generate` | Regenerate the Prisma client |
 | `npm run db:push` | Push the schema straight to the database, no migration file, then create the indexes a push does not. For prototyping only; use `db:migrate` for a real change |
@@ -490,7 +501,9 @@ A short checklist for a clean first deploy:
 - [ ] Both `BETTER_AUTH_URL` and `NEXT_PUBLIC_SITE_URL` point at the production URL.
 - [ ] `DATABASE_URL` is the pooled string and `DIRECT_URL` is the direct one.
 - [ ] Set `ALLOW_SIGNUPS=true` for the first deploy, create your account on the live site, then remove it and redeploy.
-- [ ] Set `CRON_SECRET` if you want the nightly metadata sync. `vercel.json` registers the schedule; without the variable the endpoint refuses to run.
+- [ ] Set `CRON_SECRET` if you want the nightly metadata sync. `vercel.json` registers the schedule; without the variable the endpoint refuses to run. A run where every account fails returns a non-200 status, so a broken night shows up red in Vercel's cron dashboard instead of passing silently.
+
+**Migrating production from your own machine.** During development, `DATABASE_URL` can point at a scratch Neon branch while the real database lives in `PROD_DATABASE_URL`. Two scripts respect that split so a migration can never land on the wrong side by accident: `npm run db:dump -- --target prod` takes the fail-closed pre-migration snapshot described under Backups, and `npm run db:deploy:prod` applies pending migrations to production only, printing the target host and asking you to type `deploy` before touching anything. Both read `.env.local` on their own, refuse a non-interactive shell, and never print credentials.
 
 ## Project structure
 
