@@ -104,10 +104,10 @@ function TitleCardImpl({
         )}
 
         {!selectable && item.favorite && (
-          <Heart
-            size={16}
-            className="absolute right-1.5 top-1.5 fill-rose-400 text-rose-400 drop-shadow"
-          />
+          <span className="absolute right-1.5 top-1.5">
+            <Heart size={16} aria-hidden="true" className="fill-rose-400 text-rose-400 drop-shadow" />
+            <span className="sr-only">Favorite</span>
+          </span>
         )}
         {/* Every status except DROPPED. The gate used to also require
             WATCHING, which silently withheld the badge from the cases it is

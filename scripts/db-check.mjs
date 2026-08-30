@@ -1,10 +1,18 @@
 // Read-only data-hygiene scan ahead of the CHECK-constraint migration.
 // Reports rows that would violate the planned constraints; writes nothing.
-// Usage: node --env-file=.env.local --import tsx scripts/db-check.mjs
+// Usage: npm run db:check
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client.ts";
+import { loadEnv } from "./load-env.mjs";
 
-const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
+loadEnv();
+
+const connectionString = process.env.DATABASE_URL;
+if (!connectionString) {
+  throw new Error("db-check: DATABASE_URL is not set in .env.local, .env, or the process environment.");
+}
+
+const adapter = new PrismaPg({ connectionString });
 const prisma = new PrismaClient({ adapter });
 
 const out = {};

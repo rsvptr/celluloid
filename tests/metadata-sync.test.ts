@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { register } from "node:module";
+import { readFile } from "node:fs/promises";
 import { newEpisodeDiscoveredAfter } from "../src/lib/data";
 import type { TmdbSeasonDetails } from "../src/lib/tmdb";
 
@@ -8,6 +9,8 @@ import type { TmdbSeasonDetails } from "../src/lib/tmdb";
 // its react-server condition; plain node --test needs the same condition added
 // before the module is dynamically imported. No database operation is invoked.
 process.env.DATABASE_URL ??= "postgresql://user:pass@localhost:5432/celluloid_test";
+process.env.BETTER_AUTH_SECRET ??= "test-secret-that-is-at-least-32-chars";
+process.env.TMDB_ACCESS_TOKEN ??= "test-tmdb-token";
 const serverOnlyShim = `
 export async function resolve(specifier, context, nextResolve) {
   if (specifier === "server-only") {
@@ -22,8 +25,12 @@ export async function resolve(specifier, context, nextResolve) {
 register(`data:text/javascript,${encodeURIComponent(serverOnlyShim)}`, import.meta.url);
 
 const {
+  DEFAULT_SYNC_LIMIT,
   deriveNextEpisodeAirDate,
   discoveredAtForNewEpisode,
+  providerCandidateWhere,
+  providerFailureUpdate,
+  seasonNumbersToRefresh,
   streamProviderIdsForRegion,
   summarizeScheduledRun,
   tallySyncOutcomes,
@@ -31,6 +38,29 @@ const {
 type SyncRunResult = import("../src/lib/metadata-sync").SyncRunResult;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+describe("provider sync candidate allowance", () => {
+  it("includes every matched live title except DROPPED rows", () => {
+    assert.deepEqual(providerCandidateWhere("owner"), {
+      userId: "owner",
+      deletedAt: null,
+      tmdbId: { not: null },
+      mediaType: { in: ["MOVIE", "TV"] },
+      status: { not: "DROPPED" },
+    });
+  });
+
+  it("keeps the nightly title allowance and wall-clock budget unchanged", async () => {
+    const [metadataSource, cronSource] = await Promise.all([
+      readFile(new URL("../src/lib/metadata-sync.ts", import.meta.url), "utf8"),
+      readFile(new URL("../src/app/api/cron/sync/route.ts", import.meta.url), "utf8"),
+    ]);
+
+    assert.equal(DEFAULT_SYNC_LIMIT, 50);
+    assert.match(metadataSource, /\.slice\(0, limit\);/);
+    assert.match(cronSource, /const RUN_BUDGET_MS = 45_000;/);
+  });
+});
 
 function episodeBadgeWouldFire(
   airDate: Date,
@@ -170,6 +200,51 @@ describe("deriveNextEpisodeAirDate", () => {
   });
 });
 
+describe("seasonNumbersToRefresh", () => {
+  const stored = [1, 2, 3, 4, 5, 6].map((seasonNumber) => ({
+    seasonNumber,
+    episodeCount: 10,
+    airDate: new Date(`202${seasonNumber}-01-01T00:00:00.000Z`),
+  }));
+
+  it("fetches only changed seasons plus the newest two", () => {
+    const remote = stored.map((season) => ({
+      season_number: season.seasonNumber,
+      episode_count: season.seasonNumber === 2 ? 11 : season.episodeCount,
+      air_date:
+        season.seasonNumber === 3
+          ? "2023-02-01"
+          : season.airDate.toISOString().slice(0, 10),
+    }));
+
+    assert.deepEqual(seasonNumbersToRefresh(remote, stored), [2, 3, 5, 6]);
+  });
+
+  it("fetches a missing local season and ignores specials", () => {
+    const remote = [
+      { season_number: 0, episode_count: 20, air_date: "2010-01-01" },
+      ...stored.map((season) => ({
+        season_number: season.seasonNumber,
+        episode_count: season.episodeCount,
+        air_date: season.airDate.toISOString().slice(0, 10),
+      })),
+    ];
+
+    assert.deepEqual(
+      seasonNumbersToRefresh(
+        remote,
+        stored.filter((season) => season.seasonNumber !== 4),
+      ),
+      [4, 5, 6],
+    );
+  });
+
+  it("does not treat an omitted compact field as evidence of historical change", () => {
+    const remote = stored.map((season) => ({ season_number: season.seasonNumber }));
+    assert.deepEqual(seasonNumbersToRefresh(remote, stored), [5, 6]);
+  });
+});
+
 describe("streamProviderIdsForRegion", () => {
   it("dedupes included provider groups and excludes rent, buy, and other regions", () => {
     const ids = streamProviderIdsForRegion(
@@ -194,6 +269,25 @@ describe("streamProviderIdsForRegion", () => {
     assert.deepEqual(ids, [2, 5, 9]);
     assert.deepEqual(streamProviderIdsForRegion(undefined, "GB"), []);
     assert.deepEqual(streamProviderIdsForRegion({}, "GB"), []);
+  });
+});
+
+describe("providerFailureUpdate", () => {
+  it("stamps same-region attempts without discarding the last known ids", () => {
+    const attemptedAt = new Date("2026-08-29T22:00:00.000Z");
+    assert.deepEqual(providerFailureUpdate("GB", "GB", attemptedAt), {
+      providersSyncedAt: attemptedAt,
+      providersRegion: "GB",
+    });
+  });
+
+  it("clears ids from an old region and records the attempted region", () => {
+    const attemptedAt = new Date("2026-08-29T22:00:00.000Z");
+    assert.deepEqual(providerFailureUpdate("US", "GB", attemptedAt), {
+      providersSyncedAt: attemptedAt,
+      providersRegion: "US",
+      streamProviderIds: [],
+    });
   });
 });
 

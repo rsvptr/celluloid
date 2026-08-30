@@ -11,6 +11,10 @@ import {
 } from "../src/lib/models";
 
 describe("recommendation models", () => {
+  it("defaults new recommendation runs to Sonnet", () => {
+    assert.equal(DEFAULT_REC_MODEL, "claude-sonnet-5");
+  });
+
   it("accepts known ids and rejects junk", () => {
     assert.equal(isRecModel(DEFAULT_REC_MODEL), true);
     assert.equal(isRecModel("gpt-9000"), false);

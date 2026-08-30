@@ -2,6 +2,7 @@ import Image from "next/image";
 import { cookies } from "next/headers";
 import { ExternalLink, Play, UserRound } from "lucide-react";
 import { prisma } from "@/lib/prisma";
+import { getUserPrefs } from "@/lib/data";
 import { getTitleBundle } from "@/lib/tmdb";
 import {
   DEFAULT_WATCH_REGION,
@@ -46,10 +47,7 @@ export async function TitleExtras({
   if (isWatchRegion(regionRaw)) {
     region = regionRaw;
   } else {
-    const owner = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { watchRegion: true },
-    });
+    const owner = await getUserPrefs(userId);
     const saved = owner?.watchRegion;
     if (isWatchRegion(saved)) region = saved;
   }

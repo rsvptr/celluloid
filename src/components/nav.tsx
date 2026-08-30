@@ -16,6 +16,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { toast } from "sonner";
 import { authClient } from "@/lib/auth-client";
 import {
   AnimatePresence,
@@ -63,6 +64,9 @@ export function Nav({ userName }: { userName?: string | null }) {
   const [moreOpen, setMoreOpen] = useState(false);
   const moreTriggerRef = useRef<HTMLButtonElement>(null);
   const morePopoverRef = useRef<HTMLDivElement>(null);
+  // Guards against a second sign-out firing while one is already in flight
+  // (e.g. an impatient double-click) rather than a render-triggering state.
+  const signingOutRef = useRef(false);
 
   const isActive = (href: string) =>
     href === "/"
@@ -70,9 +74,17 @@ export function Nav({ userName }: { userName?: string | null }) {
       : pathname.startsWith(href);
 
   async function handleSignOut() {
-    await authClient.signOut();
-    router.push("/login");
-    router.refresh();
+    if (signingOutRef.current) return;
+    signingOutRef.current = true;
+    try {
+      await authClient.signOut();
+      router.push("/login");
+      router.refresh();
+    } catch {
+      toast.error("Couldn't sign out. Check your connection and try again.");
+    } finally {
+      signingOutRef.current = false;
+    }
   }
 
   function openCommand() {

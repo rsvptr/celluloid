@@ -5,7 +5,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, Calendar, CalendarClock, Clock, Globe, Star } from "lucide-react";
 import { requireUser } from "@/lib/session";
-import { dayKeyInZone, getTags, getTitleDetail } from "@/lib/data";
+import { dayKeyInZone, getTags, getTitleDetail, getUserPrefs } from "@/lib/data";
 import { prisma } from "@/lib/prisma";
 import { WatchEventKind } from "@/generated/prisma/client";
 import { Poster } from "@/components/poster";
@@ -69,7 +69,7 @@ export default async function TitlePage({
         kind: { in: [WatchEventKind.TITLE_COMPLETED, WatchEventKind.REWATCH] },
       },
     }),
-    prisma.user.findUnique({ where: { id: user.id }, select: { timeZone: true } }),
+    getUserPrefs(user.id),
   ]);
   if (!title) notFound();
 

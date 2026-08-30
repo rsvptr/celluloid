@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import {
   filtersToParams,
   type LibraryFilters,
@@ -95,6 +103,34 @@ function fold(value: string): string {
   return value.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
 }
 
+type ServiceAvailabilityState = "MATCH" | "NO_MATCH" | "UNCHECKED" | "INELIGIBLE";
+
+/** Availability in the active device region, without treating unknown as no. */
+export function serviceAvailabilityState(
+  item: Pick<
+    LibraryItem,
+    | "tmdbId"
+    | "status"
+    | "providersRegion"
+    | "providersSyncedAt"
+    | "streamProviderIds"
+  >,
+  watchRegion: string,
+  myProviderIds: ReadonlySet<number>,
+): ServiceAvailabilityState {
+  if (item.tmdbId === null || item.status === "DROPPED") return "INELIGIBLE";
+  if (item.providersSyncedAt === null || item.providersRegion !== watchRegion) {
+    return "UNCHECKED";
+  }
+  return item.streamProviderIds.some((id) => myProviderIds.has(id))
+    ? "MATCH"
+    : "NO_MATCH";
+}
+
+export function uncheckedProviderCopy(count: number): string {
+  return `${count} ${count === 1 ? "title" : "titles"} not checked yet`;
+}
+
 const addTitleButtonClass =
   "inline-flex min-h-11 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg brand-gradient px-4 text-sm font-semibold text-[#04121c] shadow-sm shadow-brand/20 transition-colors hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/60 sm:min-h-10";
 
@@ -170,6 +206,23 @@ export function Library({
   // Mirror the view into the URL (replaceState: no history spam, no server
   // round trip) so the current filters are shareable, bookmarkable, and restored
   // when you come back from a title detail via the browser's Back button.
+  //
+  // Debounced ~300ms trailing (PERF-1): `query` is a dep, so an undebounced
+  // version fires this on every keystroke. Safari throttles replaceState to
+  // ~100 calls/30s and throws a SecurityError past that. The very first mirror
+  // (initial mount) still runs immediately so a stale query string is never
+  // briefly on screen; every mirror after that is debounced. The cookie write
+  // is additionally skipped when its encoded value hasn't changed since the
+  // last write (mirrorLastCookieRef) — the cookie doesn't even carry `query`
+  // (see LibraryRememberedState), so same-query keystrokes were writing an
+  // identical value on every call.
+  const mirrorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mirrorIsFirstRunRef = useRef(true);
+  const mirrorLastCookieRef = useRef<string | null | undefined>(undefined);
+  // Holds the latest pending mirror so the unmount-flush effect below can run
+  // it directly instead of re-deriving filter state from scratch.
+  const mirrorPendingRef = useRef<(() => void) | null>(null);
+
   useEffect(() => {
     const currentFilters: LibraryFilters = {
       query: query.trim(),
@@ -184,19 +237,46 @@ export function Library({
       onlyUnmatched,
       onlyOnServices,
     };
-    const qs = filtersToParams(currentFilters).toString();
-    const next = qs
-      ? `${window.location.pathname}?${qs}`
-      : window.location.pathname;
-    if (`${window.location.pathname}${window.location.search}` !== next) {
-      window.history.replaceState(window.history.state, "", next);
+
+    // Captured while mounted on the library route. A debounced (or
+    // unmount-flushed) mirror can fire after an SPA navigation has already
+    // swapped window.location to another route — writing the library's query
+    // string onto that page's URL. The URL half is therefore guarded on the
+    // pathname still matching; the cookie half is path-independent and safe.
+    const pathname = window.location.pathname;
+    const mirror = () => {
+      const qs = filtersToParams(currentFilters).toString();
+      const next = qs ? `${pathname}?${qs}` : pathname;
+      if (
+        window.location.pathname === pathname &&
+        `${window.location.pathname}${window.location.search}` !== next
+      ) {
+        window.history.replaceState(window.history.state, "", next);
+      }
+      if (rememberFilters) {
+        const encoded = encodeLibraryRememberedState(currentFilters);
+        if (encoded !== mirrorLastCookieRef.current) {
+          writeRememberedCookie(REMEMBERED_COOKIE_NAMES.library, encoded);
+          mirrorLastCookieRef.current = encoded;
+        }
+      }
+      mirrorPendingRef.current = null;
+    };
+
+    if (mirrorIsFirstRunRef.current) {
+      mirrorIsFirstRunRef.current = false;
+      mirror();
+      return;
     }
-    if (rememberFilters) {
-      writeRememberedCookie(
-        REMEMBERED_COOKIE_NAMES.library,
-        encodeLibraryRememberedState(currentFilters),
-      );
-    }
+
+    mirrorPendingRef.current = mirror;
+    mirrorTimeoutRef.current = setTimeout(mirror, 300);
+    return () => {
+      if (mirrorTimeoutRef.current !== null) {
+        clearTimeout(mirrorTimeoutRef.current);
+        mirrorTimeoutRef.current = null;
+      }
+    };
   }, [
     query,
     type,
@@ -211,6 +291,20 @@ export function Library({
     onlyOnServices,
     rememberFilters,
   ]);
+
+  // Flushes a still-pending debounced mirror on unmount so the last keystroke's
+  // filters aren't lost — the cleanup above only cancels a stale timer between
+  // re-runs, it never fires the pending write. Empty deps: this must run only
+  // on true unmount, not on every dep change the effect above reacts to.
+  useEffect(() => {
+    return () => {
+      if (mirrorTimeoutRef.current !== null) {
+        clearTimeout(mirrorTimeoutRef.current);
+        mirrorTimeoutRef.current = null;
+      }
+      mirrorPendingRef.current?.();
+    };
+  }, []);
 
   const hasFilters =
     query !== "" ||
@@ -267,29 +361,35 @@ export function Library({
 
   const myProviderIds = useMemo(() => new Set(myProviders), [myProviders]);
 
-  const filtered = useMemo(() => {
-    const q = fold(query.trim());
-    let list = items.filter((it) => {
-      if (type !== "all" && it.mediaType !== type) return false;
-      if (status !== "all" && it.status !== status) return false;
-      if (language !== "all" && it.language !== language) return false;
-      if (tag !== "all" && !it.tags.includes(tag)) return false;
-      if (genre !== "all" && !it.genres.includes(genre)) return false;
-      if (rating === "unrated" && it.rating != null) return false;
+  // Defers the filter/sort recompute (up to ~2k items) to a lower priority than
+  // the keystroke itself, so the input stays responsive while `filtered` — and
+  // the live result count derived from it — catches up a beat behind typing.
+  const deferredQuery = useDeferredValue(query);
+
+  const { filtered, uncheckedServiceCount } = useMemo(() => {
+    const q = fold(deferredQuery.trim());
+    const list: LibraryItem[] = [];
+    let unchecked = 0;
+    for (const it of items) {
+      if (type !== "all" && it.mediaType !== type) continue;
+      if (status !== "all" && it.status !== status) continue;
+      if (language !== "all" && it.language !== language) continue;
+      if (tag !== "all" && !it.tags.includes(tag)) continue;
+      if (genre !== "all" && !it.genres.includes(genre)) continue;
+      if (rating === "unrated" && it.rating != null) continue;
       if (rating !== "all" && rating !== "unrated") {
-        if (it.rating == null || it.rating < Number(rating)) return false;
+        if (it.rating == null || it.rating < Number(rating)) continue;
       }
-      if (onlyUnmatched && it.tmdbId != null) return false;
-      if (
-        onlyOnServices &&
-        (it.providersRegion !== watchRegion ||
-          !it.streamProviderIds.some((id) => myProviderIds.has(id)))
-      )
-        return false;
-      if (q && !(searchIndex.get(it.id) ?? fold(it.name)).includes(q)) return false;
-      return true;
-    });
-    list = [...list].sort((a, b) => {
+      if (onlyUnmatched && it.tmdbId != null) continue;
+      if (q && !(searchIndex.get(it.id) ?? fold(it.name)).includes(q)) continue;
+      if (onlyOnServices) {
+        const availability = serviceAvailabilityState(it, watchRegion, myProviderIds);
+        if (availability === "UNCHECKED") unchecked++;
+        if (availability !== "MATCH") continue;
+      }
+      list.push(it);
+    }
+    list.sort((a, b) => {
       switch (sort) {
         case "name":
           return a.name.localeCompare(b.name);
@@ -306,11 +406,11 @@ export function Library({
           return b.createdAt.localeCompare(a.createdAt);
       }
     });
-    return list;
+    return { filtered: list, uncheckedServiceCount: unchecked };
   }, [
     items,
     searchIndex,
-    query,
+    deferredQuery,
     type,
     status,
     language,
@@ -840,6 +940,9 @@ export function Library({
       {onlyOnServices && filtered.length > 0 ? (
         <p className="-mt-2 text-xs text-faint">
           Availability in {regionName(watchRegion)} via JustWatch
+          {uncheckedServiceCount > 0
+            ? ` · ${uncheckedProviderCopy(uncheckedServiceCount)}`
+            : ""}
           {staleServiceDataAt ? ` · ${staleServiceDataAt}` : ""}
         </p>
       ) : null}
@@ -852,6 +955,7 @@ export function Library({
           onlyOnServices={onlyOnServices}
           hasConfiguredProviders={myProviders.length > 0}
           watchRegion={watchRegion}
+          uncheckedServiceCount={uncheckedServiceCount}
         />
       ) : view === "grid" ? (
         <div className="grid grid-cols-2 gap-x-4 gap-y-6 min-[480px]:grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7">
@@ -944,13 +1048,21 @@ function BulkBar({
     if (!open) setShowMore(false);
   }
 
-  function run(fn: () => Promise<{ count: number } | { count: number; tag: string }>, verb: string) {
+  function run(
+    fn: () => Promise<{ count?: number; tag?: string; error?: string }>,
+    verb: string,
+  ) {
     start(async () => {
       try {
         const res = await fn();
-        toast.success(`${verb} ${res.count} ${res.count === 1 ? "title" : "titles"}`);
-      } catch (e) {
-        toast.error((e as Error).message);
+        if (res.error) {
+          toast.error(res.error);
+          return;
+        }
+        const changed = res.count ?? 0;
+        toast.success(`${verb} ${changed} ${changed === 1 ? "title" : "titles"}`);
+      } catch {
+        toast.error("Couldn't update those titles. Try again.");
       } finally {
         // Always re-sync to the server so a partial failure can't leave stale UI.
         router.refresh();
@@ -965,9 +1077,14 @@ function BulkBar({
     start(async () => {
       try {
         const res = await bulkRemoveTitles(removedIds);
+        if (res.error) {
+          toast.error(res.error);
+          return;
+        }
+        const removedCount = res.count ?? 0;
         onDone();
         toast.success(
-          `Removed ${res.count} ${res.count === 1 ? "title" : "titles"}`,
+          `Removed ${removedCount} ${removedCount === 1 ? "title" : "titles"}`,
           {
             action: {
               label: "Undo",
@@ -977,12 +1094,18 @@ function BulkBar({
                   // restore is ownership-scoped and safely no-ops if a row was
                   // already restored through Trash in another tab.
                   for (let index = 0; index < removedIds.length; index += 6) {
-                    await Promise.all(
+                    const results = await Promise.all(
                       removedIds.slice(index, index + 6).map((id) => restoreTitle(id)),
                     );
+                    const error = results.find((result) => result.error)?.error;
+                    if (error) {
+                      toast.error(error);
+                      router.refresh();
+                      return;
+                    }
                   }
                   toast.success(
-                    `Restored ${res.count} ${res.count === 1 ? "title" : "titles"}`,
+                    `Restored ${removedCount} ${removedCount === 1 ? "title" : "titles"}`,
                   );
                   router.refresh();
                 })().catch(() => {
@@ -993,8 +1116,8 @@ function BulkBar({
             },
           },
         );
-      } catch (error) {
-        toast.error((error as Error).message);
+      } catch {
+        toast.error("Couldn't remove those titles. Try again.");
       } finally {
         router.refresh();
       }
@@ -1031,6 +1154,7 @@ function BulkBar({
                 const v = e.target.value as WatchStatus;
                 if (v) run(() => bulkSetStatus(ids, v), "Updated");
               }}
+              aria-label="Set status for selected titles"
               className="w-auto min-h-11 shrink-0"
             >
               <option value="">Set status…</option>
@@ -1264,7 +1388,12 @@ function ListRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="truncate text-sm font-medium">{item.name}</span>
-          {item.favorite && <Heart size={12} className="fill-rose-400 text-rose-400" />}
+          {item.favorite && (
+            <span>
+              <Heart size={12} aria-hidden="true" className="fill-rose-400 text-rose-400" />
+              <span className="sr-only">Favorite</span>
+            </span>
+          )}
         </div>
         <div className="truncate text-xs text-muted">
           {isTv ? "TV" : "Movie"} · {item.year || "Unknown"}
@@ -1341,12 +1470,14 @@ function EmptyState({
   onlyOnServices,
   hasConfiguredProviders,
   watchRegion,
+  uncheckedServiceCount,
 }: {
   hasItems: boolean;
   onClear: () => void;
   onlyOnServices: boolean;
   hasConfiguredProviders: boolean;
   watchRegion: string;
+  uncheckedServiceCount: number;
 }) {
   if (hasItems && onlyOnServices) {
     return (
@@ -1357,8 +1488,10 @@ function EmptyState({
             : "Choose your streaming services to see what you can watch tonight."}
         </p>
         <p className="mt-2 max-w-xl text-sm text-muted">
-          {hasConfiguredProviders
-            ? "A title may be missing while its provider cache warms overnight, or when its cached region differs from this device's region."
+          {uncheckedServiceCount > 0
+            ? `${uncheckedProviderCopy(uncheckedServiceCount)} for ${regionName(watchRegion)}. Availability refreshes nightly.`
+            : hasConfiguredProviders
+              ? "All eligible titles have been checked. Provider catalogues can still change between nightly refreshes."
             : "Add the subscriptions you use in Settings, then this one-tap view will match them against availability refreshed each night."}
         </p>
         <div className="mt-3 flex flex-wrap items-center justify-center gap-1">
@@ -1430,10 +1563,14 @@ function TrashView({
   function restore(item: TrashedTitle) {
     start(async () => {
       try {
-        await restoreTitle(item.id);
+        const res = await restoreTitle(item.id);
+        if (res.error) {
+          toast.error(res.error);
+          return;
+        }
         toast.success(`Restored ${item.name}`);
-      } catch (e) {
-        toast.error((e as Error).message);
+      } catch {
+        toast.error("Couldn't restore that title. Try again.");
       } finally {
         // Re-sync from the server so a failed action can't leave a stale row.
         router.refresh();
@@ -1453,10 +1590,14 @@ function TrashView({
       return;
     start(async () => {
       try {
-        await purgeTitle(item.id);
+        const res = await purgeTitle(item.id);
+        if (res.error) {
+          toast.error(res.error);
+          return;
+        }
         toast.success(`Deleted ${item.name}`);
-      } catch (e) {
-        toast.error((e as Error).message);
+      } catch {
+        toast.error("Couldn't delete that title. Try again.");
       } finally {
         router.refresh();
       }
@@ -1477,11 +1618,16 @@ function TrashView({
     start(async () => {
       try {
         const res = await emptyTrash();
+        if (res.error) {
+          toast.error(res.error);
+          return;
+        }
+        const deletedCount = res.count ?? 0;
         toast.success(
-          `Deleted ${res.count} ${res.count === 1 ? "title" : "titles"}`,
+          `Deleted ${deletedCount} ${deletedCount === 1 ? "title" : "titles"}`,
         );
-      } catch (e) {
-        toast.error((e as Error).message);
+      } catch {
+        toast.error("Couldn't empty Trash. Try again.");
       } finally {
         router.refresh();
       }

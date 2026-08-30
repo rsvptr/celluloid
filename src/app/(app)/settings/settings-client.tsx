@@ -1,11 +1,13 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   ArchiveRestore,
+  AlertTriangle,
   Check,
   ChevronDown,
   Clapperboard,
@@ -14,6 +16,7 @@ import {
   Globe,
   KeyRound,
   Link2,
+  MonitorSmartphone,
   Pencil,
   Search,
   ShieldCheck,
@@ -56,6 +59,7 @@ import {
 import { isWatchRegion, regionName, WATCH_REGIONS } from "@/lib/tmdb-extras";
 import { TMDB_IMAGE_BASE } from "@/lib/images";
 import { setRememberFiltersEnabled } from "@/lib/remembered-state-client";
+import { saveBlob } from "@/lib/save-blob";
 
 /** One row of the tag manager: the tag plus how many live titles carry it. */
 export interface TagSummary {
@@ -72,6 +76,14 @@ export interface ProviderOption {
   logoPath: string | null;
 }
 
+/** One title whose most recent scheduled metadata refresh failed. */
+export interface MetadataFailureSummary {
+  id: string;
+  name: string;
+  mediaType: "MOVIE" | "TV";
+  metadataLastError: string | null;
+}
+
 export function SettingsClient({
   info,
   shares,
@@ -81,6 +93,7 @@ export function SettingsClient({
   myProviders,
   providers,
   providersUnavailable,
+  metadataFailures,
   lastBackupAt,
   backupAgeDays,
   rememberFilters,
@@ -93,6 +106,7 @@ export function SettingsClient({
   myProviders: number[];
   providers: ProviderOption[];
   providersUnavailable: boolean;
+  metadataFailures: MetadataFailureSummary[];
   /** ISO timestamp of the last successful backup download, or null. */
   lastBackupAt: string | null;
   /** Whole days since that backup, measured server-side. Null when there is none. */
@@ -118,6 +132,12 @@ export function SettingsClient({
       <TagsSection tags={tags} />
       <TwoFactorSection enabled={info.twoFactorEnabled} />
       <PasswordSection />
+      <div className="lg:col-span-2">
+        <DevicesSection />
+      </div>
+      <div className="lg:col-span-2">
+        <MetadataSyncSection failures={metadataFailures} />
+      </div>
       <BackupSection lastBackupAt={lastBackupAt} backupAgeDays={backupAgeDays} />
       <DangerSection />
     </div>
@@ -170,6 +190,52 @@ function Notice({
     >
       {children}
     </p>
+  );
+}
+
+function MetadataSyncSection({
+  failures,
+}: {
+  failures: MetadataFailureSummary[];
+}) {
+  return (
+    <Section
+      icon={failures.length > 0 ? AlertTriangle : Check}
+      title="Metadata refresh"
+      description="Problems from the latest scheduled TMDB refresh appear here."
+    >
+      {failures.length === 0 ? (
+        <Notice kind="ok">No refresh problems right now.</Notice>
+      ) : (
+        <div className="flex flex-col gap-3">
+          <p className="text-sm text-amber-200">
+            {failures.length} {failures.length === 1 ? "title needs" : "titles need"} a
+            successful refresh. Celluloid will try again on a later scheduled run.
+          </p>
+          <ul className="grid gap-2 sm:grid-cols-2">
+            {failures.map((failure) => (
+              <li key={failure.id}>
+                <Card variant="inset" className="h-full p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <Link
+                      href={`/title/${failure.id}`}
+                      className="text-sm font-medium text-foreground underline decoration-line underline-offset-4 transition-colors hover:text-brand"
+                    >
+                      {failure.name}
+                    </Link>
+                    <Badge>{failure.mediaType === "TV" ? "TV" : "Movie"}</Badge>
+                  </div>
+                  <p className="mt-2 break-words text-xs text-muted">
+                    {failure.metadataLastError ??
+                      "The refresh failed before Celluloid received an error message."}
+                  </p>
+                </Card>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Section>
   );
 }
 
@@ -642,7 +708,7 @@ function ApiKeySection({
           {saved ? (
             <span className="text-emerald-300">✓ Your personal key is set.</span>
           ) : hasServerKey ? (
-            "No personal key yet. Recommendations run on the app's shared key, so add your own to use your own quota."
+            "No personal key yet. Recommendations use the app's shared key and any daily limit set by its owner. Add your own to bypass that limit and use your own quota."
           ) : (
             "No key set yet. Add one to turn on AI recommendations."
           )}
@@ -871,14 +937,7 @@ function ShareRow({
   const active = s.state === "ACTIVE";
   const stateLabel =
     s.state === "ACTIVE" ? "Live" : s.state === "EXPIRED" ? "Expired" : "Revoked";
-  const expiry = s.expiresAt
-    ? new Intl.DateTimeFormat("en-GB", {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-        timeZone: "UTC",
-      }).format(new Date(s.expiresAt))
-    : "Never expires";
+  const expiry = s.expiresAt ? fullDate(s.expiresAt) : "Never expires";
 
   // The published set is only fetched when the owner actually opens the panel:
   // a whole-library share resolves the entire library, which is far too much
@@ -1116,11 +1175,15 @@ function TagsSection({ tags }: { tags: TagSummary[] }) {
       return;
     setDeleting(tag.id);
     try {
-      await deleteTag(tag.id);
+      const res = await deleteTag(tag.id);
+      if (res.error) {
+        toast.error(res.error);
+        return;
+      }
       toast.success(`Deleted the “${tag.name}” tag`);
       router.refresh();
-    } catch (e) {
-      toast.error((e as Error).message);
+    } catch {
+      toast.error("Couldn't delete that tag. Try again.");
     } finally {
       setDeleting(null);
     }
@@ -1190,13 +1253,25 @@ function TagRow({
         // Rename first: it's the change that can be refused (the name may be
         // taken), so a refusal leaves the tag exactly as it was rather than
         // half-recoloured.
-        if (name.trim() !== tag.name) await renameTag(tag.id, name);
-        if (color !== tag.color) await setTagColor(tag.id, color);
+        if (name.trim() !== tag.name) {
+          const res = await renameTag(tag.id, name);
+          if (res.error) {
+            setError(res.error);
+            return;
+          }
+        }
+        if (color !== tag.color) {
+          const res = await setTagColor(tag.id, color);
+          if (res.error) {
+            setError(res.error);
+            return;
+          }
+        }
         setEditing(false);
         toast.success("Tag updated");
         router.refresh();
-      } catch (e) {
-        setError((e as Error).message);
+      } catch {
+        setError("Couldn't update that tag. Try again.");
       }
     });
   }
@@ -1377,6 +1452,271 @@ function PasswordSection() {
         </Button>
       </div>
     </Section>
+  );
+}
+
+interface DeviceSession {
+  id: string;
+  token: string;
+  createdAt: Date | string;
+  updatedAt: Date | string;
+  expiresAt: Date | string;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+}
+
+function deviceLabel(userAgent: string | null | undefined): string {
+  if (!userAgent) return "Unknown device";
+
+  const browser = /Edg\//.test(userAgent)
+    ? "Edge"
+    : /OPR\//.test(userAgent)
+      ? "Opera"
+      : /Firefox\//.test(userAgent)
+        ? "Firefox"
+        : /(?:Chrome|CriOS)\//.test(userAgent)
+          ? "Chrome"
+          : /Safari\//.test(userAgent)
+            ? "Safari"
+            : null;
+  const device = /iPhone/.test(userAgent)
+    ? "iPhone"
+    : /iPad/.test(userAgent)
+      ? "iPad"
+      : /Android/.test(userAgent)
+        ? "Android"
+        : /Windows/.test(userAgent)
+          ? "Windows"
+          : /Macintosh|Mac OS X/.test(userAgent)
+            ? "Mac"
+            : /Linux/.test(userAgent)
+              ? "Linux"
+              : null;
+
+  if (browser && device) return `${browser} on ${device}`;
+  return browser ?? device ?? "Unknown device";
+}
+
+function sessionTimestamp(value: Date | string): number {
+  const time = new Date(value).getTime();
+  return Number.isNaN(time) ? 0 : time;
+}
+
+function formatSessionTime(value: Date | string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unknown";
+  // Pinned to the app's canonical en-US formatting (see lib/format's fullDate)
+  // rather than the viewer's locale, so dates read the same across the app.
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
+
+function DevicesSection() {
+  const { confirm, dialog } = useConfirm();
+  const { data: currentSession } = authClient.useSession();
+  const currentToken = currentSession?.session.token ?? null;
+  const [sessions, setSessions] = useState<DeviceSession[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
+  const [pendingToken, setPendingToken] = useState<string | null>(null);
+  const [revokingOthers, setRevokingOthers] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadSessions() {
+      setLoadError(null);
+      setSessions(null);
+      try {
+        const { data, error } = await authClient.listSessions();
+        if (cancelled) return;
+        if (error) {
+          setLoadError(error.message ?? "Celluloid couldn't load your devices. Try again.");
+          return;
+        }
+        setSessions((data ?? []) as DeviceSession[]);
+      } catch {
+        if (!cancelled) {
+          setLoadError("Celluloid couldn't load your devices. Check your connection and retry.");
+        }
+      }
+    }
+
+    void loadSessions();
+    return () => {
+      cancelled = true;
+    };
+  }, [retryKey]);
+
+  const orderedSessions = useMemo(
+    () =>
+      [...(sessions ?? [])].sort((a, b) => {
+        const aCurrent = a.token === currentToken;
+        const bCurrent = b.token === currentToken;
+        if (aCurrent !== bCurrent) return aCurrent ? -1 : 1;
+        return sessionTimestamp(b.updatedAt) - sessionTimestamp(a.updatedAt);
+      }),
+    [currentToken, sessions],
+  );
+  const otherSessionCount = currentToken
+    ? orderedSessions.filter((session) => session.token !== currentToken).length
+    : 0;
+  const busy = pendingToken !== null || revokingOthers;
+
+  async function revokeSession(session: DeviceSession) {
+    const label = deviceLabel(session.userAgent);
+    const accepted = await confirm({
+      title: `Sign out ${label}?`,
+      body: "That device will need to sign in again.",
+      confirmLabel: "Sign out",
+      destructive: true,
+    });
+    if (!accepted) return;
+
+    setActionError(null);
+    setPendingToken(session.token);
+    try {
+      const { error } = await authClient.revokeSession({ token: session.token });
+      if (error) {
+        setActionError(error.message ?? "Celluloid couldn't sign out that device. Try again.");
+        return;
+      }
+      setSessions((current) =>
+        current?.filter((item) => item.token !== session.token) ?? current,
+      );
+      toast.success(`${label} signed out`);
+    } catch {
+      setActionError("Celluloid couldn't sign out that device. Check your connection and retry.");
+    } finally {
+      setPendingToken(null);
+    }
+  }
+
+  async function revokeOtherSessions() {
+    const accepted = await confirm({
+      title: "Sign out everywhere else?",
+      body: `${otherSessionCount} other ${otherSessionCount === 1 ? "device" : "devices"} will need to sign in again.`,
+      confirmLabel: "Sign out everywhere else",
+      destructive: true,
+    });
+    if (!accepted) return;
+
+    setActionError(null);
+    setRevokingOthers(true);
+    try {
+      const { error } = await authClient.revokeOtherSessions();
+      if (error) {
+        setActionError(error.message ?? "Celluloid couldn't sign out your other devices. Try again.");
+        return;
+      }
+      setSessions((current) =>
+        current?.filter((session) => session.token === currentToken) ?? current,
+      );
+      toast.success("Other devices signed out");
+    } catch {
+      setActionError(
+        "Celluloid couldn't sign out your other devices. Check your connection and retry.",
+      );
+    } finally {
+      setRevokingOthers(false);
+    }
+  }
+
+  return (
+    <>
+      {dialog}
+      <Section
+        icon={MonitorSmartphone}
+        title="Devices"
+        description="Review active sign-ins and remove devices you no longer use."
+      >
+        <div className="flex flex-col gap-3">
+          {sessions === null && !loadError ? (
+            <p role="status" className="flex items-center gap-2 text-sm text-muted">
+              <Spinner /> Loading devices…
+            </p>
+          ) : null}
+
+          {loadError ? (
+            <div className="flex flex-col items-start gap-3">
+              <Notice kind="error">{loadError}</Notice>
+              <Button variant="secondary" size="sm" onClick={() => setRetryKey((key) => key + 1)}>
+                Retry
+              </Button>
+            </div>
+          ) : null}
+
+          {sessions && sessions.length === 0 ? (
+            <p className="text-sm text-muted">No active sessions.</p>
+          ) : null}
+
+          {orderedSessions.length > 0 ? (
+            <ul className="flex flex-col gap-2">
+              {orderedSessions.map((session) => {
+                const label = deviceLabel(session.userAgent);
+                const isCurrent = session.token === currentToken;
+                return (
+                  <li key={session.id}>
+                    <Card
+                      variant="inset"
+                      className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-medium">{label}</p>
+                          {isCurrent ? (
+                            <Badge className="bg-brand/15 text-brand ring-brand/30">
+                              Current device
+                            </Badge>
+                          ) : null}
+                        </div>
+                        <p className="mt-1 text-xs text-muted">
+                          Last active {formatSessionTime(session.updatedAt)} ·{" "}
+                          {session.ipAddress ? `IP ${session.ipAddress}` : "IP unavailable"}
+                        </p>
+                      </div>
+                      {!isCurrent ? (
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          className="self-start sm:self-auto"
+                          aria-label={`Sign out ${label}`}
+                          disabled={busy || !currentToken}
+                          onClick={() => void revokeSession(session)}
+                        >
+                          {pendingToken === session.token ? "Signing out…" : "Sign out"}
+                        </Button>
+                      ) : null}
+                    </Card>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+
+          {actionError ? <Notice kind="error">{actionError}</Notice> : null}
+
+          {sessions && sessions.length > 0 ? (
+            <div className="flex flex-col items-start gap-1.5 border-t border-line pt-3">
+              <Button
+                variant="danger"
+                size="sm"
+                disabled={busy || !currentToken || otherSessionCount === 0}
+                onClick={() => void revokeOtherSessions()}
+              >
+                {revokingOthers ? "Signing out…" : "Sign out everywhere else"}
+              </Button>
+              {currentToken && otherSessionCount === 0 ? (
+                <p className="text-xs text-muted">No other active sessions.</p>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </Section>
+    </>
   );
 }
 
@@ -1737,14 +2077,7 @@ function BackupSection({
       const disposition = response.headers.get("content-disposition") ?? "";
       const filename =
         disposition.match(/filename="([^"]+)"/)?.[1] ?? "celluloid-backup.json";
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
+      saveBlob(blob, filename);
       toast.success("Backup downloaded");
       // Pull the freshness line back from the server, which has just stamped it.
       router.refresh();

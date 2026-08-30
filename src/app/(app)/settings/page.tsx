@@ -2,15 +2,17 @@ import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { requireUser } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
-import { getAccountInfo, getUserShareLists } from "@/lib/data";
+import { getAccountInfo, getUserPrefs, getUserShareLists } from "@/lib/data";
 import { getWatchProviders } from "@/lib/tmdb";
 import { DEFAULT_WATCH_REGION } from "@/lib/tmdb-extras";
+import { MetadataSyncState } from "@/generated/prisma/client";
 import {
   isRememberFiltersEnabled,
   REMEMBER_FILTERS_TOGGLE_COOKIE,
 } from "@/lib/remembered-state";
 import {
   SettingsClient,
+  type MetadataFailureSummary,
   type ProviderOption,
   type TagSummary,
 } from "./settings-client";
@@ -53,15 +55,7 @@ function backupAgeInDays(at: Date | null | undefined): number | null {
 
 export default async function SettingsPage() {
   const user = await requireUser();
-  const preferencesPromise = prisma.user.findUnique({
-    where: { id: user.id },
-    select: {
-      timeZone: true,
-      watchRegion: true,
-      myProviders: true,
-      lastBackupAt: true,
-    },
-  });
+  const preferencesPromise = getUserPrefs(user.id);
   // The catalogue depends only on the saved account region. Start every other
   // independent read before resolving that dependency so Settings does not add
   // an avoidable database/API waterfall.
@@ -84,15 +78,31 @@ export default async function SettingsPage() {
       return { unavailable: true, providers: [] as ProviderOption[] };
     }
   });
+  const metadataFailuresPromise = prisma.title.findMany({
+    where: {
+      userId: user.id,
+      deletedAt: null,
+      metadataSyncState: MetadataSyncState.FAILED,
+    },
+    orderBy: [{ metadataSyncedAt: "desc" }, { name: "asc" }],
+    select: {
+      id: true,
+      name: true,
+      mediaType: true,
+      metadataLastError: true,
+    },
+  });
 
-  const [info, shares, tags, prefs, providerCatalogue, cookieStore] = await Promise.all([
-    getAccountInfo(user.id),
-    getUserShareLists(user.id),
-    getTagSummaries(user.id),
-    preferencesPromise,
-    providerCataloguePromise,
-    cookies(),
-  ]);
+  const [info, shares, tags, prefs, providerCatalogue, cookieStore, metadataFailures] =
+    await Promise.all([
+      getAccountInfo(user.id),
+      getUserShareLists(user.id),
+      getTagSummaries(user.id),
+      preferencesPromise,
+      providerCataloguePromise,
+      cookies(),
+      metadataFailuresPromise,
+    ]);
   return (
     // Full shell width (D-UI-17 amendment): no per-page cap.
     <div>
@@ -106,6 +116,7 @@ export default async function SettingsPage() {
         myProviders={prefs?.myProviders ?? []}
         providers={providerCatalogue.providers}
         providersUnavailable={providerCatalogue.unavailable}
+        metadataFailures={metadataFailures satisfies MetadataFailureSummary[]}
         lastBackupAt={prefs?.lastBackupAt?.toISOString() ?? null}
         backupAgeDays={backupAgeInDays(prefs?.lastBackupAt)}
         rememberFilters={isRememberFiltersEnabled(

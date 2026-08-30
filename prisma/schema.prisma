@@ -207,6 +207,13 @@ model RateLimit {
   @@map("rateLimit")
 }
 
+// One global reservation counter per UTC day for recommendation runs that use
+// the deployment's shared Anthropic key. Personal-key runs never touch it.
+model SharedAiDailyUsage {
+  day      DateTime @id @db.Date
+  runCount Int      @default(0)
+}
+
 // ---------------------------------------------------------------------------
 // Library domain
 // ---------------------------------------------------------------------------

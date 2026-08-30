@@ -9,9 +9,10 @@ import {
 } from "../src/generated/prisma/client";
 
 type EventRow = {
+  id?: string;
   userId: string;
   titleId: string;
-  episodeId?: string;
+  episodeId?: string | null;
   kind: WatchEventKind;
   source: WatchEventSource;
   note?: string | null;
@@ -32,6 +33,7 @@ class FakeWatchDb {
   mediaType: MediaType = MediaType.TV;
   episodeRows = 1;
   episodeWatched = false;
+  episodeWatchedAt: Date | null = null;
   events: EventRow[] = [];
   deleteManyCalls = 0;
   lockQueries = 0;
@@ -48,12 +50,18 @@ class FakeWatchDb {
     $queryRaw: async (strings: TemplateStringsArray) => {
       this.lockQueries += 1;
       const sql = strings.join("?");
+      if (sql.includes('SELECT "userId", status, "watchedAt"')) {
+        return [
+          { userId: "user-1", status: this.status, watchedAt: this.watchedAt },
+        ];
+      }
       if (sql.includes('SELECT status, "watchedAt", "totalEpisodes"')) {
         return [
           {
             status: this.status,
             watchedAt: this.watchedAt,
             totalEpisodes: this.totalEpisodes,
+            watchedEpisodes: this.watchedEpisodes,
           },
         ];
       }
@@ -73,14 +81,20 @@ class FakeWatchDb {
     },
     episode: {
       findFirst: async () => ({ watched: this.episodeWatched }),
+      findMany: async () =>
+        this.episodeRows > 0 && !this.episodeWatched ? [{ id: "episode-1" }] : [],
       update: async ({ data }: { data: { watched: boolean; watchedAt: Date | null } }) => {
         this.episodeWatched = data.watched;
+        this.episodeWatchedAt = data.watchedAt;
         return { id: "episode-1" };
       },
       updateMany: async ({ data }: { data: { watched: boolean; watchedAt: Date | null } }) => {
         const changed =
           this.episodeRows > 0 && this.episodeWatched !== data.watched ? 1 : 0;
-        if (this.episodeRows > 0) this.episodeWatched = data.watched;
+        if (this.episodeRows > 0) {
+          this.episodeWatched = data.watched;
+          this.episodeWatchedAt = data.watchedAt;
+        }
         return { count: changed };
       },
       count: async ({ where }: { where: { watched?: boolean } }) =>
@@ -90,11 +104,17 @@ class FakeWatchDb {
     },
     watchEvent: {
       create: async ({ data }: { data: EventRow }) => {
-        this.events.push(data);
-        return { id: `event-${this.events.length}` };
+        const event = { ...data, id: data.id ?? `event-${this.events.length + 1}` };
+        this.events.push(event);
+        return event;
       },
       createMany: async ({ data }: { data: EventRow[] }) => {
-        this.events.push(...data);
+        this.events.push(
+          ...data.map((event, index) => ({
+            ...event,
+            id: event.id ?? `event-${this.events.length + index + 1}`,
+          })),
+        );
         return { count: data.length };
       },
       deleteMany: async () => {
@@ -112,8 +132,35 @@ class FakeWatchDb {
         );
         return { count: before - this.events.length };
       },
-      findFirst: async () => null,
-      update: async () => ({ id: "event-1" }),
+      findFirst: async () =>
+        [...this.events]
+          .filter(
+            (event) =>
+              event.kind === WatchEventKind.TITLE_COMPLETED ||
+              event.kind === WatchEventKind.REWATCH,
+          )
+          .sort((left, right) => right.occurredAt.getTime() - left.occurredAt.getTime())[0] ??
+        null,
+      update: async ({
+        where,
+        data,
+      }: {
+        where: { id: string };
+        data: { occurredAt?: Date; note?: string | null };
+      }) => {
+        const event = this.events.find((candidate) => candidate.id === where.id);
+        if (event) {
+          if (data.occurredAt !== undefined) event.occurredAt = data.occurredAt;
+          if (data.note !== undefined) event.note = data.note;
+        }
+        return event ?? { id: where.id };
+      },
+      count: async () =>
+        this.events.filter(
+          (event) =>
+            event.kind === WatchEventKind.TITLE_COMPLETED ||
+            event.kind === WatchEventKind.REWATCH,
+        ).length,
     },
   };
 
@@ -139,6 +186,14 @@ class FakeWatchDb {
         season: { titleId: "title-1" },
       }),
     },
+    watchEvent: {
+      findFirst: async ({ where }: { where: { id: string; userId: string } }) => {
+        const event = this.events.find(
+          (candidate) => candidate.id === where.id && candidate.userId === where.userId,
+        );
+        return event ? { id: event.id, titleId: event.titleId } : null;
+      },
+    },
   };
 }
 
@@ -150,13 +205,16 @@ const prismaProxy = new Proxy(
       Reflect.get(activeDb.prisma as unknown as object, property),
   },
 );
-Object.assign(globalThis, { __CELLULOID_ACTIONS_PRISMA__: prismaProxy });
+Object.assign(globalThis, {
+  __CELLULOID_ACTIONS_PRISMA__: prismaProxy,
+  __CELLULOID_ACTIONS_SIGNED_IN__: true,
+});
 
 const mockModules = new Map<string, string>([
   ["@/lib/prisma", "export const prisma = globalThis.__CELLULOID_ACTIONS_PRISMA__;"],
   [
     "@/lib/session",
-    'export async function getSession() { return { user: { id: "user-1" } }; }',
+    'export async function getSession() { return globalThis.__CELLULOID_ACTIONS_SIGNED_IN__ ? { user: { id: "user-1" } } : null; }',
   ],
   ["next/cache", "export function revalidatePath() {}"],
   [
@@ -196,10 +254,41 @@ export async function resolve(specifier, context, nextResolve) {
 `;
 register(`data:text/javascript,${encodeURIComponent(loader)}`, import.meta.url);
 
-const { bulkSetStatus, setAllEpisodesWatched, setEpisodeWatched, setSeasonWatched, updateTitle } =
-  await import("../src/lib/actions");
+const {
+  bulkSetStatus,
+  logWatch,
+  setAllEpisodesWatched,
+  setEpisodeWatched,
+  setSeasonWatched,
+  updateTitle,
+  updateWatchEvent,
+} = await import("../src/lib/actions");
 
 describe("watch transition locking", { concurrency: false }, () => {
+  it("returns safe action errors instead of throwing them", async () => {
+    activeDb = new FakeWatchDb();
+    const invalid = { error: "Invalid request. Refresh and try again." };
+
+    Object.assign(globalThis, { __CELLULOID_ACTIONS_SIGNED_IN__: false });
+    try {
+      assert.deepEqual(await updateTitle("title-1", { status: WatchStatus.WATCHED }), {
+        error: "You're signed out. Sign in and try again.",
+      });
+    } finally {
+      Object.assign(globalThis, { __CELLULOID_ACTIONS_SIGNED_IN__: true });
+    }
+
+    assert.deepEqual(await updateTitle("", { status: WatchStatus.WATCHED }), invalid);
+    assert.deepEqual(await setEpisodeWatched("", true), invalid);
+    assert.deepEqual(
+      await bulkSetStatus(
+        Array.from({ length: 1001 }, (_, index) => `title-${index}`),
+        WatchStatus.WATCHED,
+      ),
+      { error: "Too many titles selected (max 1000)." },
+    );
+  });
+
   it("logs one title completion when concurrent requests set WATCHED", async () => {
     activeDb = new FakeWatchDb();
     await Promise.all([
@@ -213,6 +302,11 @@ describe("watch transition locking", { concurrency: false }, () => {
         .length,
       1,
     );
+    assert.equal(
+      activeDb.events.filter((event) => event.kind === WatchEventKind.EPISODE_WATCHED)
+        .length,
+      1,
+    );
   });
 
   it("emits episode history only on a real transition and clears all generated duplicates", async () => {
@@ -221,6 +315,11 @@ describe("watch transition locking", { concurrency: false }, () => {
     await setEpisodeWatched("episode-1", true);
     assert.equal(
       activeDb.events.filter((event) => event.kind === WatchEventKind.EPISODE_WATCHED)
+        .length,
+      1,
+    );
+    assert.equal(
+      activeDb.events.filter((event) => event.kind === WatchEventKind.TITLE_COMPLETED)
         .length,
       1,
     );
@@ -250,8 +349,169 @@ describe("watch transition locking", { concurrency: false }, () => {
 
     assert.equal(activeDb.deleteManyCalls, 1);
     assert.deepEqual(
-      activeDb.events.map((event) => event.note),
+      activeDb.events
+        .filter((event) => event.kind === WatchEventKind.EPISODE_WATCHED)
+        .map((event) => event.note),
       ["Keep this history"],
+    );
+  });
+
+  it("records exactly one completion the first time the tracker finishes a show", async () => {
+    activeDb = new FakeWatchDb();
+
+    await setEpisodeWatched("episode-1", true);
+
+    assert.equal(activeDb.status, WatchStatus.WATCHED);
+    assert.ok(activeDb.watchedAt);
+    assert.equal(
+      activeDb.events.filter((event) => event.kind === WatchEventKind.TITLE_COMPLETED)
+        .length,
+      1,
+    );
+  });
+
+  it("does not invent another completion when a final-episode correction re-enters WATCHED", async () => {
+    activeDb = new FakeWatchDb();
+    await setEpisodeWatched("episode-1", true);
+    const firstWatchedAt = activeDb.watchedAt;
+
+    await setEpisodeWatched("episode-1", false);
+    await setEpisodeWatched("episode-1", true);
+
+    assert.equal(activeDb.status, WatchStatus.WATCHED);
+    assert.strictEqual(activeDb.watchedAt, firstWatchedAt);
+    assert.equal(
+      activeDb.events.filter((event) => event.kind === WatchEventKind.TITLE_COMPLETED)
+        .length,
+      1,
+    );
+  });
+
+  it("preserves a deliberate WATCHING status when episode progress returns to zero", async () => {
+    activeDb = new FakeWatchDb();
+    activeDb.status = WatchStatus.WATCHING;
+    activeDb.episodeWatched = true;
+    activeDb.watchedEpisodes = 1;
+
+    await setEpisodeWatched("episode-1", false);
+
+    assert.equal(activeDb.watchedEpisodes, 0);
+    assert.equal(activeDb.status, WatchStatus.WATCHING);
+  });
+
+  it("uses the explicit completion date for TV episode stamps and history", async () => {
+    activeDb = new FakeWatchDb();
+    const completedAt = "2020-01-02T03:04:05.000Z";
+
+    await updateTitle("title-1", {
+      status: WatchStatus.WATCHED,
+      watchedAt: completedAt,
+    });
+
+    assert.equal(activeDb.episodeWatchedAt?.toISOString(), completedAt);
+    assert.deepEqual(
+      activeDb.events.map((event) => [event.kind, event.occurredAt.toISOString()]),
+      [
+        [WatchEventKind.EPISODE_WATCHED, completedAt],
+        [WatchEventKind.TITLE_COMPLETED, completedAt],
+      ],
+    );
+  });
+
+  it("resyncs watchedAt when redating the latest completion behind an older one", async () => {
+    activeDb = new FakeWatchDb();
+    activeDb.status = WatchStatus.WATCHED;
+    activeDb.watchedAt = new Date("2025-01-01T00:00:00.000Z");
+    activeDb.events = [
+      {
+        id: "completion-1",
+        userId: "user-1",
+        titleId: "title-1",
+        kind: WatchEventKind.TITLE_COMPLETED,
+        source: WatchEventSource.MANUAL,
+        occurredAt: new Date("2024-01-01T00:00:00.000Z"),
+      },
+      {
+        id: "rewatch-1",
+        userId: "user-1",
+        titleId: "title-1",
+        kind: WatchEventKind.REWATCH,
+        source: WatchEventSource.MANUAL,
+        occurredAt: new Date("2025-01-01T00:00:00.000Z"),
+      },
+    ];
+
+    await updateTitle("title-1", { watchedAt: "2023-01-01T00:00:00.000Z" });
+
+    assert.equal(
+      activeDb.events.find((event) => event.id === "rewatch-1")?.occurredAt.toISOString(),
+      "2023-01-01T00:00:00.000Z",
+    );
+    assert.equal(activeDb.watchedAt?.toISOString(), "2024-01-01T00:00:00.000Z");
+  });
+
+  it("guards a generic partial-TV log instead of inventing a completion", async () => {
+    activeDb = new FakeWatchDb();
+    activeDb.status = WatchStatus.WATCHING;
+    activeDb.totalEpisodes = 10;
+    activeDb.watchedEpisodes = 3;
+    activeDb.watchedAt = new Date("2024-01-01T00:00:00.000Z");
+
+    const result = await logWatch("title-1", {
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      note: "Episode from memory",
+    });
+
+    assert.deepEqual(result, {
+      error:
+        "This show is still in progress. Log individual episodes from the episode tracker instead.",
+    });
+    assert.equal(activeDb.status, WatchStatus.WATCHING);
+    assert.equal(activeDb.watchedAt?.toISOString(), "2024-01-01T00:00:00.000Z");
+    assert.deepEqual(activeDb.events, []);
+  });
+
+  it("preserves an event note when an edit omits the note field", async () => {
+    activeDb = new FakeWatchDb();
+    activeDb.events = [
+      {
+        id: "event-1",
+        userId: "user-1",
+        titleId: "title-1",
+        kind: WatchEventKind.TITLE_COMPLETED,
+        source: WatchEventSource.MANUAL,
+        note: "Keep this note",
+        occurredAt: new Date("2025-01-01T00:00:00.000Z"),
+      },
+    ];
+
+    const result = await updateWatchEvent("event-1", {
+      occurredAt: "2025-02-03T00:00:00.000Z",
+    });
+
+    assert.deepEqual(result, { ok: true });
+    assert.equal(activeDb.events[0]?.note, "Keep this note");
+    assert.equal(
+      activeDb.events[0]?.occurredAt.toISOString(),
+      "2025-02-03T00:00:00.000Z",
+    );
+  });
+
+  it("creates the same title completion when a season action finishes a show", async () => {
+    activeDb = new FakeWatchDb();
+
+    await setSeasonWatched("season-1", true);
+
+    assert.equal(activeDb.status, WatchStatus.WATCHED);
+    assert.equal(
+      activeDb.events.filter((event) => event.kind === WatchEventKind.EPISODE_WATCHED)
+        .length,
+      1,
+    );
+    assert.equal(
+      activeDb.events.filter((event) => event.kind === WatchEventKind.TITLE_COMPLETED)
+        .length,
+      1,
     );
   });
 

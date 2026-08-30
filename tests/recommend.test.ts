@@ -3,8 +3,11 @@ import assert from "node:assert/strict";
 import {
   buildRequestBlock,
   enrichRec,
+  genreFilterAdvisory,
   isValidRec,
   selectRecentBasis,
+  sharedAiBudgetError,
+  shouldSendThinkingHeartbeat,
   terminalRecEvents,
   type Recommendation,
   type StreamContext,
@@ -34,6 +37,7 @@ function ctx(overrides: Partial<StreamContext> = {}): StreamContext {
     libNameYear: new Set(),
     excludeSet: new Set(),
     seenKeys: new Set(),
+    resolvedKeys: new Set(),
     ...overrides,
   };
 }
@@ -63,6 +67,7 @@ function movie(
 function row(overrides: Partial<ExportRow> = {}): ExportRow {
   return {
     id: "id",
+    tmdbId: null,
     name: "Title",
     mediaType: "movie",
     year: 2020,
@@ -85,6 +90,49 @@ function row(overrides: Partial<ExportRow> = {}): ExportRow {
     ...overrides,
   };
 }
+
+describe("thinking heartbeat throttle", () => {
+  it("sends immediately when needed, then at most once every five seconds", () => {
+    assert.equal(shouldSendThinkingHeartbeat(null, 10_000), true);
+    assert.equal(shouldSendThinkingHeartbeat(10_000, 14_999), false);
+    assert.equal(shouldSendThinkingHeartbeat(10_000, 15_000), true);
+    assert.equal(shouldSendThinkingHeartbeat(15_000, 15_001), false);
+  });
+});
+
+describe("shared AI budget gate", () => {
+  it("never reserves a shared run for a personal key", async () => {
+    let calls = 0;
+    const error = await sharedAiBudgetError(false, async () => {
+      calls += 1;
+      return { allowed: false, day: "2026-08-29", limit: 1, runCount: null };
+    });
+
+    assert.equal(error, null);
+    assert.equal(calls, 0);
+  });
+
+  it("allows a successful shared reservation and explains an exhausted one", async () => {
+    assert.equal(
+      await sharedAiBudgetError(true, async () => ({
+        allowed: true,
+        day: "2026-08-29",
+        limit: 20,
+        runCount: 8,
+      })),
+      null,
+    );
+    assert.match(
+      (await sharedAiBudgetError(true, async () => ({
+        allowed: false,
+        day: "2026-08-29",
+        limit: 20,
+        runCount: null,
+      }))) ?? "",
+      /personal Anthropic API key in Settings/,
+    );
+  });
+});
 
 // --- isValidRec ------------------------------------------------------------
 
@@ -189,6 +237,24 @@ describe("enrichRec", () => {
     assert.equal(out, null);
   });
 
+  it("drops two model suggestions that resolve to the same TMDB title", async () => {
+    const results = [movie(1091, "The Thing", 1982)];
+    const c = ctx();
+    const first = await enrichRec(
+      rec({ title: "The Thing", year: 1982 }),
+      c,
+      stubSearch(results),
+    );
+    const duplicate = await enrichRec(
+      rec({ title: "The Thing", year: 1983 }),
+      c,
+      stubSearch(results),
+    );
+
+    assert.equal(first?.tmdbId, 1091);
+    assert.equal(duplicate, null);
+  });
+
   it("returns the rec unenriched when TMDB has no credible match", async () => {
     const r = rec();
     const out = await enrichRec(r, ctx(), stubSearch([]));
@@ -258,6 +324,23 @@ describe("selectRecentBasis", () => {
   });
 });
 
+// --- genreFilterAdvisory ---------------------------------------------------
+
+describe("genreFilterAdvisory", () => {
+  it("warns when the selected medium has no matching TMDB genre id", () => {
+    assert.equal(
+      genreFilterAdvisory("Action & Adventure", "movie", new Set()),
+      "TMDB doesn't list “Action & Adventure” for movies, so Celluloid treated it as guidance instead of a strict filter for this run.",
+    );
+  });
+
+  it("stays quiet for an enforceable genre, no genre, or a lookup outage", () => {
+    assert.equal(genreFilterAdvisory("Drama", "tv", new Set([18])), null);
+    assert.equal(genreFilterAdvisory(undefined, "all", new Set()), null);
+    assert.equal(genreFilterAdvisory("Drama", "all", null), null);
+  });
+});
+
 // --- buildRequestBlock -----------------------------------------------------
 
 describe("buildRequestBlock", () => {
@@ -321,6 +404,15 @@ describe("buildRequestBlock", () => {
 // --- terminalRecEvents -------------------------------------------------------
 
 describe("terminalRecEvents", () => {
+  it("leaves the terminal explanation to the caller when the run was aborted", () => {
+    const events = terminalRecEvents(0, 12, {
+      hitMaxTokens: false,
+      hitRefusal: false,
+      aborted: true,
+    });
+    assert.deepEqual(events, []);
+  });
+
   it("emits a distinct refusal error when nothing was accepted", () => {
     const events = terminalRecEvents(0, 12, { hitMaxTokens: false, hitRefusal: true });
     assert.deepEqual(events, [

@@ -20,6 +20,7 @@ import { createInterface } from "node:readline/promises";
 import { pathToFileURL } from "node:url";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client.ts";
+import { loadEnv } from "./load-env.mjs";
 
 const TARGETS = {
   dev: { envName: "DATABASE_URL", label: "DEVELOPMENT" },
@@ -318,6 +319,7 @@ const isDirectRun =
 
 if (isDirectRun) {
   try {
+    loadEnv();
     await main();
   } catch (error) {
     console.error(`Database dump failed: ${messageFrom(error)}`);

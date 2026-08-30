@@ -17,8 +17,10 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
-    "db:deploy:prod": "node --env-file-if-exists=.env.local scripts/deploy-prod-migrations.mjs",
-    "db:dump": "node --env-file-if-exists=.env.local --import tsx scripts/db-dump.mjs",
+    "db:deploy:prod": "node scripts/deploy-prod-migrations.mjs",
+    "db:dump": "node --import tsx scripts/db-dump.mjs",
+    "db:check": "node --import tsx scripts/db-check.mjs",
+    "db:backfill:discovered-at": "node --import tsx scripts/backfill-discovered-at.mjs",
     "db:push": "prisma db push && npm run db:indexes",
     "db:indexes": "node --import tsx scripts/ensure-indexes.mjs",
     "db:studio": "prisma studio",
@@ -38,7 +40,7 @@
     "exceljs": "^4.4.0",
     "lucide-react": "^1.17.0",
     "motion": "^12.40.0",
-    "next": "16.2.12",
+    "next": "16.3.3",
     "pg": "^8.21.0",
     "prisma": "^7.8.0",
     "qrcode": "^1.5.4",
@@ -58,7 +60,7 @@
     "@types/react-dom": "^19",
     "dotenv": "^17.4.2",
     "eslint": "^9",
-    "eslint-config-next": "16.2.12",
+    "eslint-config-next": "16.3.3",
     "tailwindcss": "^4",
     "tsx": "^4.22.4",
     "typescript": "^5"
@@ -66,7 +68,7 @@
   "overrides": {
     "kysely": "0.28.17",
     "uuid": "^11.1.1",
-    "@hono/node-server": "^1.19.13",
+    "@hono/node-server": "^1.19.15",
     "postcss": "^8.5.10"
   }
 }

@@ -13,6 +13,70 @@ export interface ResolvedAnthropicKey {
   hadUserKey: boolean;
 }
 
+const MAX_POSTGRES_INT = 2_147_483_647;
+
+export function parseSharedAiDailyRunLimit(raw: string | undefined): number | null {
+  const value = raw?.trim();
+  if (!value) return null;
+  if (!/^\d+$/.test(value)) {
+    throw new Error("SHARED_AI_DAILY_RUN_LIMIT must be a positive whole number.");
+  }
+  const limit = Number(value);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_POSTGRES_INT) {
+    throw new Error(
+      `SHARED_AI_DAILY_RUN_LIMIT must be between 1 and ${MAX_POSTGRES_INT}.`,
+    );
+  }
+  return limit;
+}
+
+export function sharedAiUtcDay(now: Date): string {
+  return now.toISOString().slice(0, 10);
+}
+
+export type SharedAiRunReserver = (day: string, limit: number) => Promise<number | null>;
+
+async function reserveSharedAiRunInDatabase(
+  day: string,
+  limit: number,
+): Promise<number | null> {
+  const rows = await prisma.$queryRaw<Array<{ runCount: number }>>`
+    INSERT INTO "SharedAiDailyUsage" ("day", "runCount")
+    VALUES (${day}::date, 1)
+    ON CONFLICT ("day") DO UPDATE
+    SET "runCount" = "SharedAiDailyUsage"."runCount" + 1
+    WHERE "SharedAiDailyUsage"."runCount" < ${limit}
+    RETURNING "runCount"
+  `;
+  return rows[0]?.runCount ?? null;
+}
+
+export interface SharedAiRunReservation {
+  allowed: boolean;
+  day: string | null;
+  limit: number | null;
+  runCount: number | null;
+}
+
+/**
+ * Atomically claim one shared-key run for the current UTC day. A blank limit
+ * preserves the existing uncapped behavior and never touches the counter.
+ */
+export async function reserveSharedAiRun(
+  rawLimit = process.env.SHARED_AI_DAILY_RUN_LIMIT,
+  now = new Date(),
+  reserve: SharedAiRunReserver = reserveSharedAiRunInDatabase,
+): Promise<SharedAiRunReservation> {
+  const limit = parseSharedAiDailyRunLimit(rawLimit);
+  if (limit === null) {
+    return { allowed: true, day: null, limit: null, runCount: null };
+  }
+
+  const day = sharedAiUtcDay(now);
+  const runCount = await reserve(day, limit);
+  return { allowed: runCount !== null, day, limit, runCount };
+}
+
 /**
  * Resolve the Anthropic API key for a user: their own encrypted key if set,
  * otherwise the deployment-default ANTHROPIC_API_KEY. `usedFallback` tells the

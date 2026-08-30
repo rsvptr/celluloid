@@ -1,5 +1,9 @@
-import "dotenv/config";
-import { runImportFromEnv } from "../src/lib/import/run-import";
+import { loadEnv } from "./load-env.mjs";
+
+loadEnv();
+
+// Load database-dependent modules only after the environment is populated.
+const { runImportFromEnv } = await import("../src/lib/import/run-import");
 
 async function main() {
   console.log("Celluloid — importing library from workbook...\n");

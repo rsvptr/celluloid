@@ -106,6 +106,7 @@ const FIVE_SCALE_HEADERS = ["stars", "starrating", "ratingoutof5", "rating5"];
 /** IMDb exports rate 1-10 under "Your Rating"; Trakt and Celluloid use 10 too. */
 const TEN_SCALE_HEADERS = [
   "yourrating",
+  "myrating",
   "ratingoutof10",
   "rating10",
   "imdbrating",
@@ -114,7 +115,6 @@ const TEN_SCALE_HEADERS = [
 /** Recognisably a rating, but the heading names no scale. */
 const UNKNOWN_SCALE_HEADERS = [
   "rating",
-  "myrating",
   "userrating",
   "personalrating",
   "score",
@@ -388,165 +388,192 @@ export async function parseUploadedList(
     return { titles: [], error: "Couldn't read that file. Upload a .xlsx or .csv." };
   }
 
-  const ws = wb.worksheets[0];
-  if (!ws || ws.rowCount < 1) return { titles: [], error: "The file looks empty." };
+  const worksheets = wb.worksheets.filter((worksheet) => worksheet.rowCount >= 1);
+  if (worksheets.length === 0) return { titles: [], error: "The file looks empty." };
 
-  const headers: Record<string, number> = {};
-  ws.getRow(1).eachCell((cell, col) => {
-    const h = normHeader(cellText(cell.value) ?? "");
-    if (h) headers[h] = col;
-  });
-  const find = (...names: string[]): number | null => {
-    for (const n of names) if (headers[n] != null) return headers[n];
-    return null;
-  };
+  const titles: ParsedTitle[] = [];
+  const notes = new Set<string>();
+  const skippedSheets: string[] = [];
+  const scanBudget = maxRows == null ? Number.POSITIVE_INFINITY : maxRows + ROW_SCAN_BUFFER;
+  let scannedRows = 0;
+  let totalRows = 0;
+  let scanCapped = false;
+  let eligibleSheets = 0;
 
-  const nameCol = find(
-    "name",
-    "title",
-    "moviename",
-    "tvshowname",
-    "movietitle",
-    "showname",
-    "movie",
-    "show",
-  );
-  if (nameCol == null) {
+  // XLSX exports commonly split movies and TV across worksheets (Celluloid's
+  // own workbook does). Parse every sheet with a Title/Name header, while one
+  // GLOBAL row budget preserves the upload DoS bound across the whole file.
+  for (const ws of worksheets) {
+    const headers: Record<string, number> = {};
+    ws.getRow(1).eachCell((cell, col) => {
+      const header = normHeader(cellText(cell.value) ?? "");
+      if (header) headers[header] = col;
+    });
+    const find = (...names: string[]): number | null => {
+      for (const name of names) if (headers[name] != null) return headers[name];
+      return null;
+    };
+
+    const nameCol = find(
+      "name",
+      "title",
+      "moviename",
+      "tvshowname",
+      "movietitle",
+      "showname",
+      "movie",
+      "show",
+    );
+    if (nameCol == null) {
+      skippedSheets.push(ws.name);
+      continue;
+    }
+    eligibleSheets += 1;
+
+    const sheetRows = Math.max(0, ws.rowCount - 1);
+    totalRows += sheetRows;
+    const availableRows = Math.max(0, scanBudget - scannedRows);
+    const rowsToScan = Math.min(sheetRows, availableRows);
+    const lastRow = rowsToScan + 1;
+    scannedRows += rowsToScan;
+    if (rowsToScan < sheetRows) scanCapped = true;
+
+    // "Title Type" is IMDb's own heading ("Movie", "TV Series", "TV Mini Series").
+    const typeCol = find("type", "titletype", "mediatype", "category", "kind");
+    const sheetName = normHeader(ws.name);
+    const defaultMediaType: "movie" | "tv" =
+      sheetName.includes("tv") ||
+      sheetName.includes("show") ||
+      sheetName.includes("series")
+        ? "tv"
+        : "movie";
+    const statusCol = find("status", "watched", "state");
+
+    // A bare "Date" column means different things in different exports: on its
+    // own it is the only release hint, but next to a real year it may be a diary
+    // or list-added date. Only a heading that names a viewing can mark a row
+    // watched; the generic date is used only when status independently says so.
+    const releaseYearCol = find(
+      "year",
+      "releaseyear",
+      "releasedate",
+      "datereleased",
+      "dateofrelease",
+      "released",
+      "release",
+    );
+    const watchedCol = find(
+      "watcheddate",
+      "datewatched",
+      "daterated",
+      "lastwatched",
+      "watchdate",
+    );
+    const diaryDateCol = watchedCol == null && releaseYearCol != null ? find("date") : null;
+    const yearCol = releaseYearCol ?? (watchedCol == null ? find("date") : null);
+
+    const ratingCol =
+      find(...FIVE_SCALE_HEADERS) ??
+      find(...TEN_SCALE_HEADERS) ??
+      find(...UNKNOWN_SCALE_HEADERS);
+    const namedScale: RatingScale =
+      ratingCol == null
+        ? "unknown"
+        : FIVE_SCALE_HEADERS.some((header) => headers[header] === ratingCol)
+          ? "five"
+          : TEN_SCALE_HEADERS.some((header) => headers[header] === ratingCol)
+            ? "ten"
+            : "unknown";
+
+    // IMDb writes its title id under "Const"; Letterboxd offers "IMDb ID" and
+    // "TMDb ID" in its full export. A bare "TMDB" is deliberately NOT an id:
+    // Celluloid's older workbook used that heading for the 0-10 TMDB rating.
+    const imdbCol = find("const", "imdbid", "imdb");
+    const tmdbCol = find("tmdbid", "themoviedbid", "themoviedatabaseid");
+
+    // A heading that named no scale gets one chance from this sheet's values,
+    // so every row in that sheet is converted under one stable decision.
+    const ratingScale: RatingScale =
+      ratingCol == null || namedScale !== "unknown"
+        ? namedScale
+        : resolveScaleFromValues(ws, ratingCol, lastRow);
+
+    if (statusCol == null && watchedCol != null) {
+      notes.add(
+        "This file has no status column, so every row with a watch date was read as watched.",
+      );
+    }
+    if (diaryDateCol != null) {
+      notes.add(
+        'A "Date" column can be when a title was watched or when it was added to a list, so it was not used to mark anything watched on its own.',
+      );
+    }
+    if (ratingCol != null && namedScale === "unknown") {
+      notes.add(
+        ratingScale === "ten"
+          ? "The rating column names no scale. It was read as out of 10, because it holds values above 5."
+          : 'The rating column names no scale, so its ratings were not imported. Head it "Stars" for out of 5, or "Your Rating" for out of 10.',
+      );
+    }
+
+    for (let rowNumber = 2; rowNumber <= lastRow; rowNumber++) {
+      const row = ws.getRow(rowNumber);
+      const rawName = cellText(row.getCell(nameCol).value);
+      if (!rawName) continue;
+      const rawReleaseText = yearCol ? cellText(row.getCell(yearCol).value) : null;
+      // Slice to the staging read-schema's bounds so an oversized cell fails
+      // here instead of poisoning every later read of the persisted job.
+      const name = rawName.slice(0, 500);
+      const releaseText = rawReleaseText ? rawReleaseText.slice(0, 200) : rawReleaseText;
+      const ratingCell = ratingCol ? cellText(row.getCell(ratingCol).value) : null;
+      const watchDate = watchedCol
+        ? parseHumanDate(cellText(row.getCell(watchedCol).value))
+        : null;
+      const diaryDate = diaryDateCol
+        ? parseHumanDate(cellText(row.getCell(diaryDateCol).value))
+        : null;
+      const status: ParsedStatus = statusCol
+        ? mapStatus(cellText(row.getCell(statusCol).value))
+        : watchDate
+          ? "WATCHED"
+          : "UNWATCHED";
+      titles.push({
+        source: "upload",
+        mediaType: typeCol
+          ? mapType(cellText(row.getCell(typeCol).value))
+          : defaultMediaType,
+        name,
+        releaseDateText: releaseText,
+        releaseDate: yearToIso(releaseText),
+        status,
+        languageHint: null,
+        rating: normalizeRating(ratingCell, ratingScale),
+        ratingText:
+          ratingScale === "unknown" && ratingCell ? ratingCell.slice(0, 40) : null,
+        watchedAt: watchDate ?? (status === "WATCHED" ? diaryDate : null),
+        imdbId: imdbCol ? parseImdbId(cellText(row.getCell(imdbCol).value)) : null,
+        tmdbId: tmdbCol ? parseTmdbId(cellText(row.getCell(tmdbCol).value)) : null,
+      });
+    }
+  }
+
+  if (eligibleSheets === 0) {
     return {
       titles: [],
       error:
         'No "Title" or "Name" column found in the first row. Add a header row with at least a Title column.',
     };
   }
-  // "Title Type" is IMDb's own heading ("Movie", "TV Series", "TV Mini Series").
-  const typeCol = find("type", "titletype", "mediatype", "category", "kind");
-  const statusCol = find("status", "watched", "state");
-
-  // A bare "Date" column means different things in different exports: on its own
-  // it is the only release hint the file has, but alongside a real year column
-  // (Letterboxd writes both) it is a diary date. WHICH diary is unknowable from
-  // the file: Letterboxd's watchlist.csv and watched.csv ship the identical
-  // header row (Date,Name,Year,Letterboxd URI), and in the watchlist that Date
-  // is when the film was ADDED. Treating it as a viewing turned a whole
-  // watchlist into WATCHED rows carrying a watch date the owner never recorded,
-  // so only a heading that actually names a viewing may say a row was watched.
-  // A generic "date" is kept as a candidate date and used below only where the
-  // file says, independently, that the row was watched.
-  const releaseYearCol = find("year", "releaseyear", "dateofrelease", "released", "release");
-  const watchedCol = find(
-    "watcheddate",
-    "datewatched",
-    "daterated",
-    "lastwatched",
-    "watchdate",
-  );
-  const diaryDateCol = watchedCol == null && releaseYearCol != null ? find("date") : null;
-  const yearCol = releaseYearCol ?? (watchedCol == null ? find("date") : null);
-
-  const ratingCol =
-    find(...FIVE_SCALE_HEADERS) ?? find(...TEN_SCALE_HEADERS) ?? find(...UNKNOWN_SCALE_HEADERS);
-  const namedScale: RatingScale =
-    ratingCol == null
-      ? "unknown"
-      : FIVE_SCALE_HEADERS.some((h) => headers[h] === ratingCol)
-        ? "five"
-        : TEN_SCALE_HEADERS.some((h) => headers[h] === ratingCol)
-          ? "ten"
-          : "unknown";
-
-  // IMDb writes its title id under "Const"; Letterboxd offers "IMDb ID" and
-  // "TMDb ID" in its full export.
-  const imdbCol = find("const", "imdbid", "imdb");
-  const tmdbCol = find("tmdbid", "themoviedbid", "tmdb");
-
-  // Cap row iteration so a small but massively-inflated file can't force us to
-  // scan an enormous materialized sheet. Read a little past maxRows so the
-  // caller can still tell the file was truncated (titles.length > maxRows).
-  const lastRow =
-    maxRows != null ? Math.min(ws.rowCount, maxRows + ROW_SCAN_BUFFER) : ws.rowCount;
-  const scanCapped = lastRow < ws.rowCount;
-
-  // A heading that named no scale gets one chance from the column's own values,
-  // taken in a pass of its own so every row is converted on a single decision
-  // rather than the scale changing partway down the sheet.
-  const ratingScale: RatingScale =
-    ratingCol == null || namedScale !== "unknown"
-      ? namedScale
-      : resolveScaleFromValues(ws, ratingCol, lastRow);
-
-  const notes: string[] = [];
-  if (statusCol == null && watchedCol != null) {
-    notes.push(
-      "This file has no status column, so every row with a watch date was read as watched.",
+  if (skippedSheets.length > 0) {
+    notes.add(
+      `Skipped ${skippedSheets.length} ${skippedSheets.length === 1 ? "sheet" : "sheets"} without a Title or Name header: ${skippedSheets.join(", ")}.`,
     );
-  }
-  if (diaryDateCol != null) {
-    notes.push(
-      'A "Date" column can be when a title was watched or when it was added to a list, so it was not used to mark anything watched on its own.',
-    );
-  }
-  if (ratingCol != null && namedScale === "unknown") {
-    notes.push(
-      ratingScale === "ten"
-        ? "The rating column names no scale. It was read as out of 10, because it holds values above 5."
-        : 'The rating column names no scale, so its ratings were not imported. Head it "Stars" for out of 5, or "Your Rating" for out of 10.',
-    );
-  }
-
-  const titles: ParsedTitle[] = [];
-  for (let r = 2; r <= lastRow; r++) {
-    const row = ws.getRow(r);
-    const rawName = cellText(row.getCell(nameCol).value);
-    if (!rawName) continue;
-    const rawReleaseText = yearCol ? cellText(row.getCell(yearCol).value) : null;
-    // Slice to the staging read-schema's bounds (parsedTitleSchema in
-    // import-staging-format.ts: name max 500, releaseDateText max 200) so an
-    // oversized cell fails here instead of getting staged and then 500ing
-    // every subsequent read of the job.
-    const name = rawName.slice(0, 500);
-    const releaseText = rawReleaseText ? rawReleaseText.slice(0, 200) : rawReleaseText;
-    const ratingCell = ratingCol ? cellText(row.getCell(ratingCol).value) : null;
-    const watchDate = watchedCol
-      ? parseHumanDate(cellText(row.getCell(watchedCol).value))
-      : null;
-    const diaryDate = diaryDateCol
-      ? parseHumanDate(cellText(row.getCell(diaryDateCol).value))
-      : null;
-    // A file with no status column but a column that names a viewing ("Watched
-    // Date", "Date Rated") is stating these were watched; without this such an
-    // export would land on the watchlist with a watch date already attached. A
-    // bare "Date" never gets that vote — see the column resolution above.
-    const status: ParsedStatus = statusCol
-      ? mapStatus(cellText(row.getCell(statusCol).value))
-      : watchDate
-        ? "WATCHED"
-        : "UNWATCHED";
-    titles.push({
-      source: "upload",
-      mediaType: typeCol ? mapType(cellText(row.getCell(typeCol).value)) : "movie",
-      name,
-      releaseDateText: releaseText,
-      releaseDate: yearToIso(releaseText),
-      status,
-      languageHint: null,
-      rating: normalizeRating(ratingCell, ratingScale),
-      // Only carried when the scale couldn't be named, which is the one case
-      // review has to explain: the file did rate this title and we declined to
-      // guess whether the number meant 4/5 or 4/10.
-      ratingText: ratingScale === "unknown" && ratingCell ? ratingCell.slice(0, 40) : null,
-      // A diary date is a watch date only for a row something else already calls
-      // watched. On a watchlist export it is the day the film was added, and
-      // recording it would show the owner a viewing that never happened.
-      watchedAt: watchDate ?? (status === "WATCHED" ? diaryDate : null),
-      imdbId: imdbCol ? parseImdbId(cellText(row.getCell(imdbCol).value)) : null,
-      tmdbId: tmdbCol ? parseTmdbId(cellText(row.getCell(tmdbCol).value)) : null,
-    });
   }
 
   return {
     titles,
-    totalRows: scanCapped ? undefined : Math.max(0, ws.rowCount - 1),
+    totalRows: scanCapped ? undefined : totalRows,
     scanCapped,
-    ...(notes.length > 0 ? { notes } : {}),
+    ...(notes.size > 0 ? { notes: [...notes] } : {}),
   };
 }

@@ -22,7 +22,9 @@ export function BarRow({
   const pct = max > 0 ? Math.round((value / max) * 100) : 0;
   return (
     <div className="flex items-center gap-3">
-      <span className="w-24 shrink-0 truncate text-xs text-muted">{label}</span>
+      <span className="w-24 shrink-0 truncate text-xs text-muted" title={label}>
+        {label}
+      </span>
       <div className="h-2 flex-1 overflow-hidden rounded-full bg-surface-2">
         <motion.div
           className={cn("h-full origin-left rounded-full", colorClass ?? "brand-gradient")}
@@ -78,7 +80,17 @@ export function ColumnChart({
               animate={{ scaleY: 1 }}
               transition={{ duration: 0.5, ease: EASE, delay: i * 0.02 }}
             />
-            <span className="text-[10px] text-faint">{d.label}</span>
+            {/* Past 8 buckets, labels collide at narrow widths; drop every
+                other one but keep its slot (invisible, not unmounted) so bars
+                stay on a common baseline. */}
+            <span
+              className={cn(
+                "text-[10px] text-faint",
+                data.length > 8 && i % 2 !== 0 && "invisible",
+              )}
+            >
+              {d.label}
+            </span>
           </div>
         );
       })}
@@ -168,42 +180,32 @@ export function Sparkline({
   );
 }
 
-// --- Activity heatmap (GitHub-style) ---------------------------------------
-
-const LEVEL_CLASS = [
-  "bg-surface-2",
-  "bg-brand/25",
-  "bg-brand/45",
-  "bg-brand/70",
-  "bg-brand",
-];
+// --- Activity heatmap grid maths (consumed by the interactive calendar) ----
 
 /**
  * Lays out the visible weeks x 7 day grid and aggregates total/max from ONLY
  * the days inside that window. `activity` can span a user's entire watch
  * history, so totalling or scaling colors over the raw array would let
  * history outside the visible weeks inflate the "last year" total and flatten
- * the color scale. `today` is injectable for deterministic tests; it defaults
- * to the real current time for the live component.
+ * the color scale. `todayKey` is the owner's local "today" as a "YYYY-MM-DD"
+ * key (see dayKeyInZone in lib/data) — `activity`'s own keys are bucketed the
+ * same way, so anchoring the grid to a client clock's `new Date()` instead
+ * would land a cell a day off the owner's real calendar whenever the server
+ * and the owner sit in different UTC offsets.
  */
 export function windowActivity(
   activity: { date: string; count: number }[],
   weeks: number,
-  today: Date = new Date(),
+  todayKey: string,
 ): {
   cols: { date: string; count: number; future: boolean }[][];
   total: number;
   max: number;
 } {
-  // Use UTC throughout so the grid's own day keys are internally consistent.
-  // `activity` entries come from getStats as "YYYY-MM-DD" strings bucketed in
-  // the owner's time zone (not necessarily UTC); comparing those keys as plain
-  // strings against this UTC-built grid is still correct since both sides use
-  // the same Y-M-D format, but a day may land one cell off from the owner's
-  // real local calendar near their midnight if the server and owner differ in
-  // UTC offset from "now".
-  const todayUtc = new Date(today);
-  todayUtc.setUTCHours(0, 0, 0, 0);
+  // Parse the owner-zone key as UTC midnight, same as computeStreaks, so the
+  // grid's day-stepping arithmetic below stays plain Gregorian date math.
+  const [year, month, day] = todayKey.split("-").map(Number);
+  const todayUtc = new Date(Date.UTC(year, month - 1, day));
   // End at the upcoming Saturday so the last column is full.
   const end = new Date(todayUtc);
   end.setUTCDate(end.getUTCDate() + (6 - end.getUTCDay()));
@@ -232,65 +234,4 @@ export function windowActivity(
     cols.push(col);
   }
   return { cols, total, max };
-}
-
-export function ActivityHeatmap({
-  activity,
-  weeks = 53,
-}: {
-  activity: { date: string; count: number }[];
-  weeks?: number;
-}) {
-  const { cols, total, max } = useMemo(
-    () => windowActivity(activity, weeks),
-    [activity, weeks],
-  );
-
-  const level = (c: number) => {
-    if (c <= 0) return 0;
-    const r = c / max;
-    if (r > 0.66) return 4;
-    if (r > 0.33) return 3;
-    if (r > 0) return 2;
-    return 1;
-  };
-
-  return (
-    <div>
-      <div
-        className="overflow-x-auto pb-1"
-        role="img"
-        aria-label={`Watch activity heatmap: ${total} watched in the last year`}
-      >
-        <div className="flex gap-[3px]">
-          {cols.map((col, ci) => (
-            <div key={ci} className="flex flex-col gap-[3px]">
-              {col.map((cell) => (
-                <div
-                  key={cell.date}
-                  title={cell.future ? "" : `${cell.date}: ${cell.count} watched`}
-                  className={cn(
-                    "h-[11px] w-[11px] rounded-[2px]",
-                    cell.future ? "bg-transparent" : LEVEL_CLASS[level(cell.count)],
-                  )}
-                />
-              ))}
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className="mt-2 flex items-center justify-between text-[10px] text-faint">
-        <span>
-          <span className="tabular-nums">{total}</span> watched in the last year
-        </span>
-        <span className="flex items-center gap-1">
-          Less
-          {LEVEL_CLASS.map((c) => (
-            <span key={c} className={cn("h-[10px] w-[10px] rounded-[2px]", c)} />
-          ))}
-          More
-        </span>
-      </div>
-    </div>
-  );
 }

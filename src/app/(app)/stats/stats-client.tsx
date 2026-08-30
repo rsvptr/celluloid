@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Flame } from "lucide-react";
 import type { ActivityDay, LibraryStats } from "@/lib/data";
-import { ESTIMATED_EPISODE_MINUTES } from "@/lib/data";
+import { ESTIMATED_EPISODE_MINUTES, ESTIMATED_MOVIE_MINUTES } from "@/lib/data";
 import { Card } from "@/components/ui";
 import { BarRow, ColumnChart, Sparkline } from "@/components/charts";
 import { ActivityCalendar } from "./activity-calendar";
@@ -50,13 +50,13 @@ export function StatsClient({
           </div>
           <div className="mt-5 flex flex-wrap gap-x-6 gap-y-2">
             <Link
-              href="/"
+              href="/?status=watchlist"
               className="focus-ring inline-flex min-h-11 items-center rounded text-sm font-medium text-brand hover:underline sm:min-h-0"
             >
               Mark titles watched
             </Link>
             <Link
-              href="/"
+              href="/?status=watched&rating=unrated"
               className="focus-ring inline-flex min-h-11 items-center rounded text-sm font-medium text-brand hover:underline sm:min-h-0"
             >
               Rate what you have seen
@@ -80,11 +80,13 @@ export function StatsClient({
               }
             />
             {/* "Est." only when something actually was estimated. With every
-                watched episode's runtime known the figure is a sum, and the
-                hedge would contradict the (correspondingly absent) note below. */}
+                watched episode's and movie's runtime known the figure is a
+                sum, and the hedge would contradict the (correspondingly
+                absent) note below. */}
             <Kpi
               label={
-                stats.watchTimeEstimatedEpisodes > 0
+                stats.watchTimeEstimatedEpisodes > 0 ||
+                stats.watchTimeEstimatedMovies > 0
                   ? "Est. watch time"
                   : "Watch time"
               }
@@ -95,16 +97,37 @@ export function StatsClient({
           {/* The caveat used to run whenever any episode was watched, which
               stopped being true once episode runtimes were summed for real:
               with every runtime known the total is the sum, not a guess. Say
-              how much of it is estimated, and say nothing when none of it is. */}
-          {stats.watchTimeEstimatedEpisodes > 0 && (
+              how much of it is estimated, and say nothing when none of it is.
+              Runtime-less movies are rare but get the same treatment, folded
+              into the same sentence rather than a second paragraph. */}
+          {(stats.watchTimeEstimatedEpisodes > 0 ||
+            stats.watchTimeEstimatedMovies > 0) && (
             <p className="-mt-3 text-xs text-faint">
               Watch time counts{" "}
-              <span className="tabular-nums">
-                {stats.watchTimeEstimatedEpisodes}
-              </span>{" "}
-              watched episode
-              {stats.watchTimeEstimatedEpisodes === 1 ? "" : "s"} with no known
-              runtime at about {ESTIMATED_EPISODE_MINUTES} minutes each.
+              {stats.watchTimeEstimatedEpisodes > 0 && (
+                <>
+                  <span className="tabular-nums">
+                    {stats.watchTimeEstimatedEpisodes}
+                  </span>{" "}
+                  watched episode{stats.watchTimeEstimatedEpisodes === 1 ? "" : "s"}{" "}
+                  with no known runtime at about {ESTIMATED_EPISODE_MINUTES}{" "}
+                  minutes each
+                </>
+              )}
+              {stats.watchTimeEstimatedEpisodes > 0 &&
+                stats.watchTimeEstimatedMovies > 0 &&
+                " and "}
+              {stats.watchTimeEstimatedMovies > 0 && (
+                <>
+                  <span className="tabular-nums">
+                    {stats.watchTimeEstimatedMovies}
+                  </span>{" "}
+                  watched movie{stats.watchTimeEstimatedMovies === 1 ? "" : "s"}{" "}
+                  with no known runtime at about {ESTIMATED_MOVIE_MINUTES}{" "}
+                  minutes each
+                </>
+              )}
+              .
             </p>
           )}
 
@@ -135,6 +158,7 @@ export function StatsClient({
                 <ActivityCalendar
                   activity={stats.activity}
                   days={activityDays}
+                  todayKey={stats.todayKey}
                 />
               </Card>
             )}

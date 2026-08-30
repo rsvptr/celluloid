@@ -1,4 +1,5 @@
 import { createBackupEnvelope } from "@/lib/backup";
+import { MAX_BACKUP_BYTES } from "@/lib/backup-format";
 import { prisma } from "@/lib/prisma";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 import { getSession } from "@/lib/session";
@@ -20,6 +21,18 @@ export async function GET() {
     // Backups are machine-restored artifacts. Compact JSON buys substantially
     // more headroom under the restore route's fixed serverless body limit.
     const encoded = new TextEncoder().encode(JSON.stringify(backup));
+    if (encoded.byteLength > MAX_BACKUP_BYTES) {
+      return Response.json(
+        {
+          error:
+            "This backup is larger than the 4 MB restore limit, so Celluloid stopped the download instead of creating a file it can't restore.",
+        },
+        {
+          status: 413,
+          headers: { "Cache-Control": "private, no-store" },
+        },
+      );
+    }
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(encoded);
@@ -47,6 +60,7 @@ export async function GET() {
     return new Response(stream, {
       headers: {
         "Content-Type": "application/json; charset=utf-8",
+        "Content-Length": String(encoded.byteLength),
         "Content-Disposition": `attachment; filename="celluloid-backup-${stamp}.json"`,
         "Cache-Control": "private, no-store",
         "X-Content-Type-Options": "nosniff",

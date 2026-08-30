@@ -19,6 +19,7 @@ function row(over: Partial<ExportRow> = {}): ExportRow {
   seq += 1;
   return {
     id: `t${seq}`,
+    tmdbId: null,
     name: `Title ${seq}`,
     mediaType: "movie",
     year: 2020,

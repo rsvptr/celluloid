@@ -30,6 +30,19 @@ const isProductionDeployment =
  * short value silently weakens secrets at rest too.
  */
 const MIN_SECRET_LENGTH = 32;
+const MIN_INVITE_CODE_LENGTH = 16;
+
+const optionalInviteCode = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+  z
+    .string()
+    .trim()
+    .min(
+      MIN_INVITE_CODE_LENGTH,
+      `must be at least ${MIN_INVITE_CODE_LENGTH} characters — generate one with: openssl rand -base64 24`,
+    )
+    .optional(),
+);
 
 const rawEnvSchema = z
   .object({
@@ -47,6 +60,7 @@ const rawEnvSchema = z
     ENCRYPTION_KEY: optionalString,
     TMDB_ACCESS_TOKEN: z.string().trim().min(1),
     ANTHROPIC_API_KEY: optionalString,
+    SIGNUP_INVITE_CODE: optionalInviteCode,
   })
   .superRefine((value, ctx) => {
     let databaseUrl: URL | null = null;
@@ -176,6 +190,7 @@ export const env = Object.freeze({
   ENCRYPTION_KEY: parsed.ENCRYPTION_KEY ?? parsed.BETTER_AUTH_SECRET,
   TMDB_ACCESS_TOKEN: parsed.TMDB_ACCESS_TOKEN,
   ANTHROPIC_API_KEY: parsed.ANTHROPIC_API_KEY,
+  SIGNUP_INVITE_CODE: parsed.SIGNUP_INVITE_CODE,
 });
 
 export type CelluloidEnv = typeof env;

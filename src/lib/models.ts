@@ -2,21 +2,25 @@
 // engine (server) and the recommend page controls (client).
 
 export const REC_MODELS = [
-  { id: "claude-opus-5", label: "Claude Opus 5", note: "Most capable · default" },
-  { id: "claude-sonnet-5", label: "Claude Sonnet 5", note: "Near-Opus quality, faster" },
+  { id: "claude-opus-5", label: "Claude Opus 5", note: "Most capable · can take longer" },
+  {
+    id: "claude-sonnet-5",
+    label: "Claude Sonnet 5",
+    note: "Near-Opus quality, faster · default",
+  },
   { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", note: "Fastest, cheapest" },
 ] as const;
 
 export type RecModelId = (typeof REC_MODELS)[number]["id"];
 
-export const DEFAULT_REC_MODEL: RecModelId = "claude-opus-5";
+export const DEFAULT_REC_MODEL: RecModelId = "claude-sonnet-5";
 
 export function isRecModel(id: string | null | undefined): id is RecModelId {
   return !!id && REC_MODELS.some((m) => m.id === id);
 }
 
 export function recModelLabel(id: string | null | undefined): string {
-  return REC_MODELS.find((m) => m.id === id)?.label ?? "Claude Opus 5";
+  return REC_MODELS.find((m) => m.id === id)?.label ?? "Claude Sonnet 5";
 }
 
 // Era choices for the recommendation "Era" preference. The clause is what gets

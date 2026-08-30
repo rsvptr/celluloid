@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import ExcelJS from "exceljs";
 import { buildWorkbookBuffer } from "../src/lib/export/xlsx";
 import type { ExportRow } from "../src/lib/export/format";
+import { parseUploadedList } from "../src/lib/import/parse-upload";
 
 function row(over: Partial<ExportRow>): ExportRow {
   return {
     id: "x",
+    tmdbId: 101,
     name: "Placeholder",
     mediaType: "movie",
     year: 2020,
@@ -86,5 +88,68 @@ describe("buildWorkbookBuffer", () => {
     // Neither logged: blank cells, not 0 / empty-string artifacts.
     assert.equal(movies.getRow(3).getCell(7).value, "");
     assert.equal(movies.getRow(3).getCell(8).value, "");
+  });
+
+  it("labels TMDB identity separately from the TMDB rating", async () => {
+    const buf = await buildWorkbookBuffer([
+      row({ tmdbId: 949, tmdbRating: 8.2, name: "Heat" }),
+    ]);
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buf as unknown as Parameters<typeof wb.xlsx.load>[0]);
+    const movies = wb.getWorksheet("Movies")!;
+
+    assert.equal(movies.getRow(1).getCell(9).value, "TMDB ID");
+    assert.equal(movies.getRow(2).getCell(9).value, 949);
+    assert.equal(movies.getRow(1).getCell(10).value, "TMDB Rating");
+    assert.equal(movies.getRow(2).getCell(10).value, 8.2);
+  });
+
+  it("re-imports both Celluloid sheets with exact TMDB identities", async () => {
+    const buf = await buildWorkbookBuffer([
+      row({
+        tmdbId: 949,
+        name: "Heat",
+        mediaType: "movie",
+        releaseDate: "1995-12-15",
+        myRating: 9,
+      }),
+      row({
+        tmdbId: 95396,
+        name: "Severance",
+        mediaType: "tv",
+        releaseDate: "2022-02-18",
+        totalEpisodes: 18,
+        watchedEpisodes: 9,
+      }),
+    ]);
+
+    const parsed = await parseUploadedList(Buffer.from(buf), "celluloid-library.xlsx");
+
+    assert.equal(parsed.error, undefined);
+    assert.deepEqual(
+      parsed.titles.map((title) => ({
+        name: title.name,
+        mediaType: title.mediaType,
+        releaseDate: title.releaseDate,
+        rating: title.rating,
+        tmdbId: title.tmdbId,
+      })),
+      [
+        {
+          name: "Heat",
+          mediaType: "movie",
+          releaseDate: "1995-01-01",
+          rating: 9,
+          tmdbId: 949,
+        },
+        {
+          name: "Severance",
+          mediaType: "tv",
+          releaseDate: "2022-01-01",
+          rating: 8,
+          tmdbId: 95396,
+        },
+      ],
+    );
   });
 });

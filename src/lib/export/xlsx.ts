@@ -24,7 +24,12 @@ const COMMON: Col[] = [
     value: (r) => (r.watchedAt ? r.watchedAt.slice(0, 10) : ""),
   },
   { header: "Times Watched", width: 14, value: (r) => (r.watchCount > 0 ? r.watchCount : "") },
-  { header: "TMDB", width: 8, value: (r) => (r.tmdbRating != null ? r.tmdbRating : "") },
+  { header: "TMDB ID", width: 12, value: (r) => r.tmdbId ?? "" },
+  {
+    header: "TMDB Rating",
+    width: 12,
+    value: (r) => (r.tmdbRating != null ? r.tmdbRating : ""),
+  },
   { header: "Genres", width: 28, value: (r) => r.genres.join(", ") },
   { header: "Favorite", width: 10, value: (r) => (r.favorite ? "Yes" : "") },
   { header: "Tags", width: 20, value: (r) => r.tags.join(", ") },

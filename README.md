@@ -26,7 +26,7 @@
 
 > **Note**
 >
-> Celluloid is built for one person: you. The live app at [mycelluloid.vercel.app](https://mycelluloid.vercel.app) is real, but it sits behind a login, so there is nothing to browse without an account. You bring your own Neon database, your own TMDB token, and your own Anthropic key, then deploy your own copy. Sign ups are closed by default, opened with a single environment variable only long enough to create your account.
+> Celluloid is built for one person: you. The live app at [mycelluloid.vercel.app](https://mycelluloid.vercel.app) is real, but it sits behind a login, so there is nothing to browse without an account. You bring your own Neon database, your own TMDB token, and your own Anthropic key, then deploy your own copy. Sign ups are closed by default, opened with a shared invite code only long enough to create your account.
 
 Most trackers are good at storing what you watched and bad at the only question that matters afterward, which is what to watch tonight. Celluloid is built the other way around. Logging is quick, but everything feeds one feature: a recommendation engine that reads your ratings, your notes, the things you abandoned, what you watched recently, and the languages you actually lean toward, then asks Claude for titles that fit. You can run that inside the app, or copy the exact same brief as a prompt to paste into any other AI.
 
@@ -76,7 +76,7 @@ Most trackers are good at storing what you watched and bad at the only question 
 - A full JSON backup you can restore with a preview first, so nothing writes to your library until you confirm exactly what will change, and a note in Settings of when you last took one
 - Time zone and a default watch region in Settings. The time zone sets stats day boundaries; the region decides whose streaming, rental, and certification info you see, and a per device selector on a title page can override it
 - Exports to plain text, Markdown, JSON, and a styled Excel workbook, scoped as finely as language, genre, minimum rating, and release years, with filenames that say what is inside
-- Accounts with email and password, optional two factor, and a switch to close public sign ups
+- Invite-only accounts with email and password, plus optional two-factor authentication
 
 ## The recommendation engine
 
@@ -134,9 +134,9 @@ You can steer a run with a free text focus ("cozy mysteries", "something like Br
 
 **Results stream in live.** The app doesn't wait for the whole batch: Claude's response is parsed as it streams, each suggestion is validated, deduplicated, and matched to TMDB the moment it completes, and cards appear one by one with a status line ("thinking", "curating picks", a running count) and a Stop button. Once enough suggestions have been accepted, generation is aborted server-side, so you never pay for output past what you asked for.
 
-**Models.** Claude Opus 5 is the default. Claude Sonnet 5 and Claude Haiku 4.5 are selectable per run from the recommend page. The app adapts the request to each model: Opus 5 and Sonnet 5 get adaptive thinking and an effort setting, while Haiku 4.5 skips both options because it rejects them. Output is constrained to a JSON schema, and the taste brief carries an Anthropic prompt-cache breakpoint, so once your library is large enough to clear the chosen model's cache minimum, a "Show different" re-run a few minutes later reprocesses only the short request block instead of your whole taste brief. That minimum differs per model and is not lower on newer ones, so the breakpoint is attached only when the brief plausibly clears the bar for the model you picked.
+**Models.** Claude Sonnet 5 is the default. Claude Opus 5 and Claude Haiku 4.5 are selectable per run from the recommend page. The app adapts the request to each model: Opus 5 and Sonnet 5 get adaptive thinking and an effort setting, while Haiku 4.5 skips both options because it rejects them. Output is constrained to a JSON schema, and the taste brief carries an Anthropic prompt-cache breakpoint, so once your library is large enough to clear the chosen model's cache minimum, a "Show different" re-run a few minutes later reprocesses only the short request block instead of your whole taste brief. That minimum differs per model and is not lower on newer ones, so the breakpoint is attached only when the brief plausibly clears the bar for the model you picked.
 
-**Bring your own key.** Add an Anthropic key in settings and it is encrypted at rest with AES 256 GCM before it touches the database. A deployment wide key can also be set as a fallback.
+**Bring your own key.** Add an Anthropic key in settings and it is encrypted at rest with AES 256 GCM before it touches the database. A deployment wide key can also be set as a fallback, and the recommend page always states which one a run is about to use.
 
 ## Tracking your watch history
 
@@ -172,6 +172,8 @@ A title used to be frozen at whatever TMDB said on the day you added it, so a sh
 
 The endpoint accepts no input other than its credential. It requires `Authorization: Bearer $CRON_SECRET` and compares the header in constant time; if `CRON_SECRET` is not set it refuses every request rather than falling back to running unauthenticated. Vercel sends that header for scheduled invocations once the variable is set on the project. Without it the app works exactly as before, just without the nightly refresh.
 
+Every authorized run logs one single-line JSON summary (status, per-account counters, and any error), so a night's result is one log event instead of scattered output. A title whose refresh keeps failing also surfaces in Settings, under "Metadata refresh," with its stored error and a link straight to the title.
+
 ## The library
 
 The home screen is your whole collection, in a poster grid or a dense list.
@@ -205,7 +207,7 @@ On phones the filters collapse behind a single toggle and lay out as a clean two
 The stats page reads your activity rather than just counting rows.
 
 - Totals for titles, movies, shows, movies watched, episodes watched out of episodes tracked, and rewatches
-- A watch time built from real per episode runtimes. Episodes with no known runtime count as about 42 minutes each, and the page says how many of them there were. When every watched episode has a runtime, there is nothing to qualify and the note does not appear
+- A watch time built from real per title and per episode runtimes. Episodes with no known runtime count as about 42 minutes each, movies with no known runtime count as about 110 minutes each, and the page says how many of each there were. When every watched title and episode has a runtime, there is nothing to qualify and the note does not appear
 - A watch activity heatmap and current and longest streaks, built from real in app watch dates. Selecting a day opens what you watched that day, with a link to each title; the arrow keys move between days
 - Titles by release year as a sparkline, a rating distribution histogram, and a by decade breakdown
 - Your top rated titles, your most rewatched titles, and a by status and by language breakdown
@@ -223,7 +225,7 @@ Everything in your library can leave in the shape you need. Pick a scope (type, 
 | Text | `.txt` | A quick human readable list |
 | Markdown | `.md` | A table you can drop into notes or a gist |
 | JSON | `.json` | Feeding another tool |
-| Excel | `.xlsx` | A styled workbook with separate Movies and TV sheets |
+| Excel | `.xlsx` | A styled workbook with separate Movies and TV sheets, each row carrying its TMDB id for an exact re-import |
 
 The AI prompt export uses the exact same taste brief as the in app engine, rewatch markers and all. Even when you scope the export down, the "do not recommend these" guardrails are still drawn from your full watchlist and dropped lists, so a scoped prompt never contradicts itself.
 
@@ -231,7 +233,7 @@ Every download gets a unique, descriptive filename, for example `celluloid-libra
 
 ## Backups and recovery
 
-Celluloid has an application-level backup for the personal data that would be painful to rebuild. In **Settings > Backup**, choose **Download backup** to save a versioned JSON file. The current v2 format contains movie and TV metadata, soft-deleted titles, status, ratings, favorites, notes, watch dates and watch-event history, full season and episode progress, tags with their colors and their title joins, owner timezone/region preferences, and ordered shared-list settings including expiry and revocation. Restore also accepts v1 files through an explicit compatibility upgrade, for files up to 4 MB. Backups deliberately exclude passwords, sessions, two-factor secrets and backup codes, encrypted API keys, and share slugs. They also leave out the working state that is cheap to rebuild: your "not interested" list and any staged spreadsheet import. A restored shared list receives a new unguessable link instead of reviving an old bearer token.
+Celluloid has an application-level backup for the personal data that would be painful to rebuild. In **Settings > Backup**, choose **Download backup** to save a versioned JSON file. The current v2 format contains movie and TV metadata, soft-deleted titles, status, ratings, favorites, notes, watch dates and watch-event history, full season and episode progress, tags with their colors and their title joins, owner timezone/region preferences, and ordered shared-list settings including expiry and revocation. Restore also accepts v1 files through an explicit compatibility upgrade, for files up to 4 MB. If your library's backup would exceed that same 4 MB restore limit, the download refuses with a clear error instead of handing you a file it could never restore, and Settings' "last backed up" stamp is not updated; use `npm run db:dump` for a library that large. Backups deliberately exclude passwords, sessions, two-factor secrets and backup codes, encrypted API keys, and share slugs. They also leave out the working state that is cheap to rebuild: your "not interested" list and any staged spreadsheet import. A restored shared list receives a new unguessable link instead of reviving an old bearer token.
 
 Settings records when you last downloaded a backup, so the button tells you how stale your off-site copy is instead of giving no feedback at all. The stamp is written as the file starts streaming; whether it reached your disk is not something the server can see.
 
@@ -273,9 +275,9 @@ This is your data on your infrastructure.
 - Self hosted on your own Neon database. There is no shared backend and no third party account system.
 - Every query is scoped to the signed in user, so one account can never read another's titles, tags, shares, or settings.
 - Your Anthropic key is encrypted at rest with AES 256 GCM. It is never stored or logged in plaintext.
-- Accounts use email and password through Better Auth, with optional time based two factor (an authenticator app, with backup codes and a manual setup key). Sessions are stored in the database, and deleting your account requires your password, not just a live session.
+- Accounts use email and password through Better Auth, with optional time based two factor (an authenticator app, with backup codes and a manual setup key). Sessions are stored in the database, and deleting your account requires your password, not just a live session. Settings lists every active session with its device, IP address, and last-active time, so you can sign out one device or every device but this one.
 - Sign in, sign up, password change, and two factor verification are rate limited against brute force, and the AI, search, import, and export routes are rate limited per user to keep a runaway loop from draining your API budget.
-- Public sign ups are closed by default. Set `ALLOW_SIGNUPS=true` only long enough to create your own account, then remove it, which is the recommended locked down state for a personal deployment.
+- New accounts require the shared `SIGNUP_INVITE_CODE`, checked server-side before Better Auth creates the user. Leave it unset when you are not inviting anyone; existing users can still sign in.
 - The one unauthenticated endpoint, the scheduled sync, is gated on a bearer token compared in constant time, and refuses to run at all when that secret is not configured rather than falling back to open access.
 - Security headers are set for every response: frame denial, no sniff, a strict referrer policy, a content security policy covering framing, plugins, base tags, and form targets, a permissions policy that turns off browser capabilities the app never uses, and HSTS on the production domain.
 - Remembered filters are plain cookies on your own device. They hold filter values and nothing else, never search text, and the Settings toggle that governs them deletes them when switched off.
@@ -395,7 +397,7 @@ npm install
 **2. Set up your environment.** Copy the example file and fill in real values. See [Environment variables](#environment-variables) for what each one is.
 
 ```bash
-cp .env.example .env
+cp .env.example .env.local
 ```
 
 **3. Create the database schema.** This applies the migrations to your Neon database.
@@ -410,11 +412,14 @@ npm run db:deploy
 npm run dev
 ```
 
-Open http://localhost:3000, create your account, then add a few titles by searching TMDB. Add an Anthropic key in settings and open the recommend page to see suggestions. Once your account exists, remove `ALLOW_SIGNUPS` to close the door behind you.
+Open http://localhost:3000 and create your account with the invite code from `.env.local`, then add a few titles by searching TMDB. In Settings, turn on two-factor authentication and add an Anthropic key before opening the recommend page. Keep the invite code only while people you trust are joining; rotate or remove it afterward.
 
 ## Environment variables
 
-Copy `.env.example` to `.env`. Never commit `.env`; it is already ignored.
+Copy `.env.example` to `.env.local`. Never commit local environment files; they are
+already ignored. Prisma and every operator script use the same precedence as the
+app: existing process variables first, then `.env.local`, then `.env` for any
+values still missing.
 
 | Variable | Required | What it is |
 | --- | --- | --- |
@@ -426,21 +431,22 @@ Copy `.env.example` to `.env`. Never commit `.env`; it is already ignored.
 | `NEXT_PUBLIC_SITE_URL` | Yes | Public base URL for metadata and the auth client. Match `BETTER_AUTH_URL`. |
 | `ENCRYPTION_KEY` | Required in production (dev/test may fall back to `BETTER_AUTH_SECRET`) | Encrypts per user Anthropic keys at rest. At least 32 characters; generate with `openssl rand -base64 32`. |
 | `ANTHROPIC_API_KEY` | Optional | A deployment wide Claude key, used when a user has not added their own. |
-| `ALLOW_SIGNUPS` | Optional | Public sign ups are closed unless this is `true`. Set it to bootstrap your account, then remove it. Existing users can always sign in. |
+| `SHARED_AI_DAILY_RUN_LIMIT` | Optional | Maximum shared-key recommendation runs across all accounts per UTC day. Blank or unset is uncapped; personal Anthropic keys bypass it. Apply the pending migration before setting a value; with the counter table missing, shared-key runs refuse to start rather than run unmetered. |
+| `SIGNUP_INVITE_CODE` | To create accounts | Shared code required by every email signup. At least 16 characters; generate with `openssl rand -base64 24`. Leave it unset to hide signup and reject new accounts. Existing users can still sign in. |
 | `CRON_SECRET` | For the scheduled sync | Bearer token the daily `/api/cron/sync` job must present. Generate with `openssl rand -base64 32`. Unset means the sync never runs; the endpoint refuses every request rather than running unauthenticated. |
 | `OWNER_EMAIL` | For `npm run import` | The email of the account the legacy workbook import writes into. The script exits if it is unset, or if no account with that email exists yet. Not read by the running app. |
 | `IMPORT_FILE` | Optional | Path to the workbook `npm run import` reads. Defaults to `data/watched.xlsx`. Not read by the running app. |
 
 `BETTER_AUTH_SECRET` and, in production, `ENCRYPTION_KEY` must be at least 32 characters; the app refuses to start otherwise, since both are key material rather than plain identifiers.
 
-The old `DISABLE_SIGNUPS` flag is deprecated. For one release, `DISABLE_SIGNUPS=false` is still honored as `ALLOW_SIGNUPS=true` and the server logs a one time warning. Move to `ALLOW_SIGNUPS` and drop the old variable.
+`ALLOW_SIGNUPS` and `DISABLE_SIGNUPS` are no longer recognized. Replace either old flag with `SIGNUP_INVITE_CODE` before inviting someone.
 
 ## Bringing in your library
 
 There are three ways to get titles in, and they all enrich from TMDB (posters, seasons, episodes, genres, runtime, original language).
 
 1. **Search and add.** The fastest path for a handful of titles. Search TMDB inside the app and add with one click.
-2. **Upload a sheet.** The in app importer on the Add page accepts an `.xlsx` or `.csv` file with a Title column, up to 2 MB and 250 rows. Year, Type, Status, a rating, a watch date, and an IMDb or TMDB id are all optional extras it will use if your file has them.
+2. **Upload a sheet.** The in app importer on the Add page accepts an `.xlsx` or `.csv` file with a Title column, up to 2 MB and 250 rows. It reads every worksheet with a Title or Name header, not just the first, so Celluloid's own multi-sheet Excel export re-imports in one upload. Year, Type, Status, a rating, a watch date, and an IMDb or TMDB id are all optional extras it will use if your file has them.
 3. **Import the legacy workbook.** If you are coming from a "Movies and TV Shows Watched" style spreadsheet with separate sheets, drop it at `data/watched.xlsx` and run the importer.
 
 **Uploading a sheet stages a review before anything touches your library.** Celluloid proposes a TMDB match for each row and shows a confidence label. From there you can:
@@ -478,10 +484,12 @@ The legacy workbook importer bypasses the review step entirely (it is meant for 
 | `npm run db:deploy` | Apply migrations to the database |
 | `npm run db:dump -- --target dev\|prod` | Create a confirmed, fail-closed full database snapshot under `backups/` before a migration |
 | `npm run db:deploy:prod` | Apply pending migrations to the production database named by `PROD_DATABASE_URL`, after showing the target host and asking for typed confirmation |
+| `npm run db:check` | Run the read-only data-hygiene checks against `DATABASE_URL` before adding database constraints |
+| `npm run db:backfill:discovered-at` | Repair legacy advance-published episode dates after showing the database target and requiring `backfill` confirmation |
 | `npm run db:migrate` | Create and apply a new migration in development |
 | `npm run db:generate` | Regenerate the Prisma client |
-| `npm run db:push` | Push the schema straight to the database, no migration file, then create the indexes a push does not. For prototyping only; use `db:migrate` for a real change |
-| `npm run db:indexes` | Re-apply the one index that migration SQL defines but `schema.prisma` cannot express (the case-insensitive unique index on tag names), which `db:push` would otherwise drop. Idempotent; `db:migrate` and `db:deploy` do not need it |
+| `npm run db:push` | Push the schema straight to the database, no migration file, then restore the index and CHECK constraints a push does not. For prototyping only; use `db:migrate` for a real change |
+| `npm run db:indexes` | Re-apply the database objects that migration SQL defines but `schema.prisma` cannot express: the case-insensitive unique index on tag names, plus nine CHECK constraints guarding ratings, counters, episode dates, and non-negative season/episode fields. All of it `db:push` would otherwise drop. Idempotent; `db:migrate` and `db:deploy` do not need it |
 | `npm run db:studio` | Open Prisma Studio to browse the data |
 | `npm run db:seed` | Prisma's seed hook, wired to the same legacy workbook import as `npm run import` |
 | `npm run import` | Import the legacy Excel workbook from `data/watched.xlsx` |
@@ -500,10 +508,10 @@ A short checklist for a clean first deploy:
 - [ ] Use fresh secrets in production. Rotate anything that has been on a local machine: the Neon password, the TMDB token, the Anthropic key, `BETTER_AUTH_SECRET`, and `ENCRYPTION_KEY`.
 - [ ] Both `BETTER_AUTH_URL` and `NEXT_PUBLIC_SITE_URL` point at the production URL.
 - [ ] `DATABASE_URL` is the pooled string and `DIRECT_URL` is the direct one.
-- [ ] Set `ALLOW_SIGNUPS=true` for the first deploy, create your account on the live site, then remove it and redeploy.
+- [ ] Set a fresh `SIGNUP_INVITE_CODE`, create your account on the live site, then rotate or remove the code when everyone you invited has joined.
 - [ ] Set `CRON_SECRET` if you want the nightly metadata sync. `vercel.json` registers the schedule; without the variable the endpoint refuses to run. A run where every account fails returns a non-200 status, so a broken night shows up red in Vercel's cron dashboard instead of passing silently.
 
-**Migrating production from your own machine.** During development, `DATABASE_URL` can point at a scratch Neon branch while the real database lives in `PROD_DATABASE_URL`. Two scripts respect that split so a migration can never land on the wrong side by accident: `npm run db:dump -- --target prod` takes the fail-closed pre-migration snapshot described under Backups, and `npm run db:deploy:prod` applies pending migrations to production only, printing the target host and asking you to type `deploy` before touching anything. Both read `.env.local` on their own, refuse a non-interactive shell, and never print credentials.
+**Migrating production from your own machine.** During development, `DATABASE_URL` can point at a scratch Neon branch while the real database lives in `PROD_DATABASE_URL`. Two scripts respect that split so a migration can never land on the wrong side by accident: `npm run db:dump -- --target prod` takes the fail-closed pre-migration snapshot described under Backups, and `npm run db:deploy:prod` applies pending migrations to production only, printing the target host and asking you to type `deploy` before touching anything. Like every operator script, both load `.env.local` before falling back to `.env`, refuse a non-interactive shell, and never print credentials.
 
 ## Project structure
 
@@ -549,7 +557,7 @@ celluloid/
 
 ## Notes and limitations
 
-- Celluloid is a personal tool, not a multi tenant service. It supports more than one account, but it is meant to be locked to one by leaving `ALLOW_SIGNUPS` unset after setup.
+- Celluloid is a personal tool, not a multi tenant service. It supports a small circle of accounts through the shared invite code; remove the code when you are not inviting anyone.
 - An imported backlog has no ratings or watch dates at first, so the recommendation quality and the activity stats both improve as you rate titles and mark things watched. The "unrated" filter is the quick way to work through that.
 - TMDB matching is automatic and usually right, but a transliterated or regional title can occasionally match the wrong entry. The "needs match" filter and the per title "change match" control are there to fix those by hand.
 - The in memory rate limiter bounds bursts per server instance. For a single user deployment that is plenty; a busy multi user instance would want a shared store.

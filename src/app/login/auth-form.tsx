@@ -66,6 +66,7 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [capsLockOn, setCapsLockOn] = useState(false);
   const [code, setCode] = useState("");
@@ -114,11 +115,13 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
       }
 
       if (isSignup) {
-        const { error } = await authClient.signUp.email({
+        const signup = {
           name: name.trim() || email.split("@")[0],
           email: email.trim(),
           password,
-        });
+          inviteCode: inviteCode.trim(),
+        };
+        const { error } = await authClient.signUp.email(signup);
         if (error) {
           setError(
             friendlyAuthError(
@@ -246,7 +249,7 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
               // margin cancels it in the layout, keeping field rhythm identical.
               className="-m-1 overflow-hidden"
             >
-              <div className="p-1">
+              <div className="flex flex-col gap-4 p-1">
                 <Field label="Name" htmlFor="login-name">
                   <Input
                     id="login-name"
@@ -257,6 +260,22 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
                     autoComplete="name"
                     className="h-11 sm:h-11"
                   />
+                </Field>
+                <Field label="Invite code" htmlFor="login-invite-code">
+                  <Input
+                    id="login-invite-code"
+                    name="invite-code"
+                    type="password"
+                    value={inviteCode}
+                    onChange={(e) => setInviteCode(e.target.value)}
+                    autoComplete="off"
+                    aria-describedby="login-invite-help"
+                    className="h-11 sm:h-11"
+                    required
+                  />
+                  <p id="login-invite-help" className="text-xs text-faint">
+                    Use the code you received with your invitation.
+                  </p>
                 </Field>
               </div>
             </motion.div>
@@ -322,6 +341,13 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
         <Button type="submit" variant="primary" disabled={loading} className="mt-1">
           {loading ? "Please wait…" : isSignup ? "Create account" : "Sign in"}
         </Button>
+
+        {isSignup ? (
+          <p className="text-xs leading-relaxed text-faint">
+            After you join, turn on two-factor authentication in Settings for extra
+            protection.
+          </p>
+        ) : null}
       </form>
 
       {!signupsDisabled ? (

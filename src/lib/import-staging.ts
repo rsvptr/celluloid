@@ -53,6 +53,15 @@ type JobWithItems = Awaited<ReturnType<typeof findImportJob>>;
 export const IMPORT_STAGING_BUDGET_MS = 35_000;
 
 /**
+ * Wall-clock budget for one commit request. Vercel may terminate the route at
+ * 60 seconds, so stop STARTING title writes after 45 seconds and leave the
+ * remaining items in COMMITTING for the client's existing resumable loop.
+ * The 15-second tail is deliberate headroom for the last item, outcome write,
+ * serialization, and response flush.
+ */
+export const IMPORT_COMMIT_BUDGET_MS = 45_000;
+
+/**
  * How long a PARSING job may sit before it is treated as the corpse of a killed
  * upload rather than work in progress. A parse only lives for the length of one
  * request, so anything older than this is never coming back.
@@ -891,6 +900,7 @@ async function refreshJobOutcome(userId: string, job: NonNullable<JobWithItems>)
 export async function commitImportJobChunk(
   userId: string,
   jobId: string,
+  deadlineAt = Date.now() + IMPORT_COMMIT_BUDGET_MS,
 ): Promise<StagedImportJobView | null> {
   // Claim the job conditionally. Reading the status and then writing COMMITTING
   // unconditionally meant a cancel landing between the two was erased and the
@@ -920,6 +930,11 @@ export async function commitImportJobChunk(
     )
     .slice(0, IMPORT_COMMIT_BATCH_SIZE);
   for (const item of candidates) {
+    // Each item may make several cold TMDB requests before its bounded DB
+    // write. Once the request budget is gone, starting another is what lets the
+    // platform kill us mid-item; stopping here leaves that row untouched and
+    // therefore safely resumable by the next commit request.
+    if (Date.now() >= deadlineAt) break;
     const state = await prisma.importJob.findFirst({
       where: { id: job.id, userId },
       select: { status: true },

@@ -9,6 +9,8 @@ export type ExportStatus =
 
 export interface ExportRow {
   id: string;
+  /** Durable TMDB identity used to make Celluloid xlsx exports re-import exactly. */
+  tmdbId: number | null;
   name: string;
   mediaType: "movie" | "tv";
   year: number | null;
@@ -452,7 +454,7 @@ export function tasteSummary(
     onHold,
   );
   block(
-    "ABANDONED / didn't finish (do NOT recommend things like these):",
+    "DROPPED / didn't finish (do NOT recommend things like these):",
     abandoned,
     true,
     bareExclusions,

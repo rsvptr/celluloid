@@ -98,6 +98,8 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
   const [open, setOpen] = useState(false);
   const [titles, setTitles] = useState<TitleIndexEntry[]>(seed);
   const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
   const [search, setSearch] = useState("");
   // null = the root list. Non-null = picking a title for that action.
   const [action, setAction] = useState<ActionKind | null>(null);
@@ -134,18 +136,24 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
     if (!open) return;
     let cancelled = false;
     fetch("/api/titles")
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => {
+        if (!r.ok) throw new Error("title-index-request-failed");
+        return r.json();
+      })
       .then((d) => {
         if (!cancelled && d?.titles) {
           setTitles(d.titles as TitleIndexEntry[]);
           setLoaded(true);
+          setLoadError(null);
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!cancelled) setLoadError("Couldn't load your titles.");
+      });
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, retryKey]);
 
   function close() {
     setOpen(false);
@@ -181,7 +189,11 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
         toast.success(`Logged ${title.name}. Watched ${n} ${n === 1 ? "time" : "times"}.`);
       } else {
         const status: WatchStatus = kind === "watched" ? "WATCHED" : "WATCHLIST";
-        await updateTitle(title.id, { status });
+        const res = await updateTitle(title.id, { status });
+        if (res.error) {
+          toast.error(res.error);
+          return;
+        }
         toast.success(
           kind === "watched"
             ? `Marked ${title.name} watched`
@@ -190,8 +202,8 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
       }
       close();
       router.refresh();
-    } catch (e) {
-      toast.error((e as Error).message);
+    } catch {
+      toast.error("Couldn't update that title. Try again.");
     } finally {
       setRunning(false);
     }
@@ -251,7 +263,25 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
       </div>
       <Command.List className="max-h-[60dvh] overflow-y-auto overscroll-contain p-2">
         <Command.Empty className="px-3 py-6 text-center text-sm text-muted">
-          {loaded || titles.length > 0 ? "No matches." : "Loading your titles…"}
+          {loadError ? (
+            <div className="flex flex-col items-center gap-2">
+              <p>{loadError}</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setLoadError(null);
+                  setRetryKey((v) => v + 1);
+                }}
+                className="focus-ring rounded-lg px-3 py-1.5 text-xs font-medium text-brand ring-1 ring-line hover:bg-surface-2"
+              >
+                Retry
+              </button>
+            </div>
+          ) : loaded || titles.length > 0 ? (
+            "No matches."
+          ) : (
+            "Loading your titles…"
+          )}
         </Command.Empty>
 
         {activeAction ? (

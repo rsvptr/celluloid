@@ -28,9 +28,9 @@ import { z } from "zod";
 // can be invoked with arbitrary arguments. TypeScript types are erased at
 // runtime and validate nothing, so each action safeParses its arguments before
 // any database or network work (immediately after the session check, which is
-// left where it is). Failures surface through each action's existing contract —
-// a thrown Error for the void / id-returning actions, a `{ error }` object for
-// addFromTmdb and rematchTitle.
+// left where it is). Expected failures use the `{ error }` result contract:
+// Next.js redacts thrown Server Action messages in production, while these
+// messages are safe and meant to help the owner recover.
 
 /**
  * Hard ceiling on ids processed per bulk call, after dedup. This is a
@@ -41,8 +41,9 @@ import { z } from "zod";
  */
 const MAX_BULK_IDS = 1000;
 
-/** Error message returned/thrown when a deduped id list exceeds MAX_BULK_IDS. */
+/** Error message returned when a deduped id list exceeds MAX_BULK_IDS. */
 const TOO_MANY_IDS_MESSAGE = `Too many titles selected (max ${MAX_BULK_IDS}).`;
+const SIGNED_OUT_MESSAGE = "You're signed out. Sign in and try again.";
 
 /** Our own cuid primary keys: non-empty, bounded to reject oversized payloads. */
 const idSchema = z.string().min(1).max(64);
@@ -133,24 +134,23 @@ const tagColorSchema = z.object({
 });
 
 /** Dedupe an id list. Does not truncate — callers must reject oversized lists
- * outright (via requireWithinBulkLimit) rather than silently drop ids. */
+ * outright (via bulkLimitError) rather than silently drop ids. */
 function dedupeIds(ids: string[]): string[] {
   return [...new Set(ids)];
 }
 
 /**
- * Throws when a deduped id list exceeds MAX_BULK_IDS. Call this after
- * dedupeIds and before any DB work so an oversized selection does nothing
- * (no partial apply) instead of silently processing only the first slice.
+ * Returns an error when a deduped id list exceeds MAX_BULK_IDS. Call this
+ * after dedupeIds and before any DB work so an oversized selection does
+ * nothing (no partial apply) instead of silently processing only the first slice.
  */
-function requireWithinBulkLimit(ids: string[]): void {
-  if (ids.length > MAX_BULK_IDS) throw new Error(TOO_MANY_IDS_MESSAGE);
+function bulkLimitError(ids: string[]): string | null {
+  return ids.length > MAX_BULK_IDS ? TOO_MANY_IDS_MESSAGE : null;
 }
 
-async function getUserId(): Promise<string> {
+async function getUserId(): Promise<string | null> {
   const session = await getSession();
-  if (!session?.user) throw new Error("You're signed out. Sign in and try again.");
-  return session.user.id;
+  return session?.user?.id ?? null;
 }
 
 function toDate(iso: string | null | undefined): Date | null {
@@ -231,8 +231,10 @@ async function recomputeProgress(titleId: string) {
   // interleave (both count, then the stale write lands last). With the lock,
   // the second recompute waits and recounts AFTER the first one committed.
   await prisma.$transaction(async (tx) => {
-    const rows = await tx.$queryRaw<{ status: WatchStatus; watchedAt: Date | null }[]>`
-      SELECT status, "watchedAt" FROM "Title" WHERE id = ${titleId} FOR UPDATE`;
+    const rows = await tx.$queryRaw<
+      { userId: string; status: WatchStatus; watchedAt: Date | null }[]
+    >`SELECT "userId", status, "watchedAt" FROM "Title"
+      WHERE id = ${titleId} FOR UPDATE`;
     const title = rows[0];
     if (!title) return; // title removed concurrently; nothing to reconcile
 
@@ -242,9 +244,13 @@ async function recomputeProgress(titleId: string) {
     });
 
     let status = title.status;
-    // Don't override deliberate ON_HOLD / DROPPED choices.
+    // Don't override deliberate ON_HOLD / DROPPED choices. At zero progress,
+    // preserve every deliberate state except WATCHED: removing the final tick
+    // must stop claiming the show is complete, but WATCHING stays WATCHING.
     if (status !== WatchStatus.ON_HOLD && status !== WatchStatus.DROPPED) {
-      if (watched === 0) status = WatchStatus.WATCHLIST;
+      if (watched === 0) {
+        if (status === WatchStatus.WATCHED) status = WatchStatus.WATCHLIST;
+      }
       else if (total > 0 && watched >= total) status = WatchStatus.WATCHED;
       else status = WatchStatus.WATCHING;
     }
@@ -253,14 +259,38 @@ async function recomputeProgress(titleId: string) {
       watchedEpisodes: watched,
       status,
     };
-    // Stamp a completion date when a show finishes via the episode tracker
-    // (mirrors the movie auto-stamp and bulkSetStatus) so episode-by-episode
-    // completed TV feeds the recency signal. Only when not already dated.
-    if (status === WatchStatus.WATCHED && title.watchedAt == null) {
-      data.watchedAt = new Date();
-    }
+    const entersWatched =
+      status === WatchStatus.WATCHED && title.status !== WatchStatus.WATCHED;
+    // The tracker models progress, not repeat viewings. A correction gesture
+    // can temporarily move WATCHED -> WATCHING -> WATCHED; if completion
+    // history already survives, that is not a new watch and must not restamp
+    // the cache. Genuine repeats go through logWatch as REWATCH events.
+    const priorCompletion = entersWatched
+      ? await tx.watchEvent.findFirst({
+          where: {
+            userId: title.userId,
+            titleId,
+            kind: { in: [WatchEventKind.TITLE_COMPLETED, WatchEventKind.REWATCH] },
+          },
+          select: { id: true },
+        })
+      : null;
+    const logsCompletion = entersWatched && priorCompletion == null;
+    const completedAt = logsCompletion ? new Date() : null;
+    if (completedAt) data.watchedAt = completedAt;
 
     await tx.title.update({ where: { id: titleId }, data });
+    if (completedAt) {
+      await tx.watchEvent.create({
+        data: {
+          userId: title.userId,
+          titleId,
+          kind: WatchEventKind.TITLE_COMPLETED,
+          occurredAt: completedAt,
+          source: WatchEventSource.BULK,
+        },
+      });
+    }
   });
 }
 
@@ -277,11 +307,12 @@ export async function updateTitle(
   },
 ) {
   const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   // Server actions are network-callable with arbitrary args. Validate the whole
   // payload up front (unknown status, non-finite/oversized rating, oversized
   // notes, non-date watchedAt) so bad input is a clear error, not a Prisma 500.
   const parsed = updateTitleArgsSchema.safeParse({ id, data });
-  if (!parsed.success) throw new Error("Invalid request. Refresh and try again.");
+  if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   const input = parsed.data.data;
 
   const now = new Date();
@@ -351,10 +382,32 @@ export async function updateTitle(
     // Completing a TV title from its status select also settles every aired
     // episode. Title-first locking keeps this ordered with all tracker writes.
     if (input.status === WatchStatus.WATCHED && (title.totalEpisodes ?? 0) > 0) {
-      await tx.episode.updateMany({
-        where: { season: { titleId: id }, watched: false, ...airedEpisodeFilter(now) },
-        data: { watched: true, watchedAt: autoWatchedAt ?? now },
+      const episodeWatchedAt = newWatchedAt ?? now;
+      const unwatchedAired = {
+        season: { titleId: id },
+        watched: false,
+        ...airedEpisodeFilter(now),
+      };
+      const toWatch = await tx.episode.findMany({
+        where: unwatchedAired,
+        select: { id: true },
       });
+      await tx.episode.updateMany({
+        where: unwatchedAired,
+        data: { watched: true, watchedAt: episodeWatchedAt },
+      });
+      if (toWatch.length) {
+        await tx.watchEvent.createMany({
+          data: toWatch.map((episode) => ({
+            userId,
+            titleId: id,
+            episodeId: episode.id,
+            kind: WatchEventKind.EPISODE_WATCHED,
+            occurredAt: episodeWatchedAt,
+            source: WatchEventSource.BULK,
+          })),
+        });
+      }
       const [episodeRows, watchedEpisodes] = await Promise.all([
         tx.episode.count({ where: { season: { titleId: id } } }),
         tx.episode.count({ where: { season: { titleId: id }, watched: true } }),
@@ -398,27 +451,30 @@ export async function updateTitle(
           where: { id: latest.id },
           data: { occurredAt: newWatchedAt },
         });
+        await syncWatchedAtFromEvents(tx, id);
       }
     }
     return true;
   });
-  if (!found) throw new Error("Title not found.");
+  if (!found) return { error: "Title not found." };
   revalidateAll(id);
+  return {};
 }
 
 /**
  * D-F2: record an explicit viewing. Logs a REWATCH when the title is already
- * WATCHED, otherwise a TITLE_COMPLETED, promotes the title to WATCHED, and moves
- * the watchedAt cache forward to max(existing, occurredAt) so a back-dated log
- * never rewinds a later completion. Title-FOR-UPDATE-first so the event, the
- * status/date cache and the returned count are one consistent unit. Returns the
- * fresh completion+rewatch count for the "Watched n times" toast.
+ * WATCHED and a TITLE_COMPLETED when the viewing truthfully completes it. A
+ * partly watched TV title is directed to the episode tracker: the generic log
+ * has no episode coordinate and therefore cannot honestly record either an
+ * episode or the whole-series completion. Title-FOR-UPDATE-first keeps the
+ * event, status/date cache and returned completion count consistent.
  */
 export async function logWatch(
   titleId: string,
   input: { occurredAt: string; note?: string | null },
 ): Promise<{ ok?: boolean; watchCount?: number; error?: string }> {
   const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const parsed = logWatchSchema.safeParse({
     titleId,
     occurredAt: input.occurredAt,
@@ -444,6 +500,16 @@ export async function logWatch(
     const row = rows[0];
     if (!row) return null; // not found or not owned
 
+    const partiallyWatchedTv =
+      row.totalEpisodes !== null &&
+      row.totalEpisodes > 0 &&
+      row.watchedEpisodes < row.totalEpisodes;
+    if (partiallyWatchedTv && row.status !== WatchStatus.WATCHED) {
+      return {
+        error:
+          "This show is still in progress. Log individual episodes from the episode tracker instead.",
+      };
+    }
     const kind =
       row.status === WatchStatus.WATCHED
         ? WatchEventKind.REWATCH
@@ -465,25 +531,9 @@ export async function logWatch(
         ? row.watchedAt
         : occurred;
 
-    // Logging a watch on a show you're only partway through must NOT claim the
-    // whole show is finished. It used to force WATCHED unconditionally, which
-    // recomputeProgress then reverted to WATCHING on the very next episode
-    // tick — the status visibly flip-flopped for no reason the user could see.
-    // A show with episode rows and unwatched ones left is in progress, so say
-    // so; movies, episodeless titles and fully-watched shows still complete.
-    // A title already WATCHED stays WATCHED (this log is a rewatch).
-    const partiallyWatchedTv =
-      row.totalEpisodes !== null &&
-      row.totalEpisodes > 0 &&
-      row.watchedEpisodes < row.totalEpisodes;
-    const nextStatus =
-      row.status === WatchStatus.WATCHED || !partiallyWatchedTv
-        ? WatchStatus.WATCHED
-        : WatchStatus.WATCHING;
-
     await tx.title.update({
       where: { id: titleId },
-      data: { status: nextStatus, watchedAt: nextWatchedAt },
+      data: { status: WatchStatus.WATCHED, watchedAt: nextWatchedAt },
     });
 
     const watchCount = await tx.watchEvent.count({
@@ -496,6 +546,7 @@ export async function logWatch(
   });
 
   if (!result) return { error: "Title not found." };
+  if ("error" in result) return result;
   revalidateAll(titleId);
   return { ok: true, watchCount: result.watchCount };
 }
@@ -547,6 +598,7 @@ export async function updateWatchEvent(
   input: { occurredAt: string; note?: string | null },
 ): Promise<{ ok?: boolean; error?: string }> {
   const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const parsed = watchEventEditSchema.safeParse({
     eventId,
     occurredAt: input.occurredAt,
@@ -555,8 +607,12 @@ export async function updateWatchEvent(
   if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   const occurred = toDate(parsed.data.occurredAt);
   if (!occurred) return { error: "Invalid request. Refresh and try again." };
-  const trimmed = parsed.data.note?.trim();
-  const note = trimmed ? trimmed.slice(0, 500) : null;
+  const noteInput = parsed.data.note;
+  const trimmedNote = noteInput?.trim();
+  const noteUpdate =
+    noteInput === undefined
+      ? {}
+      : { note: trimmedNote ? trimmedNote.slice(0, 500) : null };
 
   const event = await prisma.watchEvent.findFirst({
     where: { id: eventId, userId },
@@ -572,7 +628,7 @@ export async function updateWatchEvent(
     if (!rows[0]) return; // title removed concurrently
     await tx.watchEvent.update({
       where: { id: event.id },
-      data: { occurredAt: occurred, note },
+      data: { occurredAt: occurred, ...noteUpdate },
     });
     await syncWatchedAtFromEvents(tx, event.titleId);
   });
@@ -591,6 +647,7 @@ export async function deleteWatchEvent(
   eventId: string,
 ): Promise<{ ok?: boolean; watchCount?: number; error?: string }> {
   const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const parsed = watchEventIdSchema.safeParse({ eventId });
   if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
 
@@ -620,8 +677,9 @@ export async function deleteWatchEvent(
 
 export async function removeTitle(id: string) {
   const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const parsed = idArgSchema.safeParse({ id });
-  if (!parsed.success) throw new Error("Invalid request. Refresh and try again.");
+  if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   // Soft delete: move the title to Trash (stamp deletedAt) instead of hard
   // deleting, so it can be restored — with every piece of personal data intact
   // (status/rating/notes/tags/episode progress) — from the library's Trash view.
@@ -633,12 +691,14 @@ export async function removeTitle(id: string) {
     data: { deletedAt: new Date() },
   });
   revalidateAll(id);
+  return {};
 }
 
 export async function restoreTitle(id: string) {
   const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const parsed = idArgSchema.safeParse({ id });
-  if (!parsed.success) throw new Error("Invalid request. Refresh and try again.");
+  if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   // Clear the soft-delete flag. Nothing else was touched on delete, so the title
   // returns exactly as it was. Scoped to already-trashed rows (and the user) so a
   // stray call can't perturb a live title.
@@ -647,12 +707,14 @@ export async function restoreTitle(id: string) {
     data: { deletedAt: null },
   });
   revalidateAll(id);
+  return {};
 }
 
 export async function purgeTitle(id: string) {
   const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const parsed = idArgSchema.safeParse({ id });
-  if (!parsed.success) throw new Error("Invalid request. Refresh and try again.");
+  if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   // Permanent delete. Season/Episode/WatchEvent/TitleTag/ShareListItem rows cascade
   // (onDelete: Cascade); ImportItem.titleId is set null. Restricted to rows already
   // in Trash so the only route to a hard delete is remove-then-purge — a live title
@@ -660,6 +722,7 @@ export async function purgeTitle(id: string) {
   // safely no-ops rather than nuking the just-restored title.
   await prisma.title.deleteMany({ where: { id, userId, deletedAt: { not: null } } });
   revalidateAll();
+  return {};
 }
 
 /**
@@ -673,8 +736,9 @@ export async function purgeTitle(id: string) {
  * lingering row keeps occupying its (userId, mediaType, tmdbId) slot — which
  * silently blocks re-adding that title from search.
  */
-export async function emptyTrash(): Promise<{ count: number }> {
+export async function emptyTrash(): Promise<{ count?: number; error?: string }> {
   const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const res = await prisma.title.deleteMany({
     where: { userId, deletedAt: { not: null } },
   });
@@ -686,13 +750,14 @@ export async function emptyTrash(): Promise<{ count: number }> {
 
 export async function setEpisodeWatched(episodeId: string, watched: boolean) {
   const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const parsed = episodeToggleSchema.safeParse({ episodeId, watched });
-  if (!parsed.success) throw new Error("Invalid request. Refresh and try again.");
+  if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   const ep = await prisma.episode.findFirst({
     where: { id: episodeId, season: { title: { userId } } },
     select: { id: true, season: { select: { titleId: true } } },
   });
-  if (!ep) throw new Error("Episode not found.");
+  if (!ep) return { error: "Episode not found." };
   const titleId = ep.season.titleId;
 
   // Flip the episode flag and its WatchEvent together, under a Title lock taken
@@ -746,17 +811,19 @@ export async function setEpisodeWatched(episodeId: string, watched: boolean) {
   });
   await recomputeProgress(titleId);
   revalidateAll(titleId);
+  return {};
 }
 
 export async function setSeasonWatched(seasonId: string, watched: boolean) {
   const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const parsed = seasonToggleSchema.safeParse({ seasonId, watched });
-  if (!parsed.success) throw new Error("Invalid request. Refresh and try again.");
+  if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   const season = await prisma.season.findFirst({
     where: { id: seasonId, title: { userId } },
     select: { titleId: true },
   });
-  if (!season) throw new Error("Season not found.");
+  if (!season) return { error: "Season not found." };
   const titleId = season.titleId;
 
   // Both directions take the same Title-first lock. The old false branch was a
@@ -801,17 +868,19 @@ export async function setSeasonWatched(seasonId: string, watched: boolean) {
   });
   await recomputeProgress(titleId);
   revalidateAll(titleId);
+  return {};
 }
 
 export async function setAllEpisodesWatched(titleId: string, watched: boolean) {
   const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const parsed = allEpisodesSchema.safeParse({ titleId, watched });
-  if (!parsed.success) throw new Error("Invalid request. Refresh and try again.");
+  if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   const title = await prisma.title.findFirst({
     where: { id: titleId, userId },
     select: { id: true },
   });
-  if (!title) throw new Error("Title not found.");
+  if (!title) return { error: "Title not found." };
 
   // As with the season action, serialize both directions with rematch/restore
   // and every other episode writer by taking the Title lock first.
@@ -857,6 +926,7 @@ export async function setAllEpisodesWatched(titleId: string, watched: boolean) {
   });
   await recomputeProgress(titleId);
   revalidateAll(titleId);
+  return {};
 }
 
 /**
@@ -874,10 +944,11 @@ export async function setAllEpisodesWatched(titleId: string, watched: boolean) {
  */
 export async function setEpisodesWatchedThrough(
   episodeId: string,
-): Promise<{ count: number }> {
+): Promise<{ count?: number; error?: string }> {
   const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const parsed = episodesThroughSchema.safeParse({ episodeId });
-  if (!parsed.success) throw new Error("Invalid request. Refresh and try again.");
+  if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
 
   const anchor = await prisma.episode.findFirst({
     where: { id: episodeId, season: { title: { userId } } },
@@ -887,7 +958,7 @@ export async function setEpisodesWatchedThrough(
       season: { select: { titleId: true } },
     },
   });
-  if (!anchor) throw new Error("Episode not found.");
+  if (!anchor) return { error: "Episode not found." };
   const titleId = anchor.season.titleId;
 
   const changed = await prisma.$transaction(async (tx) => {
@@ -1020,6 +1091,7 @@ export async function addFromTmdb(
   restored?: boolean;
 }> {
   const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const parsed = addFromTmdbSchema.safeParse({ tmdbId, mediaType });
   if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   const mt = mediaType === "tv" ? MediaType.TV : MediaType.MOVIE;
@@ -1173,6 +1245,7 @@ export async function rematchTitle(
   mediaType: "movie" | "tv",
 ): Promise<{ ok?: boolean; error?: string; existingId?: string }> {
   const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const parsed = rematchSchema.safeParse({ titleId, tmdbId, mediaType });
   if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   const current = await prisma.title.findFirst({
@@ -1415,10 +1488,12 @@ async function ownedTitleIds(userId: string, ids: string[]): Promise<string[]> {
 
 export async function bulkSetStatus(ids: string[], status: WatchStatus) {
   const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const parsed = bulkStatusSchema.safeParse({ ids, status });
-  if (!parsed.success) throw new Error("Invalid request. Refresh and try again.");
+  if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   ids = dedupeIds(parsed.data.ids);
-  requireWithinBulkLimit(ids);
+  const limitError = bulkLimitError(ids);
+  if (limitError) return { error: limitError };
   const owned = await prisma.title.findMany({
     where: { id: { in: ids }, userId },
     select: { id: true },
@@ -1442,10 +1517,31 @@ export async function bulkSetStatus(ids: string[], status: WatchStatus) {
         if (current.mediaType === MediaType.TV) {
           // Aired episodes only: pre-ticking an unaired episode suppresses its
           // future "New" badge and upcoming entry.
+          const unwatchedAired = {
+            season: { titleId },
+            watched: false,
+            ...airedEpisodeFilter(now),
+          };
+          const toWatch = await tx.episode.findMany({
+            where: unwatchedAired,
+            select: { id: true },
+          });
           await tx.episode.updateMany({
-            where: { season: { titleId }, watched: false, ...airedEpisodeFilter(now) },
+            where: unwatchedAired,
             data: { watched: true, watchedAt: now },
           });
+          if (toWatch.length) {
+            await tx.watchEvent.createMany({
+              data: toWatch.map((episode) => ({
+                userId,
+                titleId,
+                episodeId: episode.id,
+                kind: WatchEventKind.EPISODE_WATCHED,
+                occurredAt: now,
+                source: WatchEventSource.BULK,
+              })),
+            });
+          }
           const [episodeRows, watchedEpisodes] = await Promise.all([
             tx.episode.count({ where: { season: { titleId } } }),
             tx.episode.count({ where: { season: { titleId }, watched: true } }),
@@ -1502,10 +1598,12 @@ export async function bulkSetStatus(ids: string[], status: WatchStatus) {
 
 export async function bulkSetFavorite(ids: string[], favorite: boolean) {
   const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const parsed = bulkFavoriteSchema.safeParse({ ids, favorite });
-  if (!parsed.success) throw new Error("Invalid request. Refresh and try again.");
+  if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   ids = dedupeIds(parsed.data.ids);
-  requireWithinBulkLimit(ids);
+  const limitError = bulkLimitError(ids);
+  if (limitError) return { error: limitError };
   const res = await prisma.title.updateMany({
     where: { id: { in: ids }, userId },
     data: { favorite },
@@ -1516,12 +1614,14 @@ export async function bulkSetFavorite(ids: string[], favorite: boolean) {
 
 export async function bulkAddTag(ids: string[], tagName: string) {
   const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const parsed = bulkTagSchema.safeParse({ ids, tagName });
-  if (!parsed.success) throw new Error("Invalid request. Refresh and try again.");
+  if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   ids = dedupeIds(parsed.data.ids);
-  requireWithinBulkLimit(ids);
+  const limitError = bulkLimitError(ids);
+  if (limitError) return { error: limitError };
   const name = normTagName(tagName);
-  if (!name) throw new Error("Tag name is required.");
+  if (!name) return { error: "Tag name is required." };
 
   const owned = await ownedTitleIds(userId, ids);
   if (owned.length === 0) return { count: 0, tag: name };
@@ -1537,12 +1637,14 @@ export async function bulkAddTag(ids: string[], tagName: string) {
 
 export async function bulkRemoveTag(ids: string[], tagName: string) {
   const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const parsed = bulkTagSchema.safeParse({ ids, tagName });
-  if (!parsed.success) throw new Error("Invalid request. Refresh and try again.");
+  if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   ids = dedupeIds(parsed.data.ids);
-  requireWithinBulkLimit(ids);
+  const limitError = bulkLimitError(ids);
+  if (limitError) return { error: limitError };
   const name = normTagName(tagName);
-  if (!name) throw new Error("Tag name is required.");
+  if (!name) return { error: "Tag name is required." };
 
   const owned = await ownedTitleIds(userId, ids);
   if (owned.length === 0) return { count: 0, tag: name };
@@ -1564,10 +1666,12 @@ export async function bulkRemoveTag(ids: string[], tagName: string) {
 
 export async function bulkRemoveTitles(ids: string[]) {
   const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const parsed = bulkIdsSchema.safeParse({ ids });
-  if (!parsed.success) throw new Error("Invalid request. Refresh and try again.");
+  if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   ids = dedupeIds(parsed.data.ids);
-  requireWithinBulkLimit(ids);
+  const limitError = bulkLimitError(ids);
+  if (limitError) return { error: limitError };
   // Soft delete: move the selection to Trash (see removeTitle). Only rows not
   // already trashed are stamped, so the returned count reflects titles actually
   // moved and any earlier deletion dates are left untouched.
@@ -1583,24 +1687,26 @@ export async function bulkRemoveTitles(ids: string[]) {
 
 export async function createTag(name: string, color?: string | null) {
   const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const parsed = createTagSchema.safeParse({ name, color });
-  if (!parsed.success) throw new Error("Invalid request. Refresh and try again.");
+  if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   const trimmed = normTagName(name);
-  if (!trimmed) throw new Error("Tag name is required.");
+  if (!trimmed) return { error: "Tag name is required." };
   const tag = await findOrCreateTag(userId, trimmed, color ?? null);
   revalidateAll();
-  return tag.id;
+  return { id: tag.id };
 }
 
 export async function toggleTitleTag(titleId: string, tagId: string, on: boolean) {
   const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const parsed = toggleTitleTagSchema.safeParse({ titleId, tagId, on });
-  if (!parsed.success) throw new Error("Invalid request. Refresh and try again.");
+  if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   const [title, tag] = await Promise.all([
     prisma.title.findFirst({ where: { id: titleId, userId }, select: { id: true } }),
     prisma.tag.findFirst({ where: { id: tagId, userId }, select: { id: true } }),
   ]);
-  if (!title || !tag) throw new Error("Title or tag not found.");
+  if (!title || !tag) return { error: "Title or tag not found." };
 
   if (on) {
     await prisma.titleTag.upsert({
@@ -1612,6 +1718,7 @@ export async function toggleTitleTag(titleId: string, tagId: string, on: boolean
     await prisma.titleTag.deleteMany({ where: { titleId, tagId } });
   }
   revalidateAll(titleId);
+  return {};
 }
 
 /**
@@ -1629,18 +1736,22 @@ export async function toggleTitleTag(titleId: string, tagId: string, on: boolean
  * The tag's own row is excluded from the check so a case-only rename
  * ("horror" -> "Horror") is allowed rather than reported as a clash with itself.
  */
-export async function renameTag(tagId: string, name: string): Promise<{ name: string }> {
+export async function renameTag(
+  tagId: string,
+  name: string,
+): Promise<{ name?: string; error?: string }> {
   const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const parsed = renameTagSchema.safeParse({ tagId, name });
-  if (!parsed.success) throw new Error("Invalid request. Refresh and try again.");
+  if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   const next = normTagName(parsed.data.name);
-  if (!next) throw new Error("Tag name is required.");
+  if (!next) return { error: "Tag name is required." };
 
   const tag = await prisma.tag.findFirst({
     where: { id: parsed.data.tagId, userId },
     select: { id: true, name: true },
   });
-  if (!tag) throw new Error("Tag not found.");
+  if (!tag) return { error: "Tag not found." };
   if (tag.name === next) return { name: tag.name };
 
   const taken = await prisma.tag.findFirst({
@@ -1651,13 +1762,13 @@ export async function renameTag(tagId: string, name: string): Promise<{ name: st
     },
     select: { name: true },
   });
-  if (taken) throw new Error(`You already have a tag called “${taken.name}”.`);
+  if (taken) return { error: `You already have a tag called “${taken.name}”.` };
 
   try {
     await prisma.tag.update({ where: { id: tag.id }, data: { name: next } });
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-      throw new Error(`You already have a tag called “${next}”.`);
+      return { error: `You already have a tag called “${next}”.` };
     }
     throw err;
   }
@@ -1666,22 +1777,29 @@ export async function renameTag(tagId: string, name: string): Promise<{ name: st
 }
 
 /** Set (or clear, with null) a tag's colour. Palette values only — see tag-colors.ts. */
-export async function setTagColor(tagId: string, color: string | null): Promise<void> {
+export async function setTagColor(
+  tagId: string,
+  color: string | null,
+): Promise<{ error?: string }> {
   const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const parsed = tagColorSchema.safeParse({ tagId, color });
-  if (!parsed.success) throw new Error("Invalid request. Refresh and try again.");
+  if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   const updated = await prisma.tag.updateMany({
     where: { id: parsed.data.tagId, userId },
     data: { color: parsed.data.color },
   });
-  if (updated.count === 0) throw new Error("Tag not found.");
+  if (updated.count === 0) return { error: "Tag not found." };
   revalidateAll();
+  return {};
 }
 
 export async function deleteTag(tagId: string) {
   const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const parsed = tagIdArgSchema.safeParse({ tagId });
-  if (!parsed.success) throw new Error("Invalid request. Refresh and try again.");
+  if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   await prisma.tag.deleteMany({ where: { id: tagId, userId } });
   revalidateAll();
+  return {};
 }

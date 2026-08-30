@@ -4,8 +4,9 @@ import { windowActivity } from "../src/components/charts";
 
 // Fixed "today" so the window is deterministic regardless of when the test
 // runs. 2026-07-17 is a Friday; the grid's last column ends on the following
-// Saturday (2026-07-18).
-const TODAY = new Date("2026-07-17T12:00:00.000Z");
+// Saturday (2026-07-18). windowActivity takes the owner-zone day key
+// directly now (matching getStats' todayKey), not a client Date.
+const TODAY = "2026-07-17";
 
 describe("windowActivity", () => {
   it("excludes a high-count day outside the visible window from total and max", () => {

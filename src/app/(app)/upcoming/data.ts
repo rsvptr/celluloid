@@ -1,6 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
-import { dayKeyInZone } from "@/lib/data";
+import { dayKeyInZone, getUserPrefs } from "@/lib/data";
 import { MediaType, WatchStatus } from "@/generated/prisma/client";
 
 /**
@@ -75,10 +75,7 @@ function dateKey(date: Date): string {
 }
 
 export async function getUpcoming(userId: string): Promise<UpcomingData> {
-  const owner = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { timeZone: true },
-  });
+  const owner = await getUserPrefs(userId);
   // "Today" is the owner's today, not the server's: a show airing tonight in
   // Kochi must not read as yesterday because the function ran in UTC.
   const todayKey = dayKeyInZone(new Date(), owner?.timeZone || "UTC");

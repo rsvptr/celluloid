@@ -12,6 +12,7 @@ import { norm, yearOf, pickBest, nameYearKey } from "@/lib/tmdb-match";
 import {
   anthropicClient,
   friendlyAnthropicError,
+  reserveSharedAiRun,
   resolveAnthropicKey,
 } from "@/lib/anthropic";
 import { createRecExtractor } from "@/lib/rec-stream";
@@ -92,6 +93,42 @@ export type RecStreamEvent =
   | { type: "warning"; message: string }
   | { type: "done"; total: number }
   | { type: "error"; error: string };
+
+const THINKING_HEARTBEAT_MS = 5_000;
+
+/** Keep the wire alive during extended-thinking stretches without flooding it. */
+export function shouldSendThinkingHeartbeat(
+  lastHeartbeatAt: number | null,
+  now: number,
+): boolean {
+  return lastHeartbeatAt === null || now - lastHeartbeatAt >= THINKING_HEARTBEAT_MS;
+}
+
+const SHARED_AI_LIMIT_REACHED =
+  "The app's shared AI allowance is used up for today. Add a personal Anthropic API key in Settings to keep going, or try again after 00:00 UTC.";
+
+/** Own-key runs bypass the shared counter entirely. */
+export async function sharedAiBudgetError(
+  usedFallback: boolean,
+  reserve: typeof reserveSharedAiRun = reserveSharedAiRun,
+): Promise<string | null> {
+  if (!usedFallback) return null;
+  const reservation = await reserve();
+  return reservation.allowed ? null : SHARED_AI_LIMIT_REACHED;
+}
+
+/** Explain when a requested genre has no strict TMDB mapping for this medium. */
+export function genreFilterAdvisory(
+  genre: string | undefined,
+  type: "all" | "movie" | "tv",
+  genreIds: ReadonlySet<number> | null | undefined,
+): string | null {
+  if (!genre || genreIds === null || genreIds === undefined || genreIds.size > 0) {
+    return null;
+  }
+  const scope = type === "movie" ? "movies" : type === "tv" ? "TV" : "movies or TV";
+  return `TMDB doesn't list “${genre}” for ${scope}, so Celluloid treated it as guidance instead of a strict filter for this run.`;
+}
 
 const REC_SCHEMA: Record<string, unknown> = {
   type: "object",
@@ -222,7 +259,7 @@ export function suppressionContext(rows: SuppressionRow[]): SuppressionContext {
  * list that only ever grows; the newest refusals are the ones most likely to
  * come back around, so an owner past the ceiling still gets the ones that matter.
  */
-const MAX_SUPPRESSIONS_LOADED = 2000;
+export const MAX_SUPPRESSIONS_LOADED = 2000;
 
 /** Load the owner's "not interested" list, newest first. */
 export async function loadSuppressions(userId: string): Promise<SuppressionContext> {
@@ -318,6 +355,8 @@ export interface StreamContext {
   libNameYear: Set<string>;
   excludeSet: Set<string>;
   seenKeys: Set<string>;
+  /** TMDB identities already accepted by enrichment in this run. */
+  resolvedKeys?: Set<string>;
   /**
    * The owner's "not interested" list. Optional so a context assembled without a
    * suppression load behaves exactly as it did before this layer existed.
@@ -413,6 +452,10 @@ export async function enrichRec(
         : r;
     }
     const mt = r.mediaType === "tv" ? MediaType.TV : MediaType.MOVIE;
+    const resolvedKey = `${r.mediaType}:${best.id}`;
+    const resolvedKeys = ctx.resolvedKeys ?? (ctx.resolvedKeys = new Set());
+    if (resolvedKeys.has(resolvedKey)) return null;
+    resolvedKeys.add(resolvedKey);
     if (ctx.existingSet.has(`${mt}:${best.id}`)) return null; // already in library
     // The refusal may have been recorded against a TMDB id, in which case only
     // the resolved match can see it — a name the model spelled differently, or
@@ -422,6 +465,8 @@ export async function enrichRec(
     // narrowed the SEARCH, but emitting it verbatim shipped wrong years to the
     // card and the dedupe whenever the claim was off by a year or two.
     const resolvedYear = yearOf(best) ?? r.year;
+    const resolvedTitle = r.mediaType === "tv" ? best.name : best.title;
+    ctx.seenKeys.add(nameYearKey(r.mediaType, resolvedTitle ?? r.title, resolvedYear));
     // TMDB may supply a year the model omitted; re-check ownership with it.
     if (ctx.libNameYear.has(nameYearKey(r.mediaType, r.title, resolvedYear))) return null;
     if (isSuppressedByName(ctx.suppressed, r.mediaType, r.title, resolvedYear)) return null;
@@ -455,7 +500,8 @@ export async function enrichRec(
     // An outage is not a no-match: the suggestion ships unverified, and the
     // run's terminal warning says so once — silently conflating the two made
     // "TMDB was down" indistinguishable from "this title doesn't exist".
-    if (!signal?.aborted && ctx.tallies) ctx.tallies.lookupFailed += 1;
+    if (signal?.aborted) return null;
+    if (ctx.tallies) ctx.tallies.lookupFailed += 1;
     return r;
   }
 }
@@ -493,12 +539,15 @@ export function terminalRecEvents(
   flags: {
     hitMaxTokens: boolean;
     hitRefusal: boolean;
+    /** The caller ended the run, so it owns any terminal explanation. */
+    aborted?: boolean;
     /** Suggestions dropped for violating a hard language/genre/era requirement. */
     filteredOut?: number;
     /** TMDB lookups that errored — those suggestions shipped unverified. */
     lookupFailed?: number;
   },
 ): RecStreamEvent[] {
+  if (flags.aborted) return [];
   if (accepted === 0) {
     if (flags.hitRefusal) {
       return [
@@ -566,12 +615,40 @@ export async function runRecommendationStream(
   const count = Math.min(30, Math.max(1, opts.count ?? 12));
   const type = opts.type ?? "all";
 
-  // If the client already went away before we did any work, stop here. Every
-  // await below re-checks, so we never start — or keep paying for — a run for a
-  // request no one is listening to. Bailing is a clean, error-free return.
+  // If the client already went away before we did any work, stop here. Bailing
+  // is a clean, error-free return.
   if (signal?.aborted) return;
 
-  const { key, usedFallback, hadUserKey } = await resolveAnthropicKey(userId);
+  // These lookups share only the user id and request options, so start them
+  // together instead of adding several round trips before the stream begins.
+  // Suppressions stay outside the cacheable brief even though they load here.
+  const explicitModel = isRecModel(opts.model) ? opts.model : null;
+  const hasPref = !!(opts.language || opts.genre || opts.era);
+  const userPrefPromise = explicitModel
+    ? Promise.resolve(null)
+    : prisma.user.findUnique({
+        where: { id: userId },
+        select: { recommendModel: true },
+      });
+  const genreIdsPromise = opts.genre
+    ? getGenreIdsByName(opts.genre, type === "all" ? ["movie", "tv"] : [type]).catch(
+        () => null,
+      )
+    : Promise.resolve(undefined);
+  const [keyInfo, rows, userPref, suppressed, existing, genreIds] = await Promise.all([
+    resolveAnthropicKey(userId),
+    getExportRows(userId),
+    userPrefPromise,
+    loadSuppressions(userId),
+    prisma.title.findMany({
+      where: { userId, tmdbId: { not: null }, deletedAt: null },
+      select: { tmdbId: true, mediaType: true },
+    }),
+    genreIdsPromise,
+  ]);
+  if (signal?.aborted) return;
+
+  const { key, usedFallback, hadUserKey } = keyInfo;
   if (!key) {
     emit({
       type: "error",
@@ -579,7 +656,6 @@ export async function runRecommendationStream(
     });
     return;
   }
-  if (signal?.aborted) return;
   // The user's own key exists but wouldn't decrypt, so we're silently on the
   // deployment default — tell them once, without failing the run. "No user key
   // at all" is the normal case and stays quiet.
@@ -590,8 +666,9 @@ export async function runRecommendationStream(
         "Your saved API key couldn't be used; falling back to the default. Re-enter it in Settings.",
     });
   }
+  const genreAdvisory = genreFilterAdvisory(opts.genre, type, genreIds);
+  if (genreAdvisory) emit({ type: "warning", message: genreAdvisory });
 
-  const rows = await getExportRows(userId);
   if (rows.length === 0) {
     emit({
       type: "error",
@@ -599,20 +676,11 @@ export async function runRecommendationStream(
     });
     return;
   }
-  if (signal?.aborted) return;
-
   // Precedence: explicit per-run model > the user's saved default > server default.
-  let model = DEFAULT_REC_MODEL;
-  if (isRecModel(opts.model)) {
-    model = opts.model;
-  } else {
-    const userPref = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { recommendModel: true },
-    });
-    if (isRecModel(userPref?.recommendModel)) model = userPref!.recommendModel!;
+  let model = explicitModel ?? DEFAULT_REC_MODEL;
+  if (!explicitModel && isRecModel(userPref?.recommendModel)) {
+    model = userPref.recommendModel;
   }
-  if (signal?.aborted) return;
   // Fail safe if a model is ever added to REC_MODELS without a caps entry.
   const caps = MODEL_CAPS[model] ?? { effort: false, adaptiveThinking: false };
 
@@ -637,7 +705,6 @@ export async function runRecommendationStream(
   // Over-ask so type/in-library/dedup/exclude attrition still leaves ~count
   // usable results. Generation is aborted the moment `count` are accepted, so
   // the over-ask costs nothing when attrition turns out to be low.
-  const hasPref = !!(opts.language || opts.genre || opts.era);
   const baseAsk = type === "all" ? count * 2 : count * 3 + 10;
   const askCount = Math.min(50, hasPref ? baseAsk + 10 : baseAsk);
 
@@ -653,20 +720,8 @@ export async function runRecommendationStream(
       const era = eraById(opts.era);
       requirements.era = { from: era.range[0], to: era.range[1] };
     }
-    if (opts.genre) {
-      requirements.genreIds = await getGenreIdsByName(
-        opts.genre,
-        type === "all" ? ["movie", "tv"] : [type],
-      ).catch(() => null);
-    }
+    if (opts.genre) requirements.genreIds = genreIds ?? null;
   }
-  if (signal?.aborted) return;
-
-  // The durable "not interested" list. It goes into the volatile request block
-  // and the run-time filters only — never into the brief, whose bytes have to
-  // stay identical run to run for the prompt-cache breakpoint below to hit.
-  const suppressed = await loadSuppressions(userId);
-  if (signal?.aborted) return;
 
   // A scoped basis means the watchlist/abandoned rows are OUTSIDE what the
   // owner chose to share this run — they enter the brief as bare identities
@@ -695,16 +750,12 @@ export async function runRecommendationStream(
   // titles are excluded (deletedAt: null) so a soft-deleted title no longer blocks
   // being recommended again — consistent with it being absent from the taste brief,
   // which is built from getExportRows (also deletedAt-filtered).
-  const existing = await prisma.title.findMany({
-    where: { userId, tmdbId: { not: null }, deletedAt: null },
-    select: { tmdbId: true, mediaType: true },
-  });
-  if (signal?.aborted) return;
   const ctx: StreamContext = {
     existingSet: new Set(existing.map((e) => `${e.mediaType}:${e.tmdbId}`)),
     libNameYear: new Set(rows.map((r) => nameYearKey(r.mediaType, r.name, r.year))),
     excludeSet: new Set((opts.exclude ?? []).map((t) => norm(t))),
     seenKeys: new Set(),
+    resolvedKeys: new Set(),
     suppressed,
     requirements,
     tallies: { filteredOut: 0, lookupFailed: 0 },
@@ -727,6 +778,24 @@ export async function runRecommendationStream(
   const cacheMinTokens = MODEL_CACHE_MIN_TOKENS[model] ?? 4096;
   const briefIsCacheable =
     (SYSTEM_PROMPT.length + brief.length) / APPROX_CHARS_PER_TOKEN >= cacheMinTokens;
+
+  if (signal?.aborted) return;
+  try {
+    const budgetError = await sharedAiBudgetError(usedFallback);
+    if (budgetError) {
+      emit({ type: "error", error: budgetError });
+      return;
+    }
+  } catch (error) {
+    console.error("Could not reserve the shared AI daily allowance:", error);
+    emit({
+      type: "error",
+      error:
+        "The shared AI allowance couldn't be checked. Add a personal Anthropic API key in Settings, or try again later.",
+    });
+    return;
+  }
+  if (signal?.aborted) return;
 
   const client = anthropicClient(key);
   const stream = client.messages.stream({
@@ -782,6 +851,7 @@ export async function runRecommendationStream(
   // hard ceiling on both.
   let reserved = 0;
   let statusSent: "thinking" | "generating" | null = null;
+  let lastHeartbeatAt: number | null = null;
   let stopped = false; // no further emits once set (enough results, or a failure)
   let hitMaxTokens = false; // model ran into the output ceiling (budget exhausted)
   let hitRefusal = false; // safety classifier declined the request (HTTP 200, not a thrown error)
@@ -843,10 +913,18 @@ export async function runRecommendationStream(
       } else if (event.type === "content_block_start") {
         if (event.content_block.type === "thinking" && statusSent === null) {
           statusSent = "thinking";
+          lastHeartbeatAt = Date.now();
           emit({ type: "status", phase: "thinking" });
         }
       } else if (event.type === "content_block_delta") {
-        if (event.delta.type === "text_delta") {
+        if (event.delta.type === "thinking_delta" && statusSent !== "generating") {
+          const now = Date.now();
+          if (shouldSendThinkingHeartbeat(lastHeartbeatAt, now)) {
+            statusSent = "thinking";
+            lastHeartbeatAt = now;
+            emit({ type: "status", phase: "thinking" });
+          }
+        } else if (event.delta.type === "text_delta") {
           if (statusSent !== "generating") {
             statusSent = "generating";
             emit({ type: "status", phase: "generating" });
@@ -888,6 +966,7 @@ export async function runRecommendationStream(
   for (const e of terminalRecEvents(accepted, count, {
     hitMaxTokens,
     hitRefusal,
+    aborted: signal?.aborted ?? false,
     filteredOut: ctx.tallies?.filteredOut ?? 0,
     lookupFailed: ctx.tallies?.lookupFailed ?? 0,
   })) {

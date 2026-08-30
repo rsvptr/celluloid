@@ -35,6 +35,17 @@ function watchedFromServer(seasons: SeasonVM[]): Record<string, boolean> {
   return m;
 }
 
+async function episodeActionFailure(
+  action: () => Promise<{ error?: string }>,
+): Promise<string | null> {
+  try {
+    const result = await action();
+    return result.error ?? null;
+  } catch {
+    return "Couldn't save your episode progress. Try again.";
+  }
+}
+
 export function SeasonTracker({
   titleId,
   seasons,
@@ -143,6 +154,7 @@ export function SeasonTracker({
   // so a slow failure can never clobber a later, already-settled change.
   const queueRef = useRef<Array<() => Promise<void>>>([]);
   const drainingRef = useRef(false);
+  const queueErrorRef = useRef<string | null>(null);
 
   async function drainQueue() {
     if (drainingRef.current) return; // a drain is already running
@@ -155,6 +167,9 @@ export function SeasonTracker({
     } finally {
       drainingRef.current = false;
     }
+    const error = queueErrorRef.current;
+    queueErrorRef.current = null;
+    if (error) toast.error(error);
     router.refresh();
   }
 
@@ -175,14 +190,14 @@ export function SeasonTracker({
     const next = !prev;
     applyWatched({ [epId]: next });
     enqueue(async () => {
-      try {
-        await setEpisodeWatched(epId, next);
-      } catch {
+      const error = await episodeActionFailure(() => setEpisodeWatched(epId, next));
+      if (error) {
         // Roll back only if nothing newer has touched this episode since — a
         // concurrent successful toggle elsewhere shouldn't be clobbered.
         if (latestWatchedRef.current[epId] === next) {
           applyWatched({ [epId]: prev });
         }
+        queueErrorRef.current ??= error;
       }
     });
   }
@@ -200,9 +215,8 @@ export function SeasonTracker({
     );
     applyWatched(Object.fromEntries(affected.map((e) => [e.id, value])));
     enqueue(async () => {
-      try {
-        await setSeasonWatched(season.id, value);
-      } catch {
+      const error = await episodeActionFailure(() => setSeasonWatched(season.id, value));
+      if (error) {
         // Roll back only episodes still holding the value this call set, not
         // the whole map — anything a later click already changed again is left
         // dirty rather than clobbered (that click's own job owns it now).
@@ -211,6 +225,7 @@ export function SeasonTracker({
           if (latestWatchedRef.current[id] === value) toRevert[id] = prevValue;
         }
         if (Object.keys(toRevert).length > 0) applyWatched(toRevert);
+        queueErrorRef.current ??= error;
       }
     });
   }
@@ -224,9 +239,10 @@ export function SeasonTracker({
     );
     applyWatched(Object.fromEntries(affected.map((e) => [e.id, value])));
     enqueue(async () => {
-      try {
-        await setAllEpisodesWatched(titleId, value);
-      } catch {
+      const error = await episodeActionFailure(() =>
+        setAllEpisodesWatched(titleId, value),
+      );
+      if (error) {
         // Roll back only the episodes this action touched AND that still hold
         // the value it set — not the whole map, and not anything re-edited since.
         const toRevert: Record<string, boolean> = {};
@@ -234,6 +250,7 @@ export function SeasonTracker({
           if (latestWatchedRef.current[id] === value) toRevert[id] = prevValue;
         }
         if (Object.keys(toRevert).length > 0) applyWatched(toRevert);
+        queueErrorRef.current ??= error;
       }
     });
   }
@@ -286,16 +303,26 @@ export function SeasonTracker({
     enqueue(async () => {
       try {
         const res = await setEpisodesWatchedThrough(ep.id);
+        if (res.error) {
+          const toRevert: Record<string, boolean> = {};
+          for (const [id, prevValue] of prevValues) {
+            if (latestWatchedRef.current[id] === true) toRevert[id] = prevValue;
+          }
+          if (Object.keys(toRevert).length > 0) applyWatched(toRevert);
+          queueErrorRef.current ??= res.error;
+          return;
+        }
+        const changed = res.count ?? 0;
         toast.success(
-          `Marked ${res.count} ${res.count === 1 ? "episode" : "episodes"} watched`,
+          `Marked ${changed} ${changed === 1 ? "episode" : "episodes"} watched`,
         );
-      } catch (e) {
+      } catch {
         const toRevert: Record<string, boolean> = {};
         for (const [id, prevValue] of prevValues) {
           if (latestWatchedRef.current[id] === true) toRevert[id] = prevValue;
         }
         if (Object.keys(toRevert).length > 0) applyWatched(toRevert);
-        toast.error((e as Error).message);
+        queueErrorRef.current ??= "Couldn't save your episode progress. Try again.";
       }
     });
   }

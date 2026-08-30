@@ -38,6 +38,7 @@ export default async function RecommendPage() {
     <div>
       <RecommendClient
         hasKey={info.hasApiKey || info.hasServerKey}
+        keySource={info.hasApiKey ? "personal" : info.hasServerKey ? "shared" : "none"}
         model={info.recommendModel ?? DEFAULT_REC_MODEL}
         tags={tags.map((t) => t.name)}
         languages={facets.languages}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { Check, Copy, Download, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { Button, Card, Input, Select, Spinner } from "@/components/ui";
@@ -17,6 +18,7 @@ import {
   toAiPrompt,
 } from "@/lib/export/format";
 import { cn } from "@/lib/utils";
+import { saveBlob } from "@/lib/save-blob";
 import {
   encodeExportRememberedState,
   REMEMBERED_COOKIE_NAMES,
@@ -92,6 +94,20 @@ export function ExportPanel({
   }, [format, filtered, count, rows]);
 
   const fmt = FORMATS.find((f) => f.key === format)!;
+
+  if (rows.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
+        <p className="text-sm text-muted">Nothing to export yet. Add a few titles first.</p>
+        <Link
+          href="/add"
+          className="focus-ring rounded text-sm font-medium text-brand hover:underline"
+        >
+          Add titles
+        </Link>
+      </div>
+    );
+  }
 
   function update<K extends keyof ExportScope>(key: K, value: ExportScope[K]) {
     setScope((s) => ({ ...s, [key]: value }));
@@ -433,23 +449,6 @@ export function ExportPanel({
       </div>
     </div>
   );
-}
-
-/**
- * Save a blob under `filename`. The anchor has to be in the document for the
- * synthetic click to count in every browser, and the object URL has to outlive
- * that click — revoking it in the same tick races the download in some of them,
- * so the revoke is deferred to the next task instead.
- */
-function saveBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function xlsxHref(scope: ExportScope): string {

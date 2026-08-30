@@ -89,10 +89,23 @@ export async function GET(request: Request) {
     );
   }
 
+  const runStartedAt = new Date();
   try {
     const result = await runScheduledSync({ deadline: Date.now() + RUN_BUDGET_MS });
     // A totally-failed run must not report 200 — see summarizeScheduledRun.
     const { totalFailure, degraded } = summarizeScheduledRun(result);
+    // One machine-readable line per authorized run. Keeping the full per-user
+    // counters in the same JSON object makes a degraded run diagnosable from a
+    // single log event instead of reconstructing it from interleaved output.
+    console.log(
+      JSON.stringify({
+        event: "scheduled_metadata_sync",
+        status: totalFailure ? "failed" : degraded ? "degraded" : "ok",
+        totalFailure,
+        degraded,
+        ...result,
+      }),
+    );
     return Response.json(
       { ...result, degraded },
       {
@@ -101,7 +114,20 @@ export async function GET(request: Request) {
       },
     );
   } catch (error) {
-    console.error("Scheduled metadata sync failed:", error);
+    console.error(
+      JSON.stringify({
+        event: "scheduled_metadata_sync",
+        status: "error",
+        totalFailure: true,
+        degraded: true,
+        startedAt: runStartedAt.toISOString(),
+        durationMs: Date.now() - runStartedAt.getTime(),
+        error:
+          error instanceof Error
+            ? error.message.slice(0, 500)
+            : String(error).slice(0, 500),
+      }),
+    );
     return Response.json(
       { error: "Scheduled metadata sync failed." },
       { status: 500, headers: { "Cache-Control": "private, no-store" } },

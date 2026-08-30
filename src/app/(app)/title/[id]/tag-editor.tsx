@@ -33,7 +33,12 @@ export function TagEditor({
     setTags((t) => [...t, tag]);
     startTransition(async () => {
       try {
-        await toggleTitleTag(titleId, tag.id, true);
+        const res = await toggleTitleTag(titleId, tag.id, true);
+        if (res.error) {
+          setTags((t) => t.filter((x) => x.id !== tag.id));
+          toast.error(res.error);
+          return;
+        }
         router.refresh();
       } catch {
         setTags((t) => t.filter((x) => x.id !== tag.id)); // roll back optimistic add
@@ -46,7 +51,12 @@ export function TagEditor({
     setTags((t) => t.filter((x) => x.id !== tag.id));
     startTransition(async () => {
       try {
-        await toggleTitleTag(titleId, tag.id, false);
+        const res = await toggleTitleTag(titleId, tag.id, false);
+        if (res.error) {
+          setTags((t) => [...t, tag]);
+          toast.error(res.error);
+          return;
+        }
         router.refresh();
       } catch {
         setTags((t) => [...t, tag]); // roll back optimistic remove
@@ -74,13 +84,22 @@ export function TagEditor({
       // fails, and the chip must not appear for a link that was never made.
       let id: string;
       try {
-        id = await createTag(trimmed);
+        const createResult = await createTag(trimmed);
+        if (createResult.error || !createResult.id) {
+          toast.error(createResult.error ?? `Couldn't create “${trimmed}”. Please try again.`);
+          return;
+        }
+        id = createResult.id;
       } catch {
         toast.error(`Couldn't create “${trimmed}”. Please try again.`);
         return;
       }
       try {
-        await toggleTitleTag(titleId, id, true);
+        const toggleResult = await toggleTitleTag(titleId, id, true);
+        if (toggleResult.error) {
+          toast.error(toggleResult.error);
+          return;
+        }
       } catch {
         toast.error(`Couldn't add “${trimmed}”. Please try again.`);
         return;

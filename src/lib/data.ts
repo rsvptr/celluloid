@@ -216,6 +216,28 @@ export async function getTrashedTitles(userId: string): Promise<TrashedTitle[]> 
   }));
 }
 
+export interface UserPrefs {
+  timeZone: string;
+  watchRegion: string | null;
+  myProviders: number[];
+  lastBackupAt: Date | null;
+}
+
+/**
+ * The app-level User preference row, deduped per request with React.cache so
+ * pages that need more than one of these columns (stats, settings, upcoming,
+ * the title page and its extras) fetch the row once instead of once per call
+ * site.
+ */
+export const getUserPrefs = cache(
+  async (userId: string): Promise<UserPrefs | null> => {
+    return prisma.user.findUnique({
+      where: { id: userId },
+      select: { timeZone: true, watchRegion: true, myProviders: true, lastBackupAt: true },
+    });
+  },
+);
+
 export interface AccountInfo {
   name: string;
   email: string;
@@ -531,6 +553,7 @@ export async function getExportRows(userId: string): Promise<ExportRow[]> {
       orderBy: [{ mediaType: "asc" }, { name: "asc" }],
       select: {
         id: true,
+        tmdbId: true,
         name: true,
         mediaType: true,
         releaseDate: true,
@@ -567,6 +590,7 @@ export async function getExportRows(userId: string): Promise<ExportRow[]> {
 
   return rows.map((t) => ({
     id: t.id,
+    tmdbId: t.tmdbId,
     name: t.name,
     mediaType: t.mediaType === "TV" ? ("tv" as const) : ("movie" as const),
     year: t.releaseDate ? t.releaseDate.getUTCFullYear() : null,
@@ -701,6 +725,12 @@ export interface LibraryStats {
    * say how much of the headline number is a guess.
    */
   watchTimeEstimatedEpisodes: number;
+  /**
+   * Same, but for watched movies with no runtime of their own — rare (most
+   * come from TMDB with `runtime` set), but otherwise counted as 0 minutes
+   * and invisible in `watchTimeMinutes`.
+   */
+  watchTimeEstimatedMovies: number;
   byLanguage: { code: string; count: number }[];
   byDecade: { decade: string; count: number }[];
   byYear: { year: number; count: number }[];
@@ -715,6 +745,10 @@ export interface LibraryStats {
   // calendar days in the owner's User.timeZone. Sparse for libraries that
   // predate event tracking (e.g. bulk-imported titles with no logged events).
   activity: { date: string; count: number }[]; // YYYY-MM-DD, owner-local
+  /** Owner-local "today" as a "YYYY-MM-DD" key (see dayKeyInZone), so the
+   *  heatmap can build its grid and "future" cells from the same anchor as
+   *  the streaks below, rather than the viewer's own clock and time zone. */
+  todayKey: string;
   currentStreak: number;
   longestStreak: number;
   activeDays: number;
@@ -731,6 +765,14 @@ export interface LibraryStats {
  * hardcoding a second copy that could drift away from the arithmetic.
  */
 export const ESTIMATED_EPISODE_MINUTES = 42;
+
+/**
+ * Average movie length used when a watched movie has no runtime of its own
+ * (TMDB had none, or the match predates runtime capture). Exported for the
+ * same reason as ESTIMATED_EPISODE_MINUTES: so the stats page can name the
+ * same number in its caveat instead of hardcoding a second copy.
+ */
+export const ESTIMATED_MOVIE_MINUTES = 110;
 
 /**
  * A UTC instant as the owner-local "YYYY-MM-DD" it happened on, so activity and
@@ -840,11 +882,8 @@ const ACTIVITY_DAY_TITLE_CAP = 12;
  * episode, and streaming a year of those to count them client-side is wasteful.
  */
 export async function getActivityDays(userId: string): Promise<ActivityDay[]> {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { timeZone: true },
-  });
-  const timeZone = resolveTimeZone(user?.timeZone || "UTC");
+  const prefs = await getUserPrefs(userId);
+  const timeZone = resolveTimeZone(prefs?.timeZone || "UTC");
   const since = new Date(Date.now() - ACTIVITY_DETAIL_DAYS * 86_400_000);
   const rows = await prisma.$queryRaw<
     { date: string; id: string; name: string; count: number }[]
@@ -878,12 +917,16 @@ export async function getActivityDays(userId: string): Promise<ActivityDay[]> {
 }
 
 export async function getStats(userId: string): Promise<LibraryStats> {
-  const [user, titles, watchedEpisodeRuntime, mostRewatched, totalRewatches] =
+  // Resolved first (and deduped with getActivityDays via getUserPrefs' cache()
+  // when both run in the same request) because the day-bucketing query below
+  // needs a Postgres-safe zone name before it can run — see resolveTimeZone.
+  // Everything else here is independent of it, so it joins the same batch
+  // instead of waiting behind it.
+  const prefs = await getUserPrefs(userId);
+  const timeZone = resolveTimeZone(prefs?.timeZone || "UTC");
+
+  const [titles, watchedEpisodeRuntime, mostRewatched, totalRewatches, activity] =
     await Promise.all([
-      prisma.user.findUnique({
-        where: { id: userId },
-        select: { timeZone: true },
-      }),
       prisma.title.findMany({
         where: { userId, deletedAt: null },
         select: {
@@ -925,25 +968,21 @@ export async function getStats(userId: string): Promise<LibraryStats> {
       prisma.watchEvent.count({
         where: { userId, kind: "REWATCH", title: { deletedAt: null } },
       }),
+      // Day bucketing happens in Postgres — the alternative streamed every watch
+      // event the owner has ever recorded (tens of thousands of rows once
+      // episodes are tracked individually) just to count them by day.
+      prisma.$queryRaw<{ date: string; count: number }[]>`
+        SELECT to_char(
+                 ((e."occurredAt" AT TIME ZONE 'UTC') AT TIME ZONE ${timeZone}::text)::date,
+                 'YYYY-MM-DD'
+               ) AS "date",
+               COUNT(*)::int AS "count"
+        FROM "WatchEvent" e
+        JOIN "Title" t ON t.id = e."titleId"
+        WHERE e."userId" = ${userId} AND t."deletedAt" IS NULL
+        GROUP BY 1
+        ORDER BY 1`,
     ]);
-
-  // Day bucketing happens in Postgres — the alternative streamed every watch
-  // event the owner has ever recorded (tens of thousands of rows once episodes
-  // are tracked individually) just to count them by day. It runs after the batch
-  // above because the owner's zone is part of the query, and it must be a zone
-  // Postgres will accept: see resolveTimeZone.
-  const timeZone = resolveTimeZone(user?.timeZone || "UTC");
-  const activity = await prisma.$queryRaw<{ date: string; count: number }[]>`
-    SELECT to_char(
-             ((e."occurredAt" AT TIME ZONE 'UTC') AT TIME ZONE ${timeZone}::text)::date,
-             'YYYY-MM-DD'
-           ) AS "date",
-           COUNT(*)::int AS "count"
-    FROM "WatchEvent" e
-    JOIN "Title" t ON t.id = e."titleId"
-    WHERE e."userId" = ${userId} AND t."deletedAt" IS NULL
-    GROUP BY 1
-    ORDER BY 1`;
 
   const byStatus = {
     WATCHLIST: 0,
@@ -965,6 +1004,7 @@ export async function getStats(userId: string): Promise<LibraryStats> {
   let watchedEpisodes = 0;
   let episodesTotal = 0;
   let watchTimeMinutes = 0;
+  let watchTimeEstimatedMovies = 0;
   const rated: { id: string; name: string; rating: number }[] = [];
 
   for (const t of titles) {
@@ -973,7 +1013,14 @@ export async function getStats(userId: string): Promise<LibraryStats> {
       movies++;
       if (t.status === "WATCHED") {
         watchedMovies++;
-        watchTimeMinutes += t.runtime ?? 0;
+        if (t.runtime != null) {
+          watchTimeMinutes += t.runtime;
+        } else {
+          // No runtime to fall back on: price it flat, same as an
+          // untracked episode, instead of silently adding 0.
+          watchTimeEstimatedMovies++;
+          watchTimeMinutes += ESTIMATED_MOVIE_MINUTES;
+        }
       }
     } else {
       tv++;
@@ -1040,10 +1087,14 @@ export async function getStats(userId: string): Promise<LibraryStats> {
   }
 
   // Streaks over distinct active days, counted back from the owner's local
-  // "today" (see computeStreaks for the day arithmetic).
+  // "today" (see computeStreaks for the day arithmetic). The heatmap needs the
+  // same owner-zone anchor for its grid and "future" flags, so the key is
+  // returned below rather than left for the client to reconstruct from its
+  // own (possibly differently-zoned) clock.
+  const todayKey = dayKeyInZone(new Date(), timeZone);
   const { currentStreak, longestStreak } = computeStreaks(
     activity.map((a) => a.date),
-    dayKeyInZone(new Date(), timeZone),
+    todayKey,
   );
 
   return {
@@ -1056,6 +1107,7 @@ export async function getStats(userId: string): Promise<LibraryStats> {
     episodesTotal,
     watchTimeMinutes,
     watchTimeEstimatedEpisodes,
+    watchTimeEstimatedMovies,
     byLanguage: [...langCount.entries()]
       .map(([code, count]) => ({ code, count }))
       .sort((a, b) => b.count - a.count),
@@ -1085,7 +1137,11 @@ export async function getStats(userId: string): Promise<LibraryStats> {
       }))
       .sort((a, b) => b.avg - a.avg || b.count - a.count)
       .slice(0, 8),
-    topRated: rated.sort((a, b) => b.rating - a.rating).slice(0, 8),
+    // Name tiebreak so ties don't reorder between loads (the query itself has
+    // no orderBy) — same pattern as the mostRewatched SQL above.
+    topRated: rated
+      .sort((a, b) => b.rating - a.rating || a.name.localeCompare(b.name))
+      .slice(0, 8),
     ratedCount: rated.length,
     averageRating,
     ratingDistribution: Array.from({ length: 10 }, (_, i) => ({
@@ -1094,6 +1150,7 @@ export async function getStats(userId: string): Promise<LibraryStats> {
     })),
     // Already one row per active day, ordered oldest-first by the query.
     activity,
+    todayKey,
     currentStreak,
     longestStreak,
     activeDays: activity.length,

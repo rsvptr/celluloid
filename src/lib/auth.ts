@@ -1,10 +1,12 @@
 import "server-only";
 import { betterAuth } from "better-auth";
+import { APIError, createAuthMiddleware } from "better-auth/api";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { nextCookies } from "better-auth/next-js";
 import { twoFactor } from "better-auth/plugins";
 import { env } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
+import { consumeSignupInvite } from "@/lib/signup-invite";
 
 const trustedOrigins = [
   env.BETTER_AUTH_URL,
@@ -14,25 +16,18 @@ const trustedOrigins = [
   ...(process.env.NODE_ENV !== "production" ? ["http://localhost:3000"] : []),
 ].filter((v): v is string => Boolean(v));
 
-/**
- * Public sign-ups are CLOSED by default. Set ALLOW_SIGNUPS=true to open them long
- * enough to create the owner account on first run, then remove the var to lock the
- * deployment back down.
- *
- * Back-compat (one release only): the previous flag was DISABLE_SIGNUPS, where
- * DISABLE_SIGNUPS=false meant "open". That single case is still honored and logged
- * once, server-side, so existing deployments keep working across the rename.
- */
-const signupsAllowed =
-  process.env.ALLOW_SIGNUPS === "true" || process.env.DISABLE_SIGNUPS === "false";
+export const signupsDisabled = !env.SIGNUP_INVITE_CODE;
 
-if (process.env.DISABLE_SIGNUPS === "false") {
-  console.warn(
-    "[celluloid] DISABLE_SIGNUPS is deprecated; rename it to ALLOW_SIGNUPS=true. The old variable will stop being honored in a future release.",
-  );
-}
+const requireSignupInvite = createAuthMiddleware(async (context) => {
+  if (context.path !== "/sign-up/email") return;
 
-export const signupsDisabled = !signupsAllowed;
+  const body = context.body as Record<string, unknown> | undefined;
+  if (!consumeSignupInvite(body, env.SIGNUP_INVITE_CODE)) {
+    throw new APIError("FORBIDDEN", {
+      message: "That invite code wasn't accepted. Ask the person who invited you for a new one.",
+    });
+  }
+});
 
 export const auth = betterAuth({
   appName: "Celluloid",
@@ -47,6 +42,8 @@ export const auth = betterAuth({
     requireEmailVerification: false,
     minPasswordLength: 10,
   },
+
+  hooks: { before: requireSignupInvite },
 
   user: {
     // Lets the client call authClient.deleteUser({ password }); Better Auth

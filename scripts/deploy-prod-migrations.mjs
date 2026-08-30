@@ -17,12 +17,15 @@ import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { fileURLToPath } from "node:url";
+import { loadEnv } from "./load-env.mjs";
+
+loadEnv();
 
 const url = process.env.PROD_DATABASE_URL;
 if (!url) {
   console.error(
     "PROD_DATABASE_URL is not set. Add the production connection string to your\n" +
-      "environment (see env.example) before deploying migrations to production.",
+      "environment (see .env.example) before deploying migrations to production.",
   );
   process.exit(1);
 }

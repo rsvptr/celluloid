@@ -4,10 +4,9 @@ import { memo, useCallback, useMemo, useRef, useState, type KeyboardEvent } from
 import Link from "next/link";
 import { windowActivity } from "@/components/charts";
 import type { ActivityDay } from "@/lib/data";
+import { fullDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-// The same five steps as the read-only heatmap in components/charts.tsx, which
-// exports its layout maths (windowActivity) but not this scale.
 const LEVEL_CLASS = [
   "bg-surface-2",
   "bg-brand/25",
@@ -16,14 +15,10 @@ const LEVEL_CLASS = [
   "bg-brand",
 ];
 
+// The app's one canonical date format (fullDate) rather than the viewer's own
+// locale, so a day cell reads the same regardless of the browser's language.
 function readableDay(date: string): string {
-  return new Date(`${date}T00:00:00Z`).toLocaleDateString(undefined, {
-    timeZone: "UTC",
-    weekday: "short",
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
+  return fullDate(date);
 }
 
 /**
@@ -38,15 +33,20 @@ function readableDay(date: string): string {
 export function ActivityCalendar({
   activity,
   days,
+  todayKey,
   weeks = 53,
 }: {
   activity: { date: string; count: number }[];
   days: ActivityDay[];
+  /** Owner-local "today" as "YYYY-MM-DD" (see lib/data's dayKeyInZone), so the
+   *  grid and its "future" cells are anchored to the owner's calendar rather
+   *  than the viewer's own clock/time zone. */
+  todayKey: string;
   weeks?: number;
 }) {
   const { cols, total, max } = useMemo(
-    () => windowActivity(activity, weeks),
-    [activity, weeks],
+    () => windowActivity(activity, weeks, todayKey),
+    [activity, weeks, todayKey],
   );
   const detail = useMemo(() => new Map(days.map((d) => [d.date, d])), [days]);
   const countByDate = useMemo(
@@ -233,8 +233,8 @@ function DayCellImpl({
       type="button"
       tabIndex={isTabStop ? 0 : -1}
       aria-pressed={selected}
-      aria-label={`${date}: ${count} watched`}
-      title={`${date}: ${count} watched`}
+      aria-label={`${readableDay(date)}: ${count} watched`}
+      title={`${readableDay(date)}: ${count} watched`}
       onClick={() => onSelect(date)}
       onKeyDown={(e) => onKeyDown(e, date)}
       className={cn(

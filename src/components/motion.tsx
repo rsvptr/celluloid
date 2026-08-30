@@ -1,16 +1,25 @@
 "use client";
 
 import * as React from "react";
+import * as m from "motion/react-m";
 import {
   AnimatePresence,
+  LazyMotion,
   LayoutGroup,
-  motion,
   MotionConfig,
   useReducedMotion,
 } from "motion/react";
 
 // Re-export the bits the rest of the app uses so imports stay in one place.
-export { AnimatePresence, LayoutGroup, motion, useReducedMotion };
+// Consumers keep the existing `motion.div` spelling, but the value is Motion's
+// lean `m` component and receives its features from MotionProvider below.
+export { AnimatePresence, LayoutGroup, m as motion, useReducedMotion };
+
+// `layout` is used by recommendation/library cards, so this needs domMax rather
+// than domAnimation. The async feature import keeps that larger feature bundle
+// out of the app shell's initial JS while the statically analyzable path lets
+// Next split it into its own chunk.
+const loadDomMax = () => import("motion/react").then((module) => module.domMax);
 
 // A cinematic ease-out curve used for most entrances.
 export const EASE_OUT = [0.16, 1, 0.3, 1] as const;
@@ -21,7 +30,11 @@ export const EASE_OUT = [0.16, 1, 0.3, 1] as const;
  * globals.css cannot provide this guarantee on its own.
  */
 export function MotionProvider({ children }: { children: React.ReactNode }) {
-  return <MotionConfig reducedMotion="user">{children}</MotionConfig>;
+  return (
+    <LazyMotion features={loadDomMax} strict>
+      <MotionConfig reducedMotion="user">{children}</MotionConfig>
+    </LazyMotion>
+  );
 }
 
 export function FadeIn({
@@ -36,14 +49,14 @@ export function FadeIn({
   y?: number;
 }) {
   return (
-    <motion.div
+    <m.div
       className={className}
       initial={{ opacity: 0, y }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35, ease: EASE_OUT, delay }}
     >
       {children}
-    </motion.div>
+    </m.div>
   );
 }
 
@@ -70,7 +83,7 @@ export function Stagger({
   stagger?: number;
 }) {
   return (
-    <motion.div
+    <m.div
       className={className}
       variants={containerVariants}
       initial="hidden"
@@ -78,7 +91,7 @@ export function Stagger({
       custom={stagger}
     >
       {children}
-    </motion.div>
+    </m.div>
   );
 }
 
@@ -90,8 +103,8 @@ export function StaggerItem({
   className?: string;
 }) {
   return (
-    <motion.div className={className} variants={staggerItem}>
+    <m.div className={className} variants={staggerItem}>
       {children}
-    </motion.div>
+    </m.div>
   );
 }

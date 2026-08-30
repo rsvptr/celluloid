@@ -9,6 +9,7 @@ import {
 import type { TmdbEpisode, TmdbRegionProviders, TmdbSeasonDetails } from "@/lib/tmdb";
 import { DEFAULT_WATCH_REGION, isWatchRegion } from "@/lib/tmdb-extras";
 import { mapLimit } from "@/lib/async";
+import { env } from "@/lib/env";
 
 /**
  * Scheduled TMDB metadata refresh.
@@ -77,8 +78,15 @@ interface TmdbTvSyncDetail {
   /** TMDB's lifecycle string: "Returning Series", "Ended", "Canceled", ... */
   status?: string | null;
   next_episode_to_air?: { air_date?: string | null } | null;
-  seasons?: { season_number: number }[];
+  seasons?: TmdbSeasonSummary[];
   "watch/providers"?: { results?: Record<string, TmdbRegionProviders> };
+}
+
+/** The compact season rows included in TMDB's TV-detail response. */
+export interface TmdbSeasonSummary {
+  season_number: number;
+  episode_count?: number | null;
+  air_date?: string | null;
 }
 
 /**
@@ -94,8 +102,7 @@ async function tmdbGet<T>(
   params: Record<string, string>,
   deadline: number,
 ): Promise<T> {
-  const token = process.env.TMDB_ACCESS_TOKEN;
-  if (!token) throw new Error("TMDB_ACCESS_TOKEN is not set.");
+  const token = env.TMDB_ACCESS_TOKEN;
   const url = new URL(TMDB_BASE + path);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
 
@@ -236,6 +243,10 @@ interface SyncCandidate {
   dueAt: number;
   /** Immutable, and the date back-catalogue episodes are dated to. See upsertSeasons. */
   createdAt: Date;
+  /** Local summaries used to avoid re-fetching every historical TV season. */
+  seasons: StoredSeasonSummary[];
+  /** Region attached to provider ids before a provider-only refresh. */
+  providersRegion?: string | null;
 }
 
 /** Everything the candidate query needs beyond the sync-state split below. */
@@ -268,6 +279,11 @@ const METADATA_CANDIDATE_SELECT = {
   createdAt: true,
   mediaType: true,
   metadataSyncedAt: true,
+  seasons: {
+    where: { seasonNumber: { gte: 1 } },
+    orderBy: { seasonNumber: "asc" },
+    select: { seasonNumber: true, episodeCount: true, airDate: true },
+  },
 } as const;
 
 const PROVIDER_CANDIDATE_SELECT = {
@@ -333,13 +349,14 @@ async function selectMetadataCandidates(
             mediaType: r.mediaType,
             kind: "TV_METADATA" as const,
             dueAt: r.metadataSyncedAt?.getTime() ?? 0,
+            seasons: r.seasons,
           },
         ],
   );
 }
 
 /**
- * Watchlist titles whose provider cache should rotate through the nightly run.
+ * Matched live titles whose provider cache should rotate through the nightly run.
  * Missing and wrong-region rows go first because their current cache cannot
  * answer the active device at all; correct-region rows then rotate oldest first.
  */
@@ -348,13 +365,7 @@ async function selectProviderCandidates(
   region: string,
   limit: number,
 ): Promise<SyncCandidate[]> {
-  const where: Prisma.TitleWhereInput = {
-    userId,
-    deletedAt: null,
-    tmdbId: { not: null },
-    mediaType: { in: [MediaType.MOVIE, MediaType.TV] },
-    status: WatchStatus.WATCHLIST,
-  };
+  const where = providerCandidateWhere(userId);
 
   const missing = await prisma.title.findMany({
     where: { ...where, providersSyncedAt: null },
@@ -402,6 +413,8 @@ async function selectProviderCandidates(
             createdAt: row.createdAt,
             mediaType: row.mediaType,
             kind: "PROVIDERS_ONLY" as const,
+            seasons: [],
+            providersRegion: row.providersRegion,
             // Wrong-region data is unusable regardless of how recently it was
             // fetched, so it shares the never-synced front of the queue.
             dueAt:
@@ -411,6 +424,17 @@ async function selectProviderCandidates(
           },
         ],
   );
+}
+
+/** All matched live titles that are eligible for a provider-cache refresh. */
+export function providerCandidateWhere(userId: string): Prisma.TitleWhereInput {
+  return {
+    userId,
+    deletedAt: null,
+    tmdbId: { not: null },
+    mediaType: { in: [MediaType.MOVIE, MediaType.TV] },
+    status: { not: WatchStatus.DROPPED },
+  };
 }
 
 /**
@@ -455,6 +479,57 @@ function toDate(value: string | null | undefined): Date | null {
 function sameDate(a: Date | null, b: Date | null): boolean {
   if (a === null || b === null) return a === b;
   return a.getTime() === b.getTime();
+}
+
+/** The Season fields available without loading its episode list. */
+export interface StoredSeasonSummary {
+  seasonNumber: number;
+  episodeCount: number | null;
+  airDate: Date | null;
+}
+
+/**
+ * Which full season endpoints a TV refresh needs to read.
+ *
+ * TMDB's TV-detail response already carries season number, episode count and
+ * air date. Historical seasons whose compact summary still matches the local
+ * row cannot contain a newly numbered episode, so loading every episode in
+ * every season again is wasted work. Changed/missing seasons are refreshed,
+ * plus the newest two regardless of summary equality: those are where TMDB
+ * commonly backfills names, runtimes and episode metadata without changing the
+ * compact counters.
+ */
+export function seasonNumbersToRefresh(
+  remote: ReadonlyArray<TmdbSeasonSummary>,
+  stored: ReadonlyArray<StoredSeasonSummary>,
+  newestCount = 2,
+): number[] {
+  const summaries = new Map(
+    remote
+      .filter((season) => Number.isInteger(season.season_number) && season.season_number >= 1)
+      .map((season) => [season.season_number, season] as const),
+  );
+  const local = new Map(stored.map((season) => [season.seasonNumber, season]));
+  const ordered = [...summaries.keys()].sort((a, b) => a - b);
+  const selected = new Set(ordered.slice(-Math.max(0, Math.trunc(newestCount))));
+
+  for (const seasonNumber of ordered) {
+    const summary = summaries.get(seasonNumber)!;
+    const current = local.get(seasonNumber);
+    if (!current) {
+      selected.add(seasonNumber);
+      continue;
+    }
+    const episodeCountChanged =
+      summary.episode_count !== undefined &&
+      current.episodeCount !== summary.episode_count;
+    const airDateChanged =
+      summary.air_date !== undefined &&
+      !sameDate(current.airDate, toDate(summary.air_date));
+    if (episodeCountChanged || airDateChanged) selected.add(seasonNumber);
+  }
+
+  return [...selected].sort((a, b) => a - b);
 }
 
 /**
@@ -513,6 +588,23 @@ export function streamProviderIdsForRegion(
     for (const p of list ?? []) ids.add(p.provider_id);
   }
   return [...ids].sort((a, b) => a - b);
+}
+
+/** The write used to rotate a provider-only failure without relabelling stale ids. */
+export function providerFailureUpdate(
+  region: string,
+  previousRegion: string | null | undefined,
+  attemptedAt: Date,
+): {
+  providersSyncedAt: Date;
+  providersRegion: string;
+  streamProviderIds?: number[];
+} {
+  return {
+    providersSyncedAt: attemptedAt,
+    providersRegion: region,
+    ...(previousRegion !== region ? { streamProviderIds: [] } : {}),
+  };
 }
 
 /** Metadata a Season row mirrors from TMDB — everything else is ours. */
@@ -658,6 +750,27 @@ async function recordFailure(
   });
 }
 
+/**
+ * Move a failed provider-only attempt to the back of its rotation.
+ *
+ * Merely stamping providersSyncedAt is not enough after a region change: the
+ * wrong-region queue deliberately outranks every dated row. Record the region
+ * that was attempted as well, clearing ids only when they belong to a different
+ * region so stale GB ids cannot be presented as a failed US lookup. A failure
+ * in the same region preserves the last known provider list.
+ */
+async function recordProviderFailure(
+  userId: string,
+  region: string,
+  candidate: SyncCandidate,
+  now: Date,
+): Promise<void> {
+  await prisma.title.updateMany({
+    where: { id: candidate.id, userId, deletedAt: null },
+    data: providerFailureUpdate(region, candidate.providersRegion, now),
+  });
+}
+
 async function syncOneTitle(
   userId: string,
   region: string,
@@ -669,10 +782,10 @@ async function syncOneTitle(
 
   // Season 0 is specials; lib/actions excludes it on add and re-match, so the
   // sync must too or every show would grow a season it never had.
-  const seasonNumbers = (detail.seasons ?? [])
-    .map((s) => s.season_number)
-    .filter((n) => n >= 1)
-    .sort((a, b) => a - b);
+  const seasonNumbers = seasonNumbersToRefresh(
+    detail.seasons ?? [],
+    candidate.seasons,
+  );
 
   const fetched = await mapLimit(seasonNumbers, SEASON_CONCURRENCY, (n) =>
     fetchSeason(candidate.tmdbId, n, deadline).catch((err: unknown) => {
@@ -737,7 +850,7 @@ async function syncOneTitle(
           metadataSyncState: allOk ? MetadataSyncState.OK : MetadataSyncState.PARTIAL,
           metadataLastError: allOk
             ? null
-            : `${seasonNumbers.length - seasons.length} of ${seasonNumbers.length} seasons could not be loaded from TMDB.`,
+            : `${seasonNumbers.length - seasons.length} of ${seasonNumbers.length} changed or recent seasons could not be loaded from TMDB.`,
           // WatchStatus is deliberately untouched. A new season arriving does
           // not un-watch a show the owner finished — the "New episodes" badge
           // is how that gets surfaced, and flipping the status here would
@@ -1046,6 +1159,21 @@ export async function syncUserMetadata(
               );
             },
           );
+        } else {
+          // Provider failures do not make the title metadata itself FAILED,
+          // but they still need an attempt stamp or one broken lookup pins the
+          // provider queue forever and starves every title behind it.
+          await recordProviderFailure(
+            userId,
+            region,
+            candidate,
+            new Date(),
+          ).catch((writeErr) => {
+            console.error(
+              `metadata sync could not record provider failure (titleId=${candidate.id}):`,
+              writeErr,
+            );
+          });
         }
         return {
           titleId: candidate.id,

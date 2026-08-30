@@ -196,7 +196,8 @@ export function TitleControls({
           sent.watchedAt = latest.watchedAt;
         }
         try {
-          await updateTitle(id, patch);
+          const res = await updateTitle(id, patch);
+          if (res.error) throw new Error(res.error, { cause: "action" });
           // Confirm only what we sent; anything changed during the await stays
           // dirty and the loop sends it on the next pass.
           Object.assign(confirmedImmediateRef.current, sent);
@@ -232,7 +233,13 @@ export function TitleControls({
           // them (it can't spin without a fresh edit each pass). Only raise the
           // toast when a value was actually rolled back.
           if (didRevert) {
-            errorMessage = (e as Error).message || "Couldn't save that change.";
+            // Only an action-supplied `{ error }` string is safe to show; any
+            // other exception (transport failure, redacted server fault) gets
+            // the controlled fallback instead of its raw message.
+            errorMessage =
+              e instanceof Error && e.cause === "action" && e.message
+                ? e.message
+                : "Couldn't save that change.";
           }
         }
       }
@@ -274,7 +281,8 @@ export function TitleControls({
       while (latestNotesRef.current !== savedNotesRef.current) {
         const content = latestNotesRef.current;
         setNotesStatus("saving");
-        await updateTitle(id, { notes: content });
+        const res = await updateTitle(id, { notes: content });
+        if (res.error) throw new Error(res.error);
         savedNotesRef.current = content;
         setSavedNotes(content);
       }
@@ -562,13 +570,21 @@ export function TitleControls({
               return;
             startTransition(async () => {
               try {
-                await removeTitle(id);
+                const res = await removeTitle(id);
+                if (res.error) {
+                  toast.error(res.error);
+                  return;
+                }
                 toast.success("Moved to Trash", {
                   action: {
                     label: "Undo",
                     onClick: () => {
                       void restoreTitle(id)
-                        .then(() => {
+                        .then((restoreResult) => {
+                          if (restoreResult.error) {
+                            toast.error(restoreResult.error);
+                            return;
+                          }
                           toast.success("Restored to your library");
                           router.push(`/title/${id}`);
                           router.refresh();

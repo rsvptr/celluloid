@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   Ban,
   Check,
+  ChevronDown,
   Eye,
   Film,
   Plus,
@@ -60,6 +61,48 @@ const PHASE_LABEL: Record<Exclude<Phase, "idle">, string> = {
 
 const COUNT_OPTIONS = [6, 12, 20] as const;
 const MAX_SEEN_TITLES = 80;
+const STREAM_STALL_TIMEOUT_MS = 30_000;
+
+class StreamStallError extends Error {
+  constructor() {
+    super("The recommendation connection stalled. Try again, or ask for fewer titles.");
+    this.name = "StreamStallError";
+  }
+}
+
+async function readStreamChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  controller: AbortController,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          const error = new StreamStallError();
+          reject(error);
+          controller.abort(error);
+        }, STREAM_STALL_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+function recommendationIdentity(rec: Recommendation): string {
+  return rec.tmdbId != null
+    ? `${rec.mediaType}:tmdb:${rec.tmdbId}`
+    : `${rec.mediaType}:name:${rec.title.trim().toLocaleLowerCase()}:${rec.year ?? "?"}`;
+}
+
+function visibleRecommendations(
+  recommendations: Recommendation[],
+  dismissed: Set<string>,
+): Recommendation[] {
+  return recommendations.filter((rec) => !dismissed.has(recommendationIdentity(rec)));
+}
 
 function rememberSeenTitle(seen: Set<string>, title: string) {
   seen.delete(title);
@@ -142,6 +185,7 @@ function resolvePreset(
 
 export function RecommendClient({
   hasKey,
+  keySource,
   model: initialModel,
   tags,
   languages,
@@ -151,6 +195,7 @@ export function RecommendClient({
   rememberFilters,
 }: {
   hasKey: boolean;
+  keySource: "personal" | "shared" | "none";
   model: string;
   tags: string[];
   languages: string[];
@@ -195,9 +240,11 @@ export function RecommendClient({
   // all instead of the last one clobbering the rest.
   const [warnings, setWarnings] = useState<string[]>([]);
   const [recs, setRecs] = useState<Recommendation[] | null>(null);
+  const [receivedAny, setReceivedAny] = useState(false);
   // Titles shown this session, so "Show different" can ask for fresh ones.
   const seen = useRef<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
+  const dismissedRef = useRef<Set<string>>(new Set());
   const resultsRef = useRef<HTMLDivElement>(null);
   // Bumped whenever the "not interested" list changes, so an open review panel
   // reloads instead of showing a list the owner has already moved on from.
@@ -210,6 +257,15 @@ export function RecommendClient({
   );
   const [pickedIds, setPickedIds] = useState<Set<string>>(new Set());
   const pickEmpty = basisMode === "pick" && pickedIds.size === 0;
+
+  useEffect(
+    () => () => {
+      const active = abortRef.current;
+      abortRef.current = null;
+      active?.abort();
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!rememberFilters) return;
@@ -267,7 +323,11 @@ export function RecommendClient({
   async function dismiss(rec: Recommendation, index: number, reason: DismissReason) {
     // Remove the card first: the write is fast and the toast carries Undo, so
     // waiting on the round trip would only make the page feel unresponsive.
-    setRecs((current) => (current ?? []).filter((item) => item !== rec));
+    const identity = recommendationIdentity(rec);
+    dismissedRef.current.add(identity);
+    setRecs((current) =>
+      (current ?? []).filter((item) => recommendationIdentity(item) !== identity),
+    );
     let res: { id?: string; error?: string };
     try {
       res = await suppressSuggestion({
@@ -285,6 +345,7 @@ export function RecommendClient({
     if (!res.id) {
       // Nothing was recorded, so leaving the card hidden would misrepresent what
       // future runs will do — put it back and say so.
+      dismissedRef.current.delete(identity);
       setRecs((current) => restoreAt(current, rec, index));
       toast.error(res.error ?? "Couldn't hide that suggestion. Please try again.");
       return;
@@ -301,6 +362,7 @@ export function RecommendClient({
                 toast.error("Couldn't undo that. Restore it under Not interested.");
                 return;
               }
+              dismissedRef.current.delete(identity);
               setRecs((current) => restoreAt(current, rec, index));
               setSuppressionsKey((value) => value + 1);
             })
@@ -326,10 +388,12 @@ export function RecommendClient({
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
+    dismissedRef.current = new Set();
     setLoading(true);
     setPhase("starting");
     setError(null);
     setWarnings([]);
+    setReceivedAny(false);
     setRecs([]);
     const got: Recommendation[] = [];
     try {
@@ -371,47 +435,71 @@ export function RecommendClient({
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
+      let receivedTerminalEvent = false;
       const handle = (ev: RecStreamEvent) => {
+        if (abortRef.current !== ac) return;
         if (ev.type === "status") {
           setPhase(ev.phase);
         } else if (ev.type === "rec") {
           got.push(ev.rec);
+          setReceivedAny(true);
           rememberSeenTitle(seen.current, ev.rec.title);
-          setRecs([...got]);
+          setRecs(visibleRecommendations(got, dismissedRef.current));
         } else if (ev.type === "warning") {
           setWarnings((prev) =>
             prev.includes(ev.message) ? prev : [...prev, ev.message],
           );
         } else if (ev.type === "error") {
+          receivedTerminalEvent = true;
           setError(ev.error);
+        } else if (ev.type === "done") {
+          receivedTerminalEvent = true;
         }
-        // "done" needs no special handling: the final ranking happens below
-        // whether the stream completed or was stopped early.
+      };
+      const handleLine = (line: string) => {
+        if (!line) return;
+        try {
+          handle(JSON.parse(line) as RecStreamEvent);
+        } catch {
+          // A malformed complete line is isolated; later NDJSON events can still
+          // finish the run. A malformed final tail is caught by the terminal check.
+        }
       };
       for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        const { done, value } = await readStreamChunk(reader, ac);
+        if (done) {
+          buf += decoder.decode();
+          break;
+        }
         buf += decoder.decode(value, { stream: true });
         let nl;
         while ((nl = buf.indexOf("\n")) !== -1) {
           const line = buf.slice(0, nl).trim();
           buf = buf.slice(nl + 1);
-          if (!line) continue;
-          try {
-            handle(JSON.parse(line) as RecStreamEvent);
-          } catch {
-            // skip malformed line
-          }
+          handleLine(line);
         }
       }
+      handleLine(buf.trim());
+      if (!receivedTerminalEvent && !ac.signal.aborted) {
+        setError(
+          "This recommendation run was cut short. Anything already suggested is kept; try again for the rest.",
+        );
+      }
     } catch (e) {
-      if ((e as Error).name !== "AbortError") setError(recommendationError(e));
+      if (e instanceof StreamStallError) setError(e.message);
+      else if ((e as Error).name !== "AbortError") setError(recommendationError(e));
     } finally {
       // Ranking runs on whatever arrived — full run, stopped early, or errored
       // partway (partial results stay useful alongside the error message).
       if (abortRef.current === ac) {
         if (got.length > 0) {
-          setRecs(rankRecs(got, language || undefined, era as RecEraId | ""));
+          setRecs(
+            rankRecs(
+              visibleRecommendations(got, dismissedRef.current),
+              language || undefined,
+              era as RecEraId | "",
+            ),
+          );
         }
         setLoading(false);
         setPhase("idle");
@@ -618,11 +706,19 @@ export function RecommendClient({
             </fieldset>
           </div>
 
-          <details className="rounded-xl bg-surface-2/30 ring-1 ring-line">
+          <details className="group rounded-xl bg-surface-2/30 ring-1 ring-line">
             <summary className="focus-ring flex min-h-11 cursor-pointer items-center justify-between gap-3 rounded-xl px-3 py-2 text-sm font-medium marker:text-faint">
-              Tune results
-              <span className="text-xs font-normal text-faint">
-                Language, genre, era &amp; source titles
+              <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
+                Tune results
+                <span className="text-xs font-normal text-faint">
+                  Language, genre, era &amp; source titles
+                </span>
+              </span>
+              <span
+                aria-hidden="true"
+                className="shrink-0 transition-transform duration-200 group-open:rotate-180"
+              >
+                <ChevronDown size={16} />
               </span>
             </summary>
             <div className="flex flex-col gap-4 border-t border-line px-3 py-4">
@@ -755,11 +851,19 @@ export function RecommendClient({
             </div>
           </details>
 
-          <details className="rounded-xl bg-surface-2/30 ring-1 ring-line">
+          <details className="group rounded-xl bg-surface-2/30 ring-1 ring-line">
             <summary className="focus-ring flex min-h-11 cursor-pointer items-center justify-between gap-3 rounded-xl px-3 py-2 text-sm font-medium marker:text-faint">
-              Model &amp; cost
-              <span className="text-xs font-normal text-faint">
-                {REC_MODELS.find((item) => item.id === model)?.label ?? "Claude"}
+              <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
+                Model &amp; cost
+                <span className="text-xs font-normal text-faint">
+                  {REC_MODELS.find((item) => item.id === model)?.label ?? "Claude"}
+                </span>
+              </span>
+              <span
+                aria-hidden="true"
+                className="shrink-0 transition-transform duration-200 group-open:rotate-180"
+              >
+                <ChevronDown size={16} />
               </span>
             </summary>
             <div className="border-t border-line px-3 py-4">
@@ -781,6 +885,13 @@ export function RecommendClient({
               <p className="mt-2 text-xs text-muted">
                 Larger requests and more capable models generally use more API quota.
               </p>
+              <p className="mt-1 text-xs text-muted">
+                {keySource === "personal"
+                  ? "Using your personal Anthropic key."
+                  : keySource === "shared"
+                    ? "Using this server's shared Anthropic key."
+                    : "No Anthropic key is available."}
+              </p>
             </div>
           </details>
 
@@ -794,6 +905,9 @@ export function RecommendClient({
               {loading ? <Spinner /> : <Sparkles size={16} aria-hidden="true" />}
               {loading ? "Thinking…" : "Get suggestions"}
             </Button>
+            <p className="max-w-2xl text-xs leading-relaxed text-faint">
+              Suggestions appear as they&apos;re ready. Opus can take up to a minute to start.
+            </p>
             <p className="max-w-2xl text-xs leading-relaxed text-faint">
               Celluloid sends the selected library context to Anthropic to build this
               taste brief: ratings, statuses, tags, and personal notes.
@@ -836,7 +950,7 @@ export function RecommendClient({
         </form>
       </Card>
 
-      {(loading || (recs && recs.length > 0)) && (
+      {(loading || (recs && recs.length > 0) || receivedAny) && (
         <div ref={resultsRef} className="flex scroll-mt-20 flex-col gap-3">
           <div className="flex items-center justify-between gap-3">
             {/* One live region for the whole run. Swapping it for a plain
@@ -889,7 +1003,7 @@ export function RecommendClient({
             <AnimatePresence initial={false}>
                 {(recs ?? []).map((r, index) => (
                   <motion.div
-                    key={`${r.mediaType}:${r.tmdbId ?? r.title}`}
+                    key={recommendationIdentity(r)}
                     layout
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -924,7 +1038,9 @@ export function RecommendClient({
 
       {!loading && recs && recs.length === 0 && !error && (
         <p className="py-8 text-center text-sm text-muted">
-          No suggestions came back. Try a different focus or count.
+          {receivedAny
+            ? "You've hidden every suggestion from this run. Try Show different for another batch."
+            : "No suggestions came back. Try a different focus or count."}
         </p>
       )}
 

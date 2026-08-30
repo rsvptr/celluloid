@@ -208,4 +208,73 @@ describe("preflightXlsxZip", () => {
     assert.equal(titles[1].mediaType, "tv");
     assert.equal(titles[1].status, "PARTIALLY_WATCHED");
   });
+
+  it("parses every titled worksheet and infers Celluloid's TV sheet type", async () => {
+    const wb = new ExcelJS.Workbook();
+    const summary = wb.addWorksheet("Summary");
+    summary.addRow(["Metric", "Value"]);
+    summary.addRow(["Titles", 2]);
+
+    const movies = wb.addWorksheet("Movies");
+    movies.addRow(["Name", "Release Date", "Status", "My Rating", "TMDB"]);
+    movies.addRow(["Heat", "1995-12-15", "Watched", 4, 7.2]);
+
+    const tv = wb.addWorksheet("TV Shows");
+    tv.addRow(["Name", "Release Date", "Status", "TMDB ID"]);
+    tv.addRow(["Severance", "2022-02-18", "Watching", 95396]);
+
+    const buf = Buffer.from((await wb.xlsx.writeBuffer()) as ArrayBuffer);
+    const result = await parseUploadedList(buf, "celluloid.xlsx");
+
+    assert.equal(result.error, undefined);
+    assert.equal(result.totalRows, 2);
+    assert.deepEqual(
+      result.titles.map((title) => ({
+        name: title.name,
+        mediaType: title.mediaType,
+        releaseDate: title.releaseDate,
+        status: title.status,
+        rating: title.rating,
+        tmdbId: title.tmdbId,
+      })),
+      [
+        {
+          name: "Heat",
+          mediaType: "movie",
+          releaseDate: "1995-01-01",
+          status: "WATCHED",
+          rating: 4,
+          tmdbId: null,
+        },
+        {
+          name: "Severance",
+          mediaType: "tv",
+          releaseDate: "2022-01-01",
+          status: "PARTIALLY_WATCHED",
+          rating: null,
+          tmdbId: 95396,
+        },
+      ],
+    );
+    assert.ok(result.notes?.some((note) => note.includes("Summary")));
+  });
+
+  it("shares one scan cap across all worksheets", async () => {
+    const wb = new ExcelJS.Workbook();
+    for (const sheetName of ["Movies", "TV Shows"]) {
+      const ws = wb.addWorksheet(sheetName);
+      ws.addRow(["Title"]);
+      for (let index = 1; index <= 40; index++) {
+        ws.addRow([`${sheetName} ${index}`]);
+      }
+    }
+    const buf = Buffer.from((await wb.xlsx.writeBuffer()) as ArrayBuffer);
+
+    const result = await parseUploadedList(buf, "large.xlsx", 1);
+
+    // maxRows + ROW_SCAN_BUFFER = 51, globally — not 51 per sheet.
+    assert.equal(result.titles.length, 51);
+    assert.equal(result.scanCapped, true);
+    assert.equal(result.totalRows, undefined);
+  });
 });
