@@ -158,6 +158,9 @@ model Session {
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  // Session listing/revocation in Settings queries by userId, and a user-row
+  // delete cascades through here; without the index both walk the whole table.
+  @@index([userId])
   @@map("session")
 }
 
@@ -177,6 +180,8 @@ model Account {
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
+  // Credential lookups and the user-delete cascade both filter on userId.
+  @@index([userId])
   @@map("account")
 }
 
