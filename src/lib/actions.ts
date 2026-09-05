@@ -225,73 +225,71 @@ function airedEpisodeFilter(now: Date) {
   return { OR: [{ airDate: null }, { airDate: { lte: now } }] };
 }
 
-/** Recompute denormalized episode progress + natural status for a TV title. */
-async function recomputeProgress(titleId: string) {
-  // Lock the title row before counting: two rapid episode toggles otherwise
-  // interleave (both count, then the stale write lands last). With the lock,
-  // the second recompute waits and recounts AFTER the first one committed.
-  await prisma.$transaction(async (tx) => {
-    const rows = await tx.$queryRaw<
-      { userId: string; status: WatchStatus; watchedAt: Date | null }[]
-    >`SELECT "userId", status, "watchedAt" FROM "Title"
-      WHERE id = ${titleId} FOR UPDATE`;
-    const title = rows[0];
-    if (!title) return; // title removed concurrently; nothing to reconcile
+type LockedProgressTitle = {
+  userId: string;
+  status: WatchStatus;
+  watchedAt: Date | null;
+};
 
-    const total = await tx.episode.count({ where: { season: { titleId } } });
-    const watched = await tx.episode.count({
-      where: { season: { titleId }, watched: true },
-    });
+/** Recompute denormalized episode progress while the caller holds the Title lock. */
+async function recomputeProgress(
+  tx: Prisma.TransactionClient,
+  titleId: string,
+  title: LockedProgressTitle,
+) {
+  const total = await tx.episode.count({ where: { season: { titleId } } });
+  const watched = await tx.episode.count({
+    where: { season: { titleId }, watched: true },
+  });
 
-    let status = title.status;
-    // Don't override deliberate ON_HOLD / DROPPED choices. At zero progress,
-    // preserve every deliberate state except WATCHED: removing the final tick
-    // must stop claiming the show is complete, but WATCHING stays WATCHING.
-    if (status !== WatchStatus.ON_HOLD && status !== WatchStatus.DROPPED) {
-      if (watched === 0) {
-        if (status === WatchStatus.WATCHED) status = WatchStatus.WATCHLIST;
-      }
-      else if (total > 0 && watched >= total) status = WatchStatus.WATCHED;
-      else status = WatchStatus.WATCHING;
+  let status = title.status;
+  // Don't override deliberate ON_HOLD / DROPPED choices. At zero progress,
+  // preserve every deliberate state except WATCHED: removing the final tick
+  // must stop claiming the show is complete, but WATCHING stays WATCHING.
+  if (status !== WatchStatus.ON_HOLD && status !== WatchStatus.DROPPED) {
+    if (watched === 0) {
+      if (status === WatchStatus.WATCHED) status = WatchStatus.WATCHLIST;
     }
+    else if (total > 0 && watched >= total) status = WatchStatus.WATCHED;
+    else status = WatchStatus.WATCHING;
+  }
 
-    const data: { watchedEpisodes: number; status: WatchStatus; watchedAt?: Date } = {
-      watchedEpisodes: watched,
-      status,
-    };
-    const entersWatched =
-      status === WatchStatus.WATCHED && title.status !== WatchStatus.WATCHED;
-    // The tracker models progress, not repeat viewings. A correction gesture
-    // can temporarily move WATCHED -> WATCHING -> WATCHED; if completion
-    // history already survives, that is not a new watch and must not restamp
-    // the cache. Genuine repeats go through logWatch as REWATCH events.
-    const priorCompletion = entersWatched
-      ? await tx.watchEvent.findFirst({
-          where: {
-            userId: title.userId,
-            titleId,
-            kind: { in: [WatchEventKind.TITLE_COMPLETED, WatchEventKind.REWATCH] },
-          },
-          select: { id: true },
-        })
-      : null;
-    const logsCompletion = entersWatched && priorCompletion == null;
-    const completedAt = logsCompletion ? new Date() : null;
-    if (completedAt) data.watchedAt = completedAt;
-
-    await tx.title.update({ where: { id: titleId }, data });
-    if (completedAt) {
-      await tx.watchEvent.create({
-        data: {
+  const data: { watchedEpisodes: number; status: WatchStatus; watchedAt?: Date } = {
+    watchedEpisodes: watched,
+    status,
+  };
+  const entersWatched =
+    status === WatchStatus.WATCHED && title.status !== WatchStatus.WATCHED;
+  // The tracker models progress, not repeat viewings. A correction gesture
+  // can temporarily move WATCHED -> WATCHING -> WATCHED; if completion
+  // history already survives, that is not a new watch and must not restamp
+  // the cache. Genuine repeats go through logWatch as REWATCH events.
+  const priorCompletion = entersWatched
+    ? await tx.watchEvent.findFirst({
+        where: {
           userId: title.userId,
           titleId,
-          kind: WatchEventKind.TITLE_COMPLETED,
-          occurredAt: completedAt,
-          source: WatchEventSource.BULK,
+          kind: { in: [WatchEventKind.TITLE_COMPLETED, WatchEventKind.REWATCH] },
         },
-      });
-    }
-  });
+        select: { id: true },
+      })
+    : null;
+  const logsCompletion = entersWatched && priorCompletion == null;
+  const completedAt = logsCompletion ? new Date() : null;
+  if (completedAt) data.watchedAt = completedAt;
+
+  await tx.title.update({ where: { id: titleId }, data });
+  if (completedAt) {
+    await tx.watchEvent.create({
+      data: {
+        userId: title.userId,
+        titleId,
+        kind: WatchEventKind.TITLE_COMPLETED,
+        occurredAt: completedAt,
+        source: WatchEventSource.BULK,
+      },
+    });
+  }
 }
 
 // --- Title field updates ---------------------------------------------------
@@ -350,7 +348,8 @@ export async function updateTitle(
     const autoWatchedAt =
       input.watchedAt === undefined &&
       input.status === WatchStatus.WATCHED &&
-      title.status !== WatchStatus.WATCHED
+      title.status !== WatchStatus.WATCHED &&
+      title.watchedAt === null
         ? now
         : undefined;
     const nextStatus = input.status ?? title.status;
@@ -451,8 +450,13 @@ export async function updateTitle(
           where: { id: latest.id },
           data: { occurredAt: newWatchedAt },
         });
-        await syncWatchedAtFromEvents(tx, id);
+        await syncWatchedAtFromEvents(tx, id, newWatchedAt);
       }
+    } else if (
+      input.watchedAt === null &&
+      nextStatus === WatchStatus.WATCHED
+    ) {
+      await syncWatchedAtFromEvents(tx, id, null);
     }
     return true;
   });
@@ -462,8 +466,8 @@ export async function updateTitle(
 }
 
 /**
- * D-F2: record an explicit viewing. Logs a REWATCH when the title is already
- * WATCHED and a TITLE_COMPLETED when the viewing truthfully completes it. A
+ * D-F2: record an explicit viewing. The first surviving completion is a
+ * TITLE_COMPLETED and later viewings are REWATCH events. A
  * partly watched TV title is directed to the episode tracker: the generic log
  * has no episode coordinate and therefore cannot honestly record either an
  * episode or the whole-series completion. Title-FOR-UPDATE-first keeps the
@@ -510,10 +514,15 @@ export async function logWatch(
           "This show is still in progress. Log individual episodes from the episode tracker instead.",
       };
     }
+    const priorWatchCount = await tx.watchEvent.count({
+      where: {
+        userId,
+        titleId,
+        kind: { in: [WatchEventKind.TITLE_COMPLETED, WatchEventKind.REWATCH] },
+      },
+    });
     const kind =
-      row.status === WatchStatus.WATCHED
-        ? WatchEventKind.REWATCH
-        : WatchEventKind.TITLE_COMPLETED;
+      priorWatchCount === 0 ? WatchEventKind.TITLE_COMPLETED : WatchEventKind.REWATCH;
     await tx.watchEvent.create({
       data: {
         userId,
@@ -536,13 +545,7 @@ export async function logWatch(
       data: { status: WatchStatus.WATCHED, watchedAt: nextWatchedAt },
     });
 
-    const watchCount = await tx.watchEvent.count({
-      where: {
-        titleId,
-        kind: { in: [WatchEventKind.TITLE_COMPLETED, WatchEventKind.REWATCH] },
-      },
-    });
-    return { watchCount };
+    return { watchCount: priorWatchCount + 1 };
   });
 
   if (!result) return { error: "Title not found." };
@@ -555,9 +558,9 @@ export async function logWatch(
  * Re-derive a title's `watchedAt` cache from its surviving completion/rewatch
  * events. Call inside a transaction that already holds the Title row lock.
  *
- * The cache is meant to mirror the log's latest completion. Editing or deleting
- * an event without this leaves the two disagreeing — the History list would show
- * one date while sort, stats and the AI brief's recency block used another.
+ * The cache keeps the latest known viewing date. That can be newer than the
+ * surviving log because imports and legacy titles carry dates without events.
+ * Editing or deleting history must not move that durable date backward.
  *
  * When NO completion event survives, the date is left exactly as it is rather
  * than cleared. The log is not the only thing that writes `watchedAt`: a
@@ -571,6 +574,7 @@ export async function logWatch(
 async function syncWatchedAtFromEvents(
   tx: Prisma.TransactionClient,
   titleId: string,
+  currentWatchedAt: Date | null,
 ): Promise<void> {
   const latest = await tx.watchEvent.findFirst({
     where: {
@@ -580,10 +584,14 @@ async function syncWatchedAtFromEvents(
     orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }],
     select: { occurredAt: true },
   });
-  if (!latest) return;
+  const nextWatchedAt =
+    latest && (!currentWatchedAt || latest.occurredAt > currentWatchedAt)
+      ? latest.occurredAt
+      : currentWatchedAt;
+  if (!nextWatchedAt) return;
   await tx.title.update({
     where: { id: titleId },
-    data: { watchedAt: latest.occurredAt },
+    data: { watchedAt: nextWatchedAt },
   });
 }
 
@@ -616,21 +624,26 @@ export async function updateWatchEvent(
 
   const event = await prisma.watchEvent.findFirst({
     where: { id: eventId, userId },
-    select: { id: true, titleId: true },
+    select: { id: true, titleId: true, occurredAt: true },
   });
   if (!event) return { error: "Watch not found." };
 
   await prisma.$transaction(async (tx) => {
     // Title lock first (invariant), so the event edit and the cache resync are
     // one unit and can't interleave with a concurrent logWatch on this title.
-    const rows = await tx.$queryRaw<{ id: string }[]>`
-      SELECT id FROM "Title" WHERE id = ${event.titleId} FOR UPDATE`;
-    if (!rows[0]) return; // title removed concurrently
+    const rows = await tx.$queryRaw<{ id: string; watchedAt: Date | null }[]>`
+      SELECT id, "watchedAt" FROM "Title" WHERE id = ${event.titleId} FOR UPDATE`;
+    const title = rows[0];
+    if (!title) return; // title removed concurrently
     await tx.watchEvent.update({
       where: { id: event.id },
       data: { occurredAt: occurred, ...noteUpdate },
     });
-    await syncWatchedAtFromEvents(tx, event.titleId);
+    const currentWatchedAt =
+      title.watchedAt?.getTime() === event.occurredAt.getTime()
+        ? occurred
+        : title.watchedAt;
+    await syncWatchedAtFromEvents(tx, event.titleId, currentWatchedAt);
   });
 
   revalidateAll(event.titleId);
@@ -653,16 +666,23 @@ export async function deleteWatchEvent(
 
   const event = await prisma.watchEvent.findFirst({
     where: { id: eventId, userId },
-    select: { id: true, titleId: true },
+    select: { id: true, titleId: true, occurredAt: true },
   });
   if (!event) return { error: "Watch not found." };
 
   const watchCount = await prisma.$transaction(async (tx) => {
-    const rows = await tx.$queryRaw<{ id: string }[]>`
-      SELECT id FROM "Title" WHERE id = ${event.titleId} FOR UPDATE`;
-    if (!rows[0]) return 0; // title removed concurrently
+    const rows = await tx.$queryRaw<{ id: string; watchedAt: Date | null }[]>`
+      SELECT id, "watchedAt" FROM "Title" WHERE id = ${event.titleId} FOR UPDATE`;
+    const title = rows[0];
+    if (!title) return 0; // title removed concurrently
     await tx.watchEvent.delete({ where: { id: event.id } });
-    await syncWatchedAtFromEvents(tx, event.titleId);
+    await syncWatchedAtFromEvents(
+      tx,
+      event.titleId,
+      title.watchedAt?.getTime() === event.occurredAt.getTime()
+        ? null
+        : title.watchedAt,
+    );
     return tx.watchEvent.count({
       where: {
         titleId: event.titleId,
@@ -765,10 +785,11 @@ export async function setEpisodeWatched(episodeId: string, watched: boolean) {
   // and can't race their snapshot-then-update. recomputeProgress then reconciles
   // the denormalized counter and natural status.
   await prisma.$transaction(async (tx) => {
-    const rows = await tx.$queryRaw<{ id: string }[]>`
-      SELECT id FROM "Title"
+    const rows = await tx.$queryRaw<LockedProgressTitle[]>`
+      SELECT "userId", status, "watchedAt" FROM "Title"
       WHERE id = ${titleId} AND "userId" = ${userId} FOR UPDATE`;
-    if (!rows[0]) return; // title removed concurrently
+    const title = rows[0];
+    if (!title) return; // title removed concurrently
     // Reread the episode after acquiring the Title lock. A repeated set-style
     // request is a no-op, and a rematch that replaced the episode while this
     // request waited cannot make us write an event for a vanished row.
@@ -776,40 +797,41 @@ export async function setEpisodeWatched(episodeId: string, watched: boolean) {
       where: { id: episodeId, season: { titleId } },
       select: { watched: true },
     });
-    if (!current || current.watched === watched) return;
-    const now = new Date();
-    await tx.episode.update({
-      where: { id: episodeId },
-      data: { watched, watchedAt: watched ? now : null },
-    });
-    if (watched) {
-      await tx.watchEvent.create({
-        data: {
-          userId,
-          titleId,
-          episodeId,
-          kind: WatchEventKind.EPISODE_WATCHED,
-          occurredAt: now,
-          source: WatchEventSource.MANUAL,
-        },
+    if (current && current.watched !== watched) {
+      const now = new Date();
+      await tx.episode.update({
+        where: { id: episodeId },
+        data: { watched, watchedAt: watched ? now : null },
       });
-    } else {
-      // A real true -> false transition removes every generated, un-noted
-      // set-state event. This also cleans duplicates created by the former
-      // stale-read path; noted history and explicit REWATCH records survive.
-      await tx.watchEvent.deleteMany({
-        where: {
-          userId,
-          titleId,
-          episodeId,
-          kind: WatchEventKind.EPISODE_WATCHED,
-          source: { in: [WatchEventSource.MANUAL, WatchEventSource.BULK] },
-          note: null,
-        },
-      });
+      if (watched) {
+        await tx.watchEvent.create({
+          data: {
+            userId,
+            titleId,
+            episodeId,
+            kind: WatchEventKind.EPISODE_WATCHED,
+            occurredAt: now,
+            source: WatchEventSource.MANUAL,
+          },
+        });
+      } else {
+        // A real true -> false transition removes every generated, un-noted
+        // set-state event. This also cleans duplicates created by the former
+        // stale-read path; noted history and explicit REWATCH records survive.
+        await tx.watchEvent.deleteMany({
+          where: {
+            userId,
+            titleId,
+            episodeId,
+            kind: WatchEventKind.EPISODE_WATCHED,
+            source: { in: [WatchEventSource.MANUAL, WatchEventSource.BULK] },
+            note: null,
+          },
+        });
+      }
     }
+    await recomputeProgress(tx, titleId, title);
   });
-  await recomputeProgress(titleId);
   revalidateAll(titleId);
   return {};
 }
@@ -830,10 +852,11 @@ export async function setSeasonWatched(seasonId: string, watched: boolean) {
   // bare updateMany, so it could interleave with rematch/restore and clear rows
   // from one generation while a replacement generation restored stale flags.
   await prisma.$transaction(async (tx) => {
-    const rows = await tx.$queryRaw<{ id: string }[]>`
-      SELECT id FROM "Title"
+    const rows = await tx.$queryRaw<LockedProgressTitle[]>`
+      SELECT "userId", status, "watchedAt" FROM "Title"
       WHERE id = ${titleId} AND "userId" = ${userId} FOR UPDATE`;
-    if (!rows[0]) return; // title removed concurrently
+    const title = rows[0];
+    if (!title) return; // title removed concurrently
     if (watched) {
       const now = new Date();
       const unwatchedAired = { seasonId, watched: false, ...airedEpisodeFilter(now) };
@@ -865,8 +888,8 @@ export async function setSeasonWatched(seasonId: string, watched: boolean) {
         data: { watched: false, watchedAt: null },
       });
     }
+    await recomputeProgress(tx, titleId, title);
   });
-  await recomputeProgress(titleId);
   revalidateAll(titleId);
   return {};
 }
@@ -885,10 +908,11 @@ export async function setAllEpisodesWatched(titleId: string, watched: boolean) {
   // As with the season action, serialize both directions with rematch/restore
   // and every other episode writer by taking the Title lock first.
   await prisma.$transaction(async (tx) => {
-    const rows = await tx.$queryRaw<{ id: string }[]>`
-      SELECT id FROM "Title"
+    const rows = await tx.$queryRaw<LockedProgressTitle[]>`
+      SELECT "userId", status, "watchedAt" FROM "Title"
       WHERE id = ${titleId} AND "userId" = ${userId} FOR UPDATE`;
-    if (!rows[0]) return; // title removed concurrently
+    const locked = rows[0];
+    if (!locked) return; // title removed concurrently
     if (watched) {
       const now = new Date();
       const unwatchedAired = {
@@ -923,8 +947,8 @@ export async function setAllEpisodesWatched(titleId: string, watched: boolean) {
         data: { watched: false, watchedAt: null },
       });
     }
+    await recomputeProgress(tx, titleId, locked);
   });
-  await recomputeProgress(titleId);
   revalidateAll(titleId);
   return {};
 }
@@ -964,9 +988,11 @@ export async function setEpisodesWatchedThrough(
   const changed = await prisma.$transaction(async (tx) => {
     // Title lock first — the same ordering every other transaction here uses, so
     // this serializes against episode/season/bulk marks instead of racing them.
-    const rows = await tx.$queryRaw<{ id: string }[]>`
-      SELECT id FROM "Title" WHERE id = ${titleId} FOR UPDATE`;
-    if (!rows[0]) return 0; // title removed concurrently
+    const rows = await tx.$queryRaw<LockedProgressTitle[]>`
+      SELECT "userId", status, "watchedAt" FROM "Title"
+      WHERE id = ${titleId} AND "userId" = ${userId} FOR UPDATE`;
+    const title = rows[0];
+    if (!title) return 0; // title removed concurrently
     const now = new Date();
     const target = {
       seasonId: anchor.seasonId,
@@ -975,25 +1001,26 @@ export async function setEpisodesWatchedThrough(
       ...airedEpisodeFilter(now),
     };
     const toWatch = await tx.episode.findMany({ where: target, select: { id: true } });
-    if (toWatch.length === 0) return 0;
-    await tx.episode.updateMany({
-      where: target,
-      data: { watched: true, watchedAt: now },
-    });
-    await tx.watchEvent.createMany({
-      data: toWatch.map((e) => ({
-        userId,
-        titleId,
-        episodeId: e.id,
-        kind: WatchEventKind.EPISODE_WATCHED,
-        occurredAt: now,
-        source: WatchEventSource.BULK,
-      })),
-    });
+    if (toWatch.length > 0) {
+      await tx.episode.updateMany({
+        where: target,
+        data: { watched: true, watchedAt: now },
+      });
+      await tx.watchEvent.createMany({
+        data: toWatch.map((e) => ({
+          userId,
+          titleId,
+          episodeId: e.id,
+          kind: WatchEventKind.EPISODE_WATCHED,
+          occurredAt: now,
+          source: WatchEventSource.BULK,
+        })),
+      });
+    }
+    await recomputeProgress(tx, titleId, title);
     return toWatch.length;
   });
 
-  await recomputeProgress(titleId);
   revalidateAll(titleId);
   return { count: changed };
 }
@@ -1507,13 +1534,16 @@ export async function bulkSetStatus(ids: string[], status: WatchStatus) {
     await mapLimit(owned, 6, ({ id: titleId }) =>
       prisma.$transaction(async (tx) => {
         const rows = await tx.$queryRaw<
-          { status: WatchStatus; mediaType: MediaType }[]
-        >`SELECT status, "mediaType" FROM "Title"
+          { status: WatchStatus; mediaType: MediaType; watchedAt: Date | null }[]
+        >`SELECT status, "mediaType", "watchedAt" FROM "Title"
           WHERE id = ${titleId} AND "userId" = ${userId} FOR UPDATE`;
         const current = rows[0];
         if (!current) return; // removed or transferred while the request waited
 
         const transitions = current.status !== WatchStatus.WATCHED;
+        const completedAt = current.watchedAt ?? now;
+        const autoWatchedAt = transitions && current.watchedAt === null ? now : undefined;
+        const episodeWatchedAt = transitions ? completedAt : now;
         if (current.mediaType === MediaType.TV) {
           // Aired episodes only: pre-ticking an unaired episode suppresses its
           // future "New" badge and upcoming entry.
@@ -1528,7 +1558,7 @@ export async function bulkSetStatus(ids: string[], status: WatchStatus) {
           });
           await tx.episode.updateMany({
             where: unwatchedAired,
-            data: { watched: true, watchedAt: now },
+            data: { watched: true, watchedAt: episodeWatchedAt },
           });
           if (toWatch.length) {
             await tx.watchEvent.createMany({
@@ -1537,7 +1567,7 @@ export async function bulkSetStatus(ids: string[], status: WatchStatus) {
                 titleId,
                 episodeId: episode.id,
                 kind: WatchEventKind.EPISODE_WATCHED,
-                occurredAt: now,
+                occurredAt: episodeWatchedAt,
                 source: WatchEventSource.BULK,
               })),
             });
@@ -1553,13 +1583,13 @@ export async function bulkSetStatus(ids: string[], status: WatchStatus) {
               // Preserve aggregate-only imports whose progress cannot be
               // reconstructed until episode metadata is materialized.
               ...(episodeRows > 0 ? { watchedEpisodes } : {}),
-              ...(transitions ? { watchedAt: now } : {}),
+              ...(autoWatchedAt ? { watchedAt: autoWatchedAt } : {}),
             },
           });
         } else {
           await tx.title.update({
             where: { id: titleId },
-            data: { status, ...(transitions ? { watchedAt: now } : {}) },
+            data: { status, ...(autoWatchedAt ? { watchedAt: autoWatchedAt } : {}) },
           });
         }
 
@@ -1569,7 +1599,7 @@ export async function bulkSetStatus(ids: string[], status: WatchStatus) {
               userId,
               titleId,
               kind: WatchEventKind.TITLE_COMPLETED,
-              occurredAt: now,
+              occurredAt: completedAt,
               source: WatchEventSource.BULK,
             },
           });
