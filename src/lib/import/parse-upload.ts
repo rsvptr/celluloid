@@ -1,5 +1,6 @@
 import ExcelJS from "exceljs";
 import { Readable } from "node:stream";
+import { inflateRawSync } from "node:zlib";
 import { parseHumanDate, type ParsedStatus, type ParsedTitle } from "./parse-excel";
 
 /**
@@ -227,6 +228,7 @@ const XLSX_MAX_RATIO = 120; // total uncompressed / total compressed
 // signal a field has overflowed into a ZIP64 record we deliberately don't parse.
 const ZIP_EOCD_SIG = 0x06054b50; // End Of Central Directory
 const ZIP_CDH_SIG = 0x02014b50; // Central Directory file Header
+const ZIP_LFH_SIG = 0x04034b50; // Local File Header
 const ZIP_U16_MAX = 0xffff;
 const ZIP_U32_MAX = 0xffffffff;
 
@@ -243,6 +245,11 @@ export type XlsxPreflightReason =
 export interface XlsxPreflight {
   ok: boolean;
   reason?: XlsxPreflightReason;
+}
+
+export interface XlsxInflationCheck extends XlsxPreflight {
+  /** Bytes actually emitted by bounded inflation, never header declarations. */
+  inflatedBytes: number;
 }
 
 /**
@@ -330,6 +337,95 @@ export function preflightXlsxZip(buf: Buffer): XlsxPreflight {
   return { ok: true };
 }
 
+/**
+ * Inflate every local entry under hard output ceilings before ExcelJS receives
+ * the archive. Central-directory sizes are attacker-controlled, so the cheap
+ * preflight above cannot prove how much a DEFLATE stream really emits. Node's
+ * maxOutputLength stops an entry at the boundary instead of materialising the
+ * rest; successful output is discarded entry-by-entry and only then may the
+ * workbook parser perform its normal load.
+ */
+export function verifyXlsxInflation(buf: Buffer): XlsxInflationCheck {
+  const declared = preflightXlsxZip(buf);
+  if (!declared.ok) return { ...declared, inflatedBytes: 0 };
+
+  const eocd = findZipEocd(buf);
+  const totalEntries = buf.readUInt16LE(eocd + 10);
+  const cdOffset = buf.readUInt32LE(eocd + 16);
+  let p = cdOffset;
+  let inflatedBytes = 0;
+  let compressedBytes = 0;
+
+  for (let n = 0; n < totalEntries; n++) {
+    const method = buf.readUInt16LE(p + 10);
+    const compSize = buf.readUInt32LE(p + 20);
+    const nameLen = buf.readUInt16LE(p + 28);
+    const extraLen = buf.readUInt16LE(p + 30);
+    const commentLen = buf.readUInt16LE(p + 32);
+    const localOffset = buf.readUInt32LE(p + 42);
+    if (
+      localOffset + 30 > cdOffset ||
+      buf.readUInt32LE(localOffset) !== ZIP_LFH_SIG ||
+      buf.readUInt16LE(localOffset + 8) !== method
+    ) {
+      return { ok: false, reason: "central-directory-corrupt", inflatedBytes };
+    }
+    const localNameLen = buf.readUInt16LE(localOffset + 26);
+    const localExtraLen = buf.readUInt16LE(localOffset + 28);
+    const dataStart = localOffset + 30 + localNameLen + localExtraLen;
+    const dataEnd = dataStart + compSize;
+    if (dataStart > cdOffset || dataEnd > cdOffset) {
+      return { ok: false, reason: "central-directory-corrupt", inflatedBytes };
+    }
+
+    const remainingTotal = XLSX_MAX_TOTAL_UNCOMPRESSED - inflatedBytes;
+    const outputLimit = Math.min(XLSX_MAX_ENTRY_UNCOMPRESSED, remainingTotal);
+    const compressed = buf.subarray(dataStart, dataEnd);
+    let entryBytes: number;
+    try {
+      if (method === 0) {
+        entryBytes = compressed.length;
+      } else if (method === 8) {
+        entryBytes = inflateRawSync(compressed, {
+          maxOutputLength: outputLimit,
+        }).length;
+      } else {
+        return { ok: false, reason: "central-directory-corrupt", inflatedBytes };
+      }
+    } catch (error) {
+      const exceeded =
+        error instanceof Error && "code" in error && error.code === "ERR_BUFFER_TOO_LARGE";
+      return {
+        ok: false,
+        reason: exceeded && remainingTotal < XLSX_MAX_ENTRY_UNCOMPRESSED
+          ? "archive-too-large"
+          : exceeded
+            ? "entry-too-large"
+            : "central-directory-corrupt",
+        inflatedBytes,
+      };
+    }
+    if (entryBytes > outputLimit) {
+      return {
+        ok: false,
+        reason:
+          remainingTotal < XLSX_MAX_ENTRY_UNCOMPRESSED
+            ? "archive-too-large"
+            : "entry-too-large",
+        inflatedBytes,
+      };
+    }
+    inflatedBytes += entryBytes;
+    compressedBytes += compSize;
+    p += 46 + nameLen + extraLen + commentLen;
+  }
+
+  if (inflatedBytes > XLSX_MAX_RATIO * compressedBytes) {
+    return { ok: false, reason: "ratio", inflatedBytes };
+  }
+  return { ok: true, inflatedBytes };
+}
+
 export interface UploadParseResult {
   titles: ParsedTitle[];
   error?: string;
@@ -376,9 +472,9 @@ export async function parseUploadedList(
       }
       await wb.csv.read(Readable.from([stripUtf8Bom(buffer)]));
     } else {
-      // Screen the ZIP for decompression-bomb shapes before exceljs/JSZip
-      // expands any entry (SEC-02). Reuse the parser's invalid-file convention.
-      if (!preflightXlsxZip(buffer).ok) {
+      // Measure bounded decompression before exceljs/JSZip expands the workbook.
+      // Declared sizes alone are not trustworthy (SEC-02).
+      if (!verifyXlsxInflation(buffer).ok) {
         return { titles: [], error: "Spreadsheet is too large or malformed." };
       }
       // Cast bridges the Node Buffer<ArrayBufferLike> vs exceljs Buffer typing.

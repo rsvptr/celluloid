@@ -47,9 +47,14 @@ const job = {
 
 let stateReads = 0;
 let itemReads = 0;
+let failSeed = false;
+let addCalls = 0;
 const fakePrisma = {
   importJob: {
-    updateMany: async () => ({ count: 1 }),
+    updateMany: async ({ data }: { data: { status?: string } }) => {
+      if (data.status) job.status = data.status;
+      return { count: 1 };
+    },
     findFirst: async ({ select }: { select?: { status?: boolean } }) => {
       if (select?.status) stateReads += 1;
       return select?.status ? { status: "COMMITTING" } : job;
@@ -58,12 +63,36 @@ const fakePrisma = {
   importItem: {
     findFirst: async () => {
       itemReads += 1;
-      return null;
+      return job.items[0];
+    },
+    update: async ({ data }: { data: Record<string, unknown> }) => {
+      const attempts = data.attempts as { increment?: number } | undefined;
+      Object.assign(job.items[0], {
+        ...data,
+        ...(attempts ? { attempts: job.items[0].attempts + (attempts.increment ?? 0) } : {}),
+      });
+      return job.items[0];
+    },
+  },
+  title: {
+    findUnique: async () => null,
+    updateMany: async () => {
+      if (failSeed) {
+        failSeed = false;
+        throw new Error("simulated personal-field seed failure");
+      }
+      return { count: 1 };
     },
   },
 };
 
 Object.assign(globalThis, { __CELLULOID_IMPORT_COMMIT_PRISMA__: fakePrisma });
+Object.assign(globalThis, {
+  __CELLULOID_IMPORT_ADD__: () => {
+    addCalls += 1;
+    return { id: "created-title-1" };
+  },
+});
 
 const loader = `
 export async function resolve(specifier, context, nextResolve) {
@@ -85,7 +114,7 @@ export async function resolve(specifier, context, nextResolve) {
   if (specifier === "@/lib/actions" || normalized.endsWith("/src/lib/actions")) {
     return {
       url: "data:text/javascript," + encodeURIComponent(
-        "export async function addFromTmdb() { throw new Error('unexpected item write'); }" +
+        "export async function addFromTmdb() { return globalThis.__CELLULOID_IMPORT_ADD__(); }" +
         "export async function rematchTitle() { throw new Error('unexpected item write'); }",
       ),
       shortCircuit: true,
@@ -113,6 +142,14 @@ describe("import commit request deadline", { concurrency: false }, () => {
   it("leaves the next item untouched when the request budget has expired", async () => {
     stateReads = 0;
     itemReads = 0;
+    job.status = "READY_FOR_REVIEW";
+    Object.assign(job.items[0], {
+      action: "CREATE",
+      titleId: null,
+      errorCode: null,
+      warning: null,
+      attempts: 0,
+    });
 
     const result = await commitImportJobChunk("user-1", "job-1", Date.now() - 1);
 
@@ -121,5 +158,55 @@ describe("import commit request deadline", { concurrency: false }, () => {
     assert.equal(result?.items[0]?.attempts, 0);
     assert.equal(stateReads, 0, "deadline check runs before the per-item state read");
     assert.equal(itemReads, 0, "no item write starts after the deadline");
+  });
+
+  it("checkpoints a created title when its personal-field seed fails", async () => {
+    stateReads = 0;
+    itemReads = 0;
+    failSeed = true;
+    addCalls = 0;
+    job.status = "READY_FOR_REVIEW";
+    Object.assign(job.items[0], {
+      action: "CREATE",
+      titleId: null,
+      errorCode: null,
+      warning: null,
+      attempts: 0,
+    });
+
+    const result = await commitImportJobChunk("user-1", "job-1");
+
+    assert.equal(result?.status, "COMPLETED");
+    assert.equal(result?.items[0]?.titleId, "created-title-1");
+    assert.equal(result?.items[0]?.action, "CREATE");
+    assert.equal(result?.items[0]?.errorCode, null);
+    assert.match(result?.items[0]?.warning ?? "", /saved without its status and rating/i);
+    assert.equal(result?.items[0]?.attempts, 1);
+    assert.equal(addCalls, 1);
+  });
+
+  it("retries only the personal-field seed for a row that already has a title", async () => {
+    stateReads = 0;
+    itemReads = 0;
+    failSeed = false;
+    addCalls = 0;
+    job.status = "PARTIAL";
+    Object.assign(job.items[0], {
+      action: "FAILED",
+      titleId: "created-title-1",
+      errorCode: "IMPORT_WRITE_FAILED",
+      warning: "Saved without its status and rating.",
+      attempts: 1,
+    });
+
+    const result = await commitImportJobChunk("user-1", "job-1");
+
+    assert.equal(result?.status, "COMPLETED");
+    assert.equal(result?.items[0]?.titleId, "created-title-1");
+    assert.equal(result?.items[0]?.action, "CREATE");
+    assert.equal(result?.items[0]?.errorCode, null);
+    assert.equal(result?.items[0]?.warning, null);
+    assert.equal(result?.items[0]?.attempts, 2);
+    assert.equal(addCalls, 0, "the retry does not create or rematch the title");
   });
 });

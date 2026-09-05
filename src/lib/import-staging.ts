@@ -69,6 +69,7 @@ export const IMPORT_COMMIT_BUDGET_MS = 45_000;
 const STALE_PARSING_MS = 5 * 60_000;
 
 const NO_MATCH_WARNING = "No confident TMDB match. Choose a match or exclude this row.";
+const CREATED_WITHOUT_PERSONAL_FIELDS_WARNING = "Saved without its status and rating.";
 
 function parsedYear(parsed: ParsedTitle): number | null {
   if (!parsed.releaseDate) return null;
@@ -762,9 +763,13 @@ async function commitOneImportItem(
   const item = await prisma.importItem.findFirst({
     where: { id: itemId, job: { userId } },
   });
-  if (!item || item.titleId || item.action === "SKIP" || item.action === "CONFLICT") {
+  if (!item || item.action === "SKIP" || item.action === "CONFLICT") {
     return null;
   }
+  // A row that already checkpointed a new title never needs another TMDB
+  // create/rematch. Only a failed seed retry is actionable; a CREATE/UPDATE
+  // row with a titleId is already terminal audit history.
+  if (item.titleId && item.action !== "FAILED") return null;
   if (item.action === "FAILED" && item.attempts >= IMPORT_MAX_ATTEMPTS) return null;
 
   const normalizedResult = stagedNormalizedSchema.safeParse(item.normalized);
@@ -787,6 +792,47 @@ async function commitOneImportItem(
 
   const mediaType = proposed.mediaType;
   const dbMediaType = mediaType === "tv" ? "TV" : "MOVIE";
+  if (item.titleId) {
+    try {
+      await applyStagedStatus(userId, item.titleId, dbMediaType, normalized.parsed);
+      const patch = {
+        titleId: item.titleId,
+        action: "CREATE" as const,
+        warning: null,
+        errorCode: null,
+        attempts: item.attempts + 1,
+      };
+      await prisma.importItem.update({
+        where: { id: item.id },
+        data: {
+          action: patch.action,
+          warning: patch.warning,
+          errorCode: patch.errorCode,
+          attempts: { increment: 1 },
+        },
+      });
+      return patch;
+    } catch (error) {
+      console.error(`Staged import seed retry failed for ${normalized.parsed.name}:`, error);
+      const patch = {
+        titleId: item.titleId,
+        action: "FAILED" as const,
+        errorCode: "IMPORT_WRITE_FAILED",
+        warning: CREATED_WITHOUT_PERSONAL_FIELDS_WARNING,
+        attempts: item.attempts + 1,
+      };
+      await prisma.importItem.update({
+        where: { id: item.id },
+        data: {
+          action: patch.action,
+          errorCode: patch.errorCode,
+          warning: patch.warning,
+          attempts: { increment: 1 },
+        },
+      });
+      return patch;
+    }
+  }
   const existing = await prisma.title.findUnique({
     where: {
       userId_mediaType_tmdbId: {
@@ -798,6 +844,8 @@ async function commitOneImportItem(
     select: { id: true, deletedAt: true },
   });
 
+  let createdTitleId: string | undefined;
+  let createWarning: string | null = null;
   try {
     let titleId: string | undefined;
     let action: "CREATE" | "UPDATE" = existing ? "UPDATE" : "CREATE";
@@ -822,6 +870,22 @@ async function commitOneImportItem(
       titleId = result.id;
       action = result.existing ? "UPDATE" : "CREATE";
       warning = result.warning ?? null;
+      if (!result.existing) {
+        // addFromTmdb commits independently. Checkpoint its id before the
+        // personal-field seed so a dropped connection or killed request cannot
+        // leave an invisible library title behind a retryable CREATE row.
+        createdTitleId = titleId;
+        createWarning = warning;
+        await prisma.importItem.update({
+          where: { id: item.id },
+          data: {
+            titleId,
+            action: "CREATE",
+            warning: CREATED_WITHOUT_PERSONAL_FIELDS_WARNING,
+            errorCode: null,
+          },
+        });
+      }
     }
 
     if (action === "UPDATE") {
@@ -843,6 +907,29 @@ async function commitOneImportItem(
     return { titleId, action, warning, errorCode: null, attempts: item.attempts + 1 };
   } catch (error) {
     console.error(`Staged import commit failed for ${normalized.parsed.name}:`, error);
+    if (createdTitleId) {
+      const warning = [createWarning, CREATED_WITHOUT_PERSONAL_FIELDS_WARNING]
+        .filter((value): value is string => Boolean(value))
+        .join(" ");
+      const patch = {
+        titleId: createdTitleId,
+        action: "CREATE" as const,
+        errorCode: null,
+        warning,
+        attempts: item.attempts + 1,
+      };
+      await prisma.importItem.update({
+        where: { id: item.id },
+        data: {
+          titleId: patch.titleId,
+          action: patch.action,
+          errorCode: patch.errorCode,
+          warning: patch.warning,
+          attempts: { increment: 1 },
+        },
+      });
+      return patch;
+    }
     const patch = {
       action: "FAILED" as const,
       errorCode: "IMPORT_WRITE_FAILED",
@@ -923,10 +1010,10 @@ export async function commitImportJobChunk(
   const candidates = job.items
     .filter(
       (item) =>
-        !item.titleId &&
         (item.action === "CREATE" ||
           item.action === "UPDATE" ||
-          (item.action === "FAILED" && item.attempts < IMPORT_MAX_ATTEMPTS)),
+          (item.action === "FAILED" && item.attempts < IMPORT_MAX_ATTEMPTS)) &&
+        (!item.titleId || item.action === "FAILED"),
     )
     .slice(0, IMPORT_COMMIT_BATCH_SIZE);
   for (const item of candidates) {
