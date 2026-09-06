@@ -389,20 +389,32 @@ export interface ShareVisibilityConfig {
  * Pure privacy decision for one title in a shared list — extracted so the rules
  * are unit-testable without a live DB. Whole-library shares hide WATCHLIST
  * titles unless the owner opted in; explicit selections are shown regardless of
- * status. Notes are stripped unless included. getSharePayload's SQL applies the
- * same visibility predicate as an efficiency pre-filter, but this helper is the
- * authoritative gate at the output boundary (defense in depth for a public,
- * no-auth endpoint).
+ * status. Notes, rating and favorite are personal signals of the same kind and
+ * are all stripped unless includeNotes is set; status and progress stay
+ * visible regardless. getSharePayload's SQL applies the same visibility
+ * predicate as an efficiency pre-filter, but this helper is the authoritative
+ * gate at the output boundary (defense in depth for a public, no-auth
+ * endpoint).
  */
 export function shareTitleVisibility(
   config: ShareVisibilityConfig,
-  title: { status: WatchStatus; notes: string | null },
-): { visible: boolean; notes: string | null } {
+  title: {
+    status: WatchStatus;
+    notes: string | null;
+    rating?: number | null;
+    favorite?: boolean;
+  },
+): { visible: boolean; notes: string | null; rating: number | null; favorite: boolean } {
   const visible =
     !config.isWholeLibrary ||
     config.includeWatchlist ||
     title.status !== WatchStatus.WATCHLIST;
-  return { visible, notes: config.includeNotes ? title.notes : null };
+  return {
+    visible,
+    notes: config.includeNotes ? title.notes : null,
+    rating: config.includeNotes ? (title.rating ?? null) : null,
+    favorite: config.includeNotes ? (title.favorite ?? false) : false,
+  };
 }
 
 export type ShareLifecycleState = "ACTIVE" | "EXPIRED" | "REVOKED";
@@ -529,8 +541,8 @@ export const getSharePayload = cache(
         language: t.language,
         tmdbRating: t.tmdbRating,
         status: t.status,
-        rating: t.rating,
-        favorite: t.favorite,
+        rating: decision.rating,
+        favorite: decision.favorite,
         totalEpisodes: t.totalEpisodes,
         watchedEpisodes: t.watchedEpisodes,
         notes: decision.notes,

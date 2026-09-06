@@ -2,7 +2,7 @@
 
 import { randomBytes } from "node:crypto";
 import { revalidatePath } from "next/cache";
-import { requireUserId } from "@/lib/session";
+import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { orderSharedTitles, shareTitleVisibility } from "@/lib/data";
 import type { MediaType, WatchStatus } from "@/generated/prisma/client";
@@ -11,6 +11,14 @@ import { z } from "zod";
 /** ~12 url-safe characters of entropy — unguessable. */
 function makeSlug(): string {
   return randomBytes(9).toString("base64url");
+}
+
+const SIGNED_OUT_MESSAGE = "You're signed out. Sign in and try again.";
+
+/** Returns the signed-in user's id, or null instead of throwing (see AUD-45). */
+async function getUserId(): Promise<string | null> {
+  const session = await getSession();
+  return session?.user?.id ?? null;
 }
 
 export interface CreateShareInput {
@@ -62,7 +70,8 @@ const shareExpirySchema = z.object({
 export async function createShareList(
   input: CreateShareInput,
 ): Promise<{ slug?: string; error?: string }> {
-  const userId = await requireUserId();
+  const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const parsed = createShareInputSchema.safeParse(input);
   if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   const data = parsed.data;
@@ -128,7 +137,8 @@ export async function createShareList(
 }
 
 export async function deleteShareList(id: string): Promise<{ ok: boolean }> {
-  const userId = await requireUserId();
+  const userId = await getUserId();
+  if (!userId) return { ok: false };
   const parsed = deleteShareSchema.safeParse({ id });
   if (!parsed.success) return { ok: false };
   const deleted = await prisma.shareList.deleteMany({ where: { id, userId } });
@@ -137,7 +147,8 @@ export async function deleteShareList(id: string): Promise<{ ok: boolean }> {
 }
 
 export async function revokeShareList(id: string): Promise<{ ok: boolean }> {
-  const userId = await requireUserId();
+  const userId = await getUserId();
+  if (!userId) return { ok: false };
   const parsed = deleteShareSchema.safeParse({ id });
   if (!parsed.success) return { ok: false };
   const revoked = await prisma.shareList.updateMany({
@@ -158,7 +169,8 @@ export async function revokeShareList(id: string): Promise<{ ok: boolean }> {
  * the owner wants, deleting the share is still the permanent option.
  */
 export async function restoreShareList(id: string): Promise<{ ok: boolean }> {
-  const userId = await requireUserId();
+  const userId = await getUserId();
+  if (!userId) return { ok: false };
   const parsed = deleteShareSchema.safeParse({ id });
   if (!parsed.success) return { ok: false };
   const restored = await prisma.shareList.updateMany({
@@ -174,7 +186,8 @@ export async function renameShareList(
   id: string,
   name: string | null,
 ): Promise<{ ok: boolean }> {
-  const userId = await requireUserId();
+  const userId = await getUserId();
+  if (!userId) return { ok: false };
   const parsed = renameShareSchema.safeParse({ id, name });
   if (!parsed.success) return { ok: false };
   const renamed = await prisma.shareList.updateMany({
@@ -197,7 +210,8 @@ export async function setShareExpiry(
   id: string,
   expiresInDays: 7 | 30 | 90 | null,
 ): Promise<{ ok: boolean }> {
-  const userId = await requireUserId();
+  const userId = await getUserId();
+  if (!userId) return { ok: false };
   const parsed = shareExpirySchema.safeParse({ id, expiresInDays });
   if (!parsed.success) return { ok: false };
   const expiresAt = parsed.data.expiresInDays
@@ -238,7 +252,8 @@ export interface SharedTitleSummary {
 export async function getShareListTitles(
   id: string,
 ): Promise<{ titles?: SharedTitleSummary[]; error?: string }> {
-  const userId = await requireUserId();
+  const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
   const parsed = deleteShareSchema.safeParse({ id });
   if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
 
