@@ -10,6 +10,12 @@ import type { TmdbEpisode, TmdbRegionProviders, TmdbSeasonDetails } from "@/lib/
 import { DEFAULT_WATCH_REGION, isWatchRegion } from "@/lib/tmdb-extras";
 import { mapLimit } from "@/lib/async";
 import { env } from "@/lib/env";
+import {
+  ACTIVE_EPISODE_FILTER,
+  discoveredAtForNewEpisode,
+  WITHDRAWN_EPISODE_NUMBER_OFFSET,
+} from "@/lib/rematch-history";
+export { discoveredAtForNewEpisode } from "@/lib/rematch-history";
 
 /**
  * Scheduled TMDB metadata refresh.
@@ -23,20 +29,15 @@ import { env } from "@/lib/env";
  * newly aired episodes, which is what makes that signal real.
  *
  * The rules that matter here:
- *   - Episodes are UPSERTED by (seasonNumber, episodeNumber), never deleted and
- *     recreated. rematchTitle's delete-and-recreate is correct for a re-link
- *     (it carries `discoveredAt` forward explicitly), but doing it on every
- *     nightly run would rewrite every row and hand each one a fresh
- *     `discoveredAt` — badging the entire library as "new" and destroying the
- *     exact signal this sync produces.
+ *   - Episodes are UPSERTED by TMDB id, falling back to their coordinate only
+ *     for legacy rows without one. A withdrawn unwatched row is deleted; a
+ *     watched row keeps its identity and history with a withdrawnAt stamp.
  *   - A row this run does create is dated by its own air date rather than by
  *     the run, so materializing a back catalogue is not mistaken for a night of
  *     new episodes. See discoveredAtForNewEpisode.
- *   - Rows are never removed. TMDB occasionally drops or renumbers an episode
- *     for a day; deleting on that basis would take the owner's watched flag
- *     with it. The denormalized counters are recomputed from the rows that
- *     actually exist, so a stale extra row is visible in the count rather than
- *     silently papered over.
+ *   - TMDB renumbering is applied in two phases so coordinate swaps cannot trip
+ *     the `(seasonId, episodeNumber)` unique constraint or move a watched tick
+ *     onto a different TMDB episode.
  *   - One title's failure is recorded on that title and the run continues.
  */
 
@@ -55,6 +56,7 @@ const TMDB_BASE = "https://api.themoviedb.org/3";
 
 /** Bound one attempt so a stalled TMDB response can't eat the run's budget. */
 const TMDB_TIMEOUT_MS = 8000;
+const EPISODE_RENUMBER_OFFSET = 1_000_000;
 
 /**
  * Raised when the run's wall-clock budget ran out before a request could be
@@ -671,39 +673,6 @@ function episodeUnchanged(current: EpisodeFields, next: EpisodeFields): boolean 
   );
 }
 
-/** How recently an episode must have aired to still count as a discovery. */
-const RECENT_AIR_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
-
-/**
- * What `discoveredAt` a row this run creates should carry.
- *
- * Every created row used to take the schema's now() default. That is right for
- * an episode that genuinely just appeared, but wrong for back catalogue: a show
- * whose older seasons were never materialized — a partial add, or a season
- * whose fetch failed on the day it was added — would have sixty episodes appear
- * on a single night, all stamped as discovered now, and the owner would get a
- * "New" badge for a season from 2015. discoveredAt means "TMDB gained this
- * since you last looked", so only an episode that plausibly IS new earns the
- * sync's timestamp; anything older is dated to the title itself, the same
- * answer lib/backup gives an episode recovered from a backup.
- */
-export function discoveredAtForNewEpisode(
-  airDate: Date | null,
-  titleCreatedAt: Date,
-  now: Date,
-): Date {
-  // No air date at all is TMDB announcing an episode it has not scheduled yet,
-  // which is forward-looking rather than back catalogue. (The badge also
-  // requires an air date already past, so such a row cannot fire it either way.)
-  if (airDate === null) return now;
-  // Advance-published schedules may arrive weeks or months before broadcast.
-  // Dating those rows to the sync run lets the 14-day badge window expire
-  // before they become watchable; dating them to air day activates the signal
-  // exactly when the episode can first satisfy the badge's airDate <= now guard.
-  if (airDate.getTime() > now.getTime()) return airDate;
-  return airDate.getTime() >= now.getTime() - RECENT_AIR_WINDOW_MS ? now : titleCreatedAt;
-}
-
 // --- One title --------------------------------------------------------------
 
 export interface TitleSyncOutcome {
@@ -729,15 +698,20 @@ function errorMessage(err: unknown): string {
 
 async function recordFailure(
   userId: string,
-  titleId: string,
+  candidate: SyncCandidate,
   message: string,
   now: Date,
-): Promise<void> {
-  // updateMany, scoped by userId, so a title that was deleted or reassigned
-  // between the read and here is a no-op rather than a thrown P2025 that would
-  // mask the real error being recorded.
-  await prisma.title.updateMany({
-    where: { id: titleId, userId },
+): Promise<boolean> {
+  // A failed old request must not mark a newly rematched title FAILED. The same
+  // identity boundary guards both successful writes and their failure stamps.
+  const updated = await prisma.title.updateMany({
+    where: {
+      id: candidate.id,
+      userId,
+      deletedAt: null,
+      tmdbId: candidate.tmdbId,
+      mediaType: candidate.mediaType,
+    },
     data: {
       // Stamped even on failure: the queue is ordered by this column, so
       // leaving it untouched would park a permanently broken title at the head
@@ -748,6 +722,7 @@ async function recordFailure(
       metadataLastError: message,
     },
   });
+  return updated.count > 0;
 }
 
 /**
@@ -764,11 +739,18 @@ async function recordProviderFailure(
   region: string,
   candidate: SyncCandidate,
   now: Date,
-): Promise<void> {
-  await prisma.title.updateMany({
-    where: { id: candidate.id, userId, deletedAt: null },
+): Promise<boolean> {
+  const updated = await prisma.title.updateMany({
+    where: {
+      id: candidate.id,
+      userId,
+      deletedAt: null,
+      tmdbId: candidate.tmdbId,
+      mediaType: candidate.mediaType,
+    },
     data: providerFailureUpdate(region, candidate.providersRegion, now),
   });
+  return updated.count > 0;
 }
 
 async function syncOneTitle(
@@ -818,8 +800,14 @@ async function syncOneTitle(
       // could deadlock against it. The userId in the predicate makes the lock
       // double as the ownership check.
       const locked = await tx.$queryRaw<{ id: string }[]>`
-        SELECT id FROM "Title" WHERE id = ${candidate.id} AND "userId" = ${userId} FOR UPDATE`;
-      if (!locked[0]) return null; // deleted or purged concurrently
+        SELECT id FROM "Title"
+        WHERE id = ${candidate.id}
+          AND "userId" = ${userId}
+          AND "deletedAt" IS NULL
+          AND "tmdbId" = ${candidate.tmdbId}
+          AND "mediaType" = ${candidate.mediaType}::"MediaType"
+        FOR UPDATE`;
+      if (!locked[0]) return null; // deleted, trashed, or rematched concurrently
 
       const newEpisodes = await upsertSeasons(tx, candidate, seasons, now);
 
@@ -827,10 +815,14 @@ async function syncOneTitle(
       // number_of_episodes: a partial season load, or an episode TMDB dropped,
       // would otherwise leave the progress bar quoting a total nothing backs.
       const totalEpisodes = await tx.episode.count({
-        where: { season: { titleId: candidate.id } },
+        where: { season: { titleId: candidate.id }, ...ACTIVE_EPISODE_FILTER },
       });
       const watchedEpisodes = await tx.episode.count({
-        where: { season: { titleId: candidate.id }, watched: true },
+        where: {
+          season: { titleId: candidate.id },
+          watched: true,
+          ...ACTIVE_EPISODE_FILTER,
+        },
       });
 
       await tx.title.update({
@@ -961,6 +953,8 @@ async function upsertSeasons(
           airDate: true,
           runtime: true,
           stillPath: true,
+          watched: true,
+          withdrawnAt: true,
         },
       },
     },
@@ -985,6 +979,7 @@ async function upsertSeasons(
               seasonId: season.id,
               episodeNumber: ep.episode_number,
               ...fresh,
+              withdrawnAt: null,
               // A season missing locally is as often one that was never
               // materialized as it is a season that just aired, so each episode
               // is dated on its own evidence.
@@ -1001,16 +996,77 @@ async function upsertSeasons(
       await tx.season.update({ where: { id: current.id }, data: fields });
     }
 
-    const byEpisodeNumber = new Map(current.episodes.map((e) => [e.episodeNumber, e]));
+    const byTmdbId = new Map(
+      current.episodes.flatMap((episode) =>
+        episode.tmdbId === null ? [] : [[episode.tmdbId, episode] as const],
+      ),
+    );
+    const legacyByEpisodeNumber = new Map(
+      current.episodes
+        .filter((episode) => episode.tmdbId === null && episode.withdrawnAt === null)
+        .map((episode) => [episode.episodeNumber, episode] as const),
+    );
+    const planned = episodes.map((episode) => ({
+      episode,
+      fresh: episodeFieldsFromTmdb(episode),
+      row:
+        byTmdbId.get(episode.id) ??
+        legacyByEpisodeNumber.get(episode.episode_number),
+    }));
+    const matchedIds = new Set(
+      planned.flatMap(({ row }) => (row ? [row.id] : [])),
+    );
+
+    // Free coordinates TMDB no longer owns before applying renumberings. A
+    // watched row is never destroyed: stamp it withdrawn while preserving its
+    // number and air date. If a different active episode now needs that number,
+    // move the withdrawn row into a reserved range before the renumber phase.
+    // If TMDB later restores the same id, the id-first plan revives this row.
+    const activeCoordinates = new Set(episodes.map((episode) => episode.episode_number));
+    for (const row of current.episodes) {
+      if (matchedIds.has(row.id)) continue;
+      if (!row.watched) {
+        await tx.episode.delete({ where: { id: row.id } });
+      } else {
+        const coordinateIsReused = activeCoordinates.has(row.episodeNumber);
+        if (row.withdrawnAt !== null && !coordinateIsReused) continue;
+        await tx.episode.update({
+          where: { id: row.id },
+          data: {
+            ...(coordinateIsReused
+              ? {
+                  episodeNumber:
+                    row.episodeNumber + WITHDRAWN_EPISODE_NUMBER_OFFSET,
+                }
+              : {}),
+            withdrawnAt: row.withdrawnAt ?? now,
+          },
+        });
+      }
+    }
+
+    // Coordinate swaps (E1 -> E2 while E2 -> E3, for example) cannot be
+    // written directly under the season/number unique. Park every moving row
+    // on its own large positive coordinate first, then write final TMDB
+    // numbers. Adding the same offset preserves uniqueness and satisfies the
+    // database's non-negative episode-number CHECK.
+    for (const { episode, row } of planned) {
+      if (row && row.episodeNumber !== episode.episode_number) {
+        await tx.episode.update({
+          where: { id: row.id },
+          data: { episodeNumber: row.episodeNumber + EPISODE_RENUMBER_OFFSET },
+        });
+      }
+    }
+
     const toCreate: Prisma.EpisodeCreateManyInput[] = [];
-    for (const ep of episodes) {
-      const fresh = episodeFieldsFromTmdb(ep);
-      const row = byEpisodeNumber.get(ep.episode_number);
+    for (const { episode, fresh, row } of planned) {
       if (!row) {
         toCreate.push({
           seasonId: current.id,
-          episodeNumber: ep.episode_number,
+          episodeNumber: episode.episode_number,
           ...fresh,
+          withdrawnAt: null,
           // An episode appearing inside a season we already hold is usually the
           // "this just showed up" case the badge exists for — but the same gap
           // opens when an old episode was never stored, so it is judged by its
@@ -1019,8 +1075,15 @@ async function upsertSeasons(
         });
         continue;
       }
-      if (!episodeUnchanged(row, fresh)) {
-        await tx.episode.update({ where: { id: row.id }, data: fresh });
+      if (
+        row.episodeNumber !== episode.episode_number ||
+        row.withdrawnAt !== null ||
+        !episodeUnchanged(row, fresh)
+      ) {
+        await tx.episode.update({
+          where: { id: row.id },
+          data: { episodeNumber: episode.episode_number, ...fresh, withdrawnAt: null },
+        });
       }
     }
     if (toCreate.length > 0) {
@@ -1146,22 +1209,27 @@ export async function syncUserMetadata(
           `metadata sync failed (titleId=${candidate.id}, tmdbId=${candidate.tmdbId}, kind=${candidate.kind}):`,
           err,
         );
+        let identityStillCurrent = true;
         if (candidate.kind === "TV_METADATA") {
           // Recording the failure must not itself abort the run — if the database
           // is the thing that is unwell, the next title will report it too.
-          await recordFailure(userId, candidate.id, message, new Date()).catch(
-            (writeErr) => {
-              console.error(
-                `metadata sync could not record failure (titleId=${candidate.id}):`,
-                writeErr,
-              );
-            },
-          );
+          identityStillCurrent = await recordFailure(
+            userId,
+            candidate,
+            message,
+            new Date(),
+          ).catch((writeErr) => {
+            console.error(
+              `metadata sync could not record failure (titleId=${candidate.id}):`,
+              writeErr,
+            );
+            return true;
+          });
         } else {
           // Provider failures do not make the title metadata itself FAILED,
           // but they still need an attempt stamp or one broken lookup pins the
           // provider queue forever and starves every title behind it.
-          await recordProviderFailure(
+          identityStillCurrent = await recordProviderFailure(
             userId,
             region,
             candidate,
@@ -1171,7 +1239,16 @@ export async function syncUserMetadata(
               `metadata sync could not record provider failure (titleId=${candidate.id}):`,
               writeErr,
             );
+            return true;
           });
+        }
+        if (!identityStillCurrent) {
+          return {
+            titleId: candidate.id,
+            name: candidate.name,
+            state: "VANISHED",
+            newEpisodes: 0,
+          };
         }
         return {
           titleId: candidate.id,

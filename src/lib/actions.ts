@@ -18,8 +18,11 @@ import { getMovie, getSeason, getTv } from "@/lib/tmdb";
 import { mapLimit } from "@/lib/async";
 import { isTagColor } from "@/lib/tag-colors";
 import {
+  ACTIVE_EPISODE_FILTER,
+  discoveredAtForNewEpisode,
   planEpisodeEventRelinks,
   preservesEpisodeHistory,
+  WITHDRAWN_EPISODE_NUMBER_OFFSET,
   type EpisodeEventCoordinate,
 } from "@/lib/rematch-history";
 import { z } from "zod";
@@ -259,7 +262,10 @@ function revalidateAll(id?: string) {
  * episode is left unguarded — the owner may have seen a preview.
  */
 function airedEpisodeFilter(now: Date) {
-  return { OR: [{ airDate: null }, { airDate: { lte: now } }] };
+  return {
+    ...ACTIVE_EPISODE_FILTER,
+    OR: [{ airDate: null }, { airDate: { lte: now } }],
+  };
 }
 
 type LockedProgressTitle = {
@@ -274,9 +280,11 @@ async function recomputeProgress(
   titleId: string,
   title: LockedProgressTitle,
 ) {
-  const total = await tx.episode.count({ where: { season: { titleId } } });
+  const total = await tx.episode.count({
+    where: { season: { titleId }, ...ACTIVE_EPISODE_FILTER },
+  });
   const watched = await tx.episode.count({
-    where: { season: { titleId }, watched: true },
+    where: { season: { titleId }, watched: true, ...ACTIVE_EPISODE_FILTER },
   });
 
   let status = title.status;
@@ -463,8 +471,12 @@ export async function updateTitle(
         });
       }
       const [episodeRows, watchedEpisodes] = await Promise.all([
-        tx.episode.count({ where: { season: { titleId: id } } }),
-        tx.episode.count({ where: { season: { titleId: id }, watched: true } }),
+        tx.episode.count({
+          where: { season: { titleId: id }, ...ACTIVE_EPISODE_FILTER },
+        }),
+        tx.episode.count({
+          where: { season: { titleId: id }, watched: true, ...ACTIVE_EPISODE_FILTER },
+        }),
       ]);
       await tx.title.update({
         where: { id },
@@ -1048,7 +1060,7 @@ export async function setSeasonWatched(seasonId: string, watched: boolean) {
       // Bulk demotion preserves historical events by design; it only clears
       // episode state, and only rows that genuinely transition.
       await tx.episode.updateMany({
-        where: { seasonId, watched: true },
+        where: { seasonId, watched: true, ...ACTIVE_EPISODE_FILTER },
         data: { watched: false, watchedAt: null },
       });
     }
@@ -1107,7 +1119,7 @@ export async function setAllEpisodesWatched(titleId: string, watched: boolean) {
     } else {
       // Preserve historical events, but touch only true -> false rows.
       await tx.episode.updateMany({
-        where: { season: { titleId }, watched: true },
+        where: { season: { titleId }, watched: true, ...ACTIVE_EPISODE_FILTER },
         data: { watched: false, watchedAt: null },
       });
     }
@@ -1191,6 +1203,28 @@ export async function setEpisodesWatchedThrough(
 
 type FetchedSeason = { n: number; sd: Awaited<ReturnType<typeof getSeason>> };
 
+type PriorEpisode = {
+  tmdbId: number | null;
+  seasonNumber: number;
+  episodeNumber: number;
+  watched: boolean;
+  watchedAt: Date | null;
+  withdrawnAt: Date | null;
+  discoveredAt: Date;
+  name: string | null;
+  overview: string | null;
+  airDate: Date | null;
+  runtime: number | null;
+  stillPath: string | null;
+  season: {
+    tmdbId: number | null;
+    name: string | null;
+    overview: string | null;
+    airDate: Date | null;
+    posterPath: string | null;
+  };
+};
+
 /**
  * Fetches all season details for a TV title from TMDB (network only, no DB
  * writes). `allOk` is false if any listed season failed to load — callers that
@@ -1200,6 +1234,7 @@ type FetchedSeason = { n: number; sd: Awaited<ReturnType<typeof getSeason>> };
 async function fetchSeasonData(
   tvTmdbId: number,
   tv: Awaited<ReturnType<typeof getTv>>,
+  opts: { fresh?: boolean } = {},
 ): Promise<{ seasons: FetchedSeason[]; allOk: boolean }> {
   const seasonNumbers = tv.seasons
     .map((s) => s.season_number)
@@ -1210,7 +1245,7 @@ async function fetchSeasonData(
   // 40-season soap doesn't burst-fire at TMDB) instead of one at a time.
   const fetched = await mapLimit(seasonNumbers, 6, async (n) => ({
     n,
-    sd: await getSeason(tvTmdbId, n).catch(() => null),
+    sd: await getSeason(tvTmdbId, n, opts).catch(() => null),
   }));
   const seasons = fetched.filter((f): f is FetchedSeason => f.sd !== null);
   return { seasons, allOk: seasons.length === seasonNumbers.length };
@@ -1218,18 +1253,40 @@ async function fetchSeasonData(
 
 /**
  * Writes Season + Episode rows from pre-fetched TMDB data inside a transaction.
- * When `prior` is given (keyed "season:episode"), preserves watched state/date
- * AND the original discoveredAt for episodes that still exist so a refresh/
- * re-match keeps progress and doesn't reset episode discovery (which would
- * spuriously re-fire the "New episodes" badge). Genuinely new rows fall back to
- * the schema's discoveredAt default of now().
+ * When `prior` is given, TMDB id is the identity and the mutable season/episode
+ * coordinate is only a fallback for legacy rows without one. Watched rows that
+ * disappeared are recreated with a withdrawnAt stamp. Genuinely new rows receive
+ * a discovery date derived from their air date and the title's age.
  */
 async function writeSeasons(
   tx: Prisma.TransactionClient,
   titleId: string,
   seasons: FetchedSeason[],
-  prior?: Map<string, { watched: boolean; watchedAt: Date | null; discoveredAt: Date }>,
+  titleCreatedAt: Date,
+  now: Date,
+  prior: PriorEpisode[] = [],
 ): Promise<void> {
+  const priorByTmdbId = new Map(
+    prior.flatMap((episode) =>
+      episode.tmdbId === null ? [] : [[episode.tmdbId, episode] as const],
+    ),
+  );
+  const legacyByCoordinate = new Map(
+    prior
+      .filter((episode) => episode.tmdbId === null && episode.withdrawnAt === null)
+      .map((episode) => [
+        `${episode.seasonNumber}:${episode.episodeNumber}`,
+        episode,
+      ] as const),
+  );
+  const matched = new Set<PriorEpisode>();
+  const seasonIds = new Map<number, string>();
+  const activeCoordinates = new Set(
+    seasons.flatMap(({ n, sd }) =>
+      (sd.episodes ?? []).map((episode) => `${n}:${episode.episode_number}`),
+    ),
+  );
+
   for (const { n, sd } of seasons) {
     const season = await tx.season.create({
       data: {
@@ -1243,29 +1300,86 @@ async function writeSeasons(
         episodeCount: sd.episodes?.length ?? null,
       },
     });
+    seasonIds.set(n, season.id);
     if (sd.episodes?.length) {
       await tx.episode.createMany({
         data: sd.episodes.map((ep) => {
-          const p = prior?.get(`${n}:${ep.episode_number}`);
+          const p =
+            priorByTmdbId.get(ep.id) ??
+            legacyByCoordinate.get(`${n}:${ep.episode_number}`);
+          if (p) matched.add(p);
+          const airDate = toDate(ep.air_date);
           return {
             seasonId: season.id,
             tmdbId: ep.id,
             episodeNumber: ep.episode_number,
             name: ep.name || null,
             overview: ep.overview || null,
-            airDate: toDate(ep.air_date),
+            airDate,
             runtime: ep.runtime ?? null,
             stillPath: ep.still_path,
             watched: p?.watched ?? false,
             watchedAt: p?.watched ? (p.watchedAt ?? null) : null,
-            // Carry the prior discoveredAt for episodes that already existed so a
-            // refresh/re-match doesn't reset discovery; new rows omit it and take
-            // the schema default (now()).
-            ...(p ? { discoveredAt: p.discoveredAt } : {}),
+            withdrawnAt: null,
+            discoveredAt:
+              p?.discoveredAt ??
+              discoveredAtForNewEpisode(airDate, titleCreatedAt, now),
           };
         }),
       });
     }
+  }
+
+  // A same-series refresh deletes and rebuilds seasons. Recreate watched rows
+  // that TMDB no longer returns so their tick and linked watch events survive.
+  // A withdrawn row keeps its coordinate unless an active row now occupies it;
+  // that collision is moved to the reserved withdrawn range.
+  const withdrawnBySeason = new Map<number, PriorEpisode[]>();
+  for (const episode of prior) {
+    if (!episode.watched || matched.has(episode)) continue;
+    const rows = withdrawnBySeason.get(episode.seasonNumber) ?? [];
+    rows.push(episode);
+    withdrawnBySeason.set(episode.seasonNumber, rows);
+  }
+  for (const [seasonNumber, episodes] of withdrawnBySeason) {
+    let seasonId = seasonIds.get(seasonNumber);
+    if (!seasonId) {
+      const exemplar = episodes[0];
+      const season = await tx.season.create({
+        data: {
+          titleId,
+          seasonNumber,
+          tmdbId: exemplar.season.tmdbId,
+          name: exemplar.season.name,
+          overview: exemplar.season.overview,
+          airDate: exemplar.season.airDate,
+          posterPath: exemplar.season.posterPath,
+          episodeCount: 0,
+        },
+      });
+      seasonId = season.id;
+      seasonIds.set(seasonNumber, seasonId);
+    }
+    await tx.episode.createMany({
+      data: episodes.map((episode) => ({
+        seasonId,
+        tmdbId: episode.tmdbId,
+        episodeNumber: activeCoordinates.has(
+          `${episode.seasonNumber}:${episode.episodeNumber}`,
+        )
+          ? episode.episodeNumber + WITHDRAWN_EPISODE_NUMBER_OFFSET
+          : episode.episodeNumber,
+        name: episode.name,
+        overview: episode.overview,
+        airDate: episode.airDate,
+        runtime: episode.runtime,
+        stillPath: episode.stillPath,
+        watched: true,
+        watchedAt: episode.watchedAt,
+        withdrawnAt: episode.withdrawnAt ?? now,
+        discoveredAt: episode.discoveredAt,
+      })),
+    });
   }
 }
 
@@ -1305,7 +1419,7 @@ export async function addFromTmdb(
 
   try {
     if (mt === MediaType.MOVIE) {
-      const m = await getMovie(tmdbId);
+      const m = await getMovie(tmdbId, { fresh: true });
       const created = await prisma.title.create({
         data: {
           userId,
@@ -1329,14 +1443,15 @@ export async function addFromTmdb(
       return { id: created.id };
     }
 
-    const tv = await getTv(tmdbId);
+    const now = new Date();
+    const tv = await getTv(tmdbId, { fresh: true });
     // Fetch all season data before any DB writes, then persist atomically. Unlike
     // re-match (which aborts on partial data to protect existing progress), a
     // fresh add has nothing to lose: on a partial TMDB failure we still create the
     // title from the seasons that DID load and return a warning so the user can
     // refresh later. The denormalized counts below are reconciled from the rows
     // actually stored, so they never claim more seasons/episodes than were saved.
-    const { seasons, allOk } = await fetchSeasonData(tmdbId, tv);
+    const { seasons, allOk } = await fetchSeasonData(tmdbId, tv, { fresh: true });
     const created = await prisma.$transaction(
       async (tx) => {
         const t = await tx.title.create({
@@ -1362,10 +1477,10 @@ export async function addFromTmdb(
             source: "tmdb",
           },
         });
-        await writeSeasons(tx, t.id, seasons);
+        await writeSeasons(tx, t.id, seasons, t.createdAt, now);
         // totalEpisodes from the rows we actually created.
         const epTotal = await tx.episode.count({
-          where: { season: { titleId: t.id } },
+          where: { season: { titleId: t.id }, ...ACTIVE_EPISODE_FILTER },
         });
         await tx.title.update({
           where: { id: t.id },
@@ -1464,7 +1579,7 @@ export async function rematchTitle(
 
   try {
     if (mt === MediaType.MOVIE) {
-      const m = await getMovie(tmdbId);
+      const m = await getMovie(tmdbId, { fresh: true });
       const found = await prisma.$transaction(async (tx) => {
         // Lock the Title row FIRST so locks are taken Title-then-Episode, the
         // same order every other transaction in this file uses. season.deleteMany
@@ -1502,11 +1617,12 @@ export async function rematchTitle(
       });
       if (!found) return { error: "Title not found." };
     } else {
-      const tv = await getTv(tmdbId);
+      const now = new Date();
+      const tv = await getTv(tmdbId, { fresh: true });
       // Fetch ALL season data before touching the DB. If any season failed to
       // load, abort without deleting anything (never destroy progress on a
       // transient TMDB failure).
-      const { seasons, allOk } = await fetchSeasonData(tmdbId, tv);
+      const { seasons, allOk } = await fetchSeasonData(tmdbId, tv, { fresh: true });
       if (!allOk) {
         return {
           error:
@@ -1522,9 +1638,18 @@ export async function rematchTitle(
           // Title lock would lock Episode rows first and invert the order against
           // a concurrent recompute / bulkSetStatus, risking a deadlock.
           const rows = await tx.$queryRaw<
-            { id: string; tmdbId: number | null; mediaType: MediaType }[]
+            {
+              id: string;
+              userId: string;
+              tmdbId: number | null;
+              mediaType: MediaType;
+              status: WatchStatus;
+              watchedAt: Date | null;
+              createdAt: Date;
+            }[]
           >`
-            SELECT id, "tmdbId", "mediaType" FROM "Title"
+            SELECT id, "userId", "tmdbId", "mediaType", status, "watchedAt", "createdAt"
+            FROM "Title"
             WHERE id = ${titleId} AND "userId" = ${userId}
             FOR UPDATE`;
           const locked = rows[0];
@@ -1537,20 +1662,33 @@ export async function rematchTitle(
             tmdbId,
             mediaType: MediaType.TV,
           });
-          const prior = new Map<
-            string,
-            { watched: boolean; watchedAt: Date | null; discoveredAt: Date }
-          >();
+          const prior: PriorEpisode[] = [];
           const eventCoordinates: EpisodeEventCoordinate[] = [];
           if (preserveEpisodes) {
             const prevEps = await tx.episode.findMany({
               where: { season: { titleId } },
               select: {
+                tmdbId: true,
                 episodeNumber: true,
+                name: true,
+                overview: true,
+                airDate: true,
+                runtime: true,
+                stillPath: true,
                 watched: true,
                 watchedAt: true,
+                withdrawnAt: true,
                 discoveredAt: true,
-                season: { select: { seasonNumber: true } },
+                season: {
+                  select: {
+                    seasonNumber: true,
+                    tmdbId: true,
+                    name: true,
+                    overview: true,
+                    airDate: true,
+                    posterPath: true,
+                  },
+                },
                 watchEvents: {
                   where: { titleId },
                   select: { id: true },
@@ -1559,14 +1697,31 @@ export async function rematchTitle(
             });
             for (const episode of prevEps) {
               const seasonNumber = episode.season.seasonNumber;
-              prior.set(`${seasonNumber}:${episode.episodeNumber}`, {
+              prior.push({
+                tmdbId: episode.tmdbId,
+                seasonNumber,
+                episodeNumber: episode.episodeNumber,
                 watched: episode.watched,
                 watchedAt: episode.watchedAt,
+                withdrawnAt: episode.withdrawnAt,
                 discoveredAt: episode.discoveredAt,
+                name: episode.name,
+                overview: episode.overview,
+                airDate: episode.airDate,
+                runtime: episode.runtime,
+                stillPath: episode.stillPath,
+                season: {
+                  tmdbId: episode.season.tmdbId,
+                  name: episode.season.name,
+                  overview: episode.season.overview,
+                  airDate: episode.season.airDate,
+                  posterPath: episode.season.posterPath,
+                },
               });
               for (const event of episode.watchEvents) {
                 eventCoordinates.push({
                   eventId: event.id,
+                  tmdbId: episode.tmdbId,
                   seasonNumber,
                   episodeNumber: episode.episodeNumber,
                 });
@@ -1598,7 +1753,9 @@ export async function rematchTitle(
             tx,
             titleId,
             seasons,
-            preserveEpisodes ? prior : undefined,
+            locked.createdAt,
+            now,
+            preserveEpisodes ? prior : [],
           );
 
           if (eventCoordinates.length > 0) {
@@ -1606,6 +1763,7 @@ export async function rematchTitle(
               where: { season: { titleId } },
               select: {
                 id: true,
+                tmdbId: true,
                 episodeNumber: true,
                 season: { select: { seasonNumber: true } },
               },
@@ -1615,6 +1773,7 @@ export async function rematchTitle(
               eventCoordinates,
               freshEpisodes.map((episode) => ({
                 episodeId: episode.id,
+                tmdbId: episode.tmdbId,
                 seasonNumber: episode.season.seasonNumber,
                 episodeNumber: episode.episodeNumber,
               })),
@@ -1634,16 +1793,21 @@ export async function rematchTitle(
           }
 
           const epTotal = await tx.episode.count({
-            where: { season: { titleId } },
+            where: { season: { titleId }, ...ACTIVE_EPISODE_FILTER },
           });
           const epWatched = await tx.episode.count({
-            where: { season: { titleId }, watched: true },
+            where: { season: { titleId }, watched: true, ...ACTIVE_EPISODE_FILTER },
           });
-          // Update counts but preserve the user's chosen status (manual override).
+          // Same-series refreshes preserve manual status. A genuinely different
+          // series starts with zero carried ticks and re-applies the central
+          // progress rule (while still respecting ON_HOLD and DROPPED).
           await tx.title.update({
             where: { id: titleId },
             data: { totalEpisodes: epTotal, watchedEpisodes: epWatched },
           });
+          if (!preserveEpisodes) {
+            await recomputeProgress(tx, titleId, locked);
+          }
           return true;
         },
         { timeout: 20000 },
@@ -1737,8 +1901,12 @@ export async function bulkSetStatus(ids: string[], status: WatchStatus) {
             });
           }
           const [episodeRows, watchedEpisodes] = await Promise.all([
-            tx.episode.count({ where: { season: { titleId } } }),
-            tx.episode.count({ where: { season: { titleId }, watched: true } }),
+            tx.episode.count({
+              where: { season: { titleId }, ...ACTIVE_EPISODE_FILTER },
+            }),
+            tx.episode.count({
+              where: { season: { titleId }, watched: true, ...ACTIVE_EPISODE_FILTER },
+            }),
           ]);
           await tx.title.update({
             where: { id: titleId },

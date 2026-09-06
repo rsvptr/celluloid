@@ -94,6 +94,7 @@ const tv: BackupTitle = {
           stillPath: null,
           watched: true,
           watchedAt: "2026-07-01T20:00:00.000Z",
+          withdrawnAt: null,
         },
         {
           sourceId: "episode-two-source",
@@ -106,6 +107,7 @@ const tv: BackupTitle = {
           stillPath: null,
           watched: false,
           watchedAt: null,
+          withdrawnAt: null,
         },
       ],
     },
@@ -199,6 +201,21 @@ describe("Celluloid backup envelope", () => {
       tv.sourceId,
     ]);
     assert.equal("slug" in parsed.shares[0], false);
+  });
+
+  it("round-trips withdrawn episodes and treats older v2 episodes as active", () => {
+    const withWithdrawal = structuredClone(envelope);
+    withWithdrawal.titles[1].seasons[0].episodes[1].withdrawnAt = stamp;
+    withWithdrawal.titles[1].totalEpisodes = 1;
+    const parsed = parseBackupEnvelope(JSON.parse(JSON.stringify(withWithdrawal)));
+    assert.equal(parsed.titles[1].seasons[0].episodes[1].withdrawnAt, stamp);
+
+    const olderV2 = JSON.parse(JSON.stringify(envelope)) as {
+      titles: Array<{ seasons: Array<{ episodes: Array<Record<string, unknown>> }> }>;
+    };
+    delete olderV2.titles[1].seasons[0].episodes[0].withdrawnAt;
+    const oldParsed = parseBackupEnvelope(olderV2);
+    assert.equal(oldParsed.titles[1].seasons[0].episodes[0].withdrawnAt, null);
   });
 
   it("parses old v2 TMDB prose but also accepts the lean shape new exports emit", () => {
@@ -618,6 +635,7 @@ describe("backup merge policy — denormalized episode counters", () => {
       stillPath: null,
       watched: n === 1,
       watchedAt: n === 1 ? "2026-07-10T20:00:00.000Z" : null,
+      withdrawnAt: null,
     })),
   };
 

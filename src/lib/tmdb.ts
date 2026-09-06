@@ -34,6 +34,8 @@ type FetchInit = RequestInit & { next?: { revalidate?: number } };
 export interface TmdbOptions {
   /** Next.js cache revalidation seconds (ignored outside Next). */
   revalidate?: number;
+  /** Bypass Next's Data Cache for library writes that must use current TMDB data. */
+  fresh?: boolean;
   retries?: number;
   /**
    * Wall-clock budget for the whole call, retries and backoff included. The
@@ -83,7 +85,8 @@ async function tmdb<T>(
         accept: "application/json",
       },
     };
-    if (opts.revalidate !== undefined) init.next = { revalidate: opts.revalidate };
+    if (opts.fresh) init.cache = "no-store";
+    else if (opts.revalidate !== undefined) init.next = { revalidate: opts.revalidate };
 
     // Bound the request so a stalled TMDB response can't hang indefinitely
     // and bypass the retry/backoff below (which only triggers on rejection
@@ -361,19 +364,33 @@ export async function findByImdbId(
   ];
 }
 
-export function getMovie(id: number): Promise<TmdbMovieDetails> {
-  return tmdb<TmdbMovieDetails>(`/movie/${id}`, { language: "en-US" }, { revalidate: 60 * 60 * 24 });
+type DetailOptions = Pick<TmdbOptions, "fresh" | "signal" | "deadlineMs" | "retries">;
+
+export function getMovie(id: number, opts: DetailOptions = {}): Promise<TmdbMovieDetails> {
+  return tmdb<TmdbMovieDetails>(
+    `/movie/${id}`,
+    { language: "en-US" },
+    { revalidate: 60 * 60 * 24, ...opts },
+  );
 }
 
-export function getTv(id: number): Promise<TmdbTvDetails> {
-  return tmdb<TmdbTvDetails>(`/tv/${id}`, { language: "en-US" }, { revalidate: 60 * 60 * 24 });
+export function getTv(id: number, opts: DetailOptions = {}): Promise<TmdbTvDetails> {
+  return tmdb<TmdbTvDetails>(
+    `/tv/${id}`,
+    { language: "en-US" },
+    { revalidate: 60 * 60 * 24, ...opts },
+  );
 }
 
-export function getSeason(tvId: number, seasonNumber: number): Promise<TmdbSeasonDetails> {
+export function getSeason(
+  tvId: number,
+  seasonNumber: number,
+  opts: DetailOptions = {},
+): Promise<TmdbSeasonDetails> {
   return tmdb<TmdbSeasonDetails>(
     `/tv/${tvId}/season/${seasonNumber}`,
     { language: "en-US" },
-    { revalidate: 60 * 60 * 24 },
+    { revalidate: 60 * 60 * 24, ...opts },
   );
 }
 

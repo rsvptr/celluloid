@@ -125,6 +125,7 @@ export async function getUpcoming(userId: string): Promise<UpcomingData> {
         AND t."deletedAt" IS NULL
         AND t."mediaType" = 'TV'::"MediaType"
         AND t.status <> 'DROPPED'::"WatchStatus"
+        AND e."withdrawnAt" IS NULL
         AND e.watched = false
         AND e."airDate" IS NOT NULL
         AND e."airDate" <= ${todayKey}::date

@@ -351,6 +351,9 @@ model Episode {
   watched   Boolean   @default(false)
   watchedAt DateTime?
 
+  // Set when TMDB removes a watched episode; personal history stays preserved.
+  withdrawnAt DateTime?
+
   // When this episode row was first materialized (e.g. via TMDB backfill).
   discoveredAt DateTime @default(now())
 
