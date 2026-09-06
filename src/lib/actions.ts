@@ -13,6 +13,7 @@ import {
   WatchEventSource,
   Prisma,
 } from "@/generated/prisma/client";
+import { dayStartInZone } from "@/lib/data";
 import { getMovie, getSeason, getTv } from "@/lib/tmdb";
 import { mapLimit } from "@/lib/async";
 import { isTagColor } from "@/lib/tag-colors";
@@ -157,10 +158,42 @@ async function getUserId(): Promise<string | null> {
   return session?.user?.id ?? null;
 }
 
+/**
+ * TMDB release and air dates. These are calendar metadata with no owner and no
+ * zone — a film released on a date, everywhere — so they stay UTC midnight.
+ * Viewing dates the owner submits go through toViewingDate instead.
+ */
 function toDate(iso: string | null | undefined): Date | null {
   if (!iso) return null;
   const d = new Date(iso.length <= 10 ? `${iso}T00:00:00.000Z` : iso);
   return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * A viewing date submitted by the owner. A bare "YYYY-MM-DD" is the day the
+ * date input was set to, which the owner picked in their own calendar, so it
+ * resolves to that day's start in the account's zone; reading it as UTC midnight
+ * filed every viewing west of UTC under the previous activity day (AUD-05). A
+ * longer value is already a full instant (the history editor sends the stored
+ * one back when only the note changed) and passes through untouched, so an
+ * unedited day cannot drift. The account row is read only when there is
+ * actually a calendar day to place.
+ */
+async function toViewingDate(
+  userId: string,
+  iso: string | null | undefined,
+): Promise<Date | null> {
+  if (!iso) return null;
+  if (iso.length > 10) {
+    const instant = new Date(iso);
+    return Number.isNaN(instant.getTime()) ? null : instant;
+  }
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { timeZone: true },
+  });
+  const start = dayStartInZone(iso, user?.timeZone || "UTC");
+  return Number.isNaN(start.getTime()) ? null : start;
 }
 
 /** Collapse whitespace and bound tag names so freehand input stays sane. */
@@ -335,6 +368,13 @@ export async function updateTitle(
     };
   }
 
+  // Resolved before the transaction: placing a calendar day needs the account's
+  // zone, and that read has no business running inside the title lock.
+  const submittedWatchedAt =
+    input.watchedAt === undefined
+      ? undefined
+      : await toViewingDate(userId, input.watchedAt);
+
   const found = await prisma.$transaction(async (tx) => {
     // The locked row is both the ownership check and the transition source of
     // truth. Computing from an earlier findFirst allowed two concurrent
@@ -364,7 +404,7 @@ export async function updateTitle(
     const nextStatus = input.status ?? title.status;
     const newWatchedAt: Date | null =
       input.watchedAt !== undefined
-        ? toDate(input.watchedAt)
+        ? (submittedWatchedAt ?? null)
         : (autoWatchedAt ?? title.watchedAt);
     const logsCompletion =
       nextStatus === WatchStatus.WATCHED && title.status !== WatchStatus.WATCHED;
@@ -387,7 +427,9 @@ export async function updateTitle(
         ? { notes: input.notes == null ? null : input.notes.slice(0, 2000) }
         : {}),
       ...(input.favorite !== undefined ? { favorite: input.favorite } : {}),
-      ...(input.watchedAt !== undefined ? { watchedAt: toDate(input.watchedAt) } : {}),
+      ...(input.watchedAt !== undefined
+        ? { watchedAt: submittedWatchedAt ?? null }
+        : {}),
       ...(autoWatchedAt ? { watchedAt: autoWatchedAt } : {}),
     };
 
@@ -607,7 +649,7 @@ export async function logWatch(
     note: input.note,
   });
   if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
-  const occurred = toDate(parsed.data.occurredAt);
+  const occurred = await toViewingDate(userId, parsed.data.occurredAt);
   if (!occurred) return { error: "Invalid request. Refresh and try again." };
   const trimmed = parsed.data.note?.trim();
   const note = trimmed ? trimmed.slice(0, 500) : null;
@@ -735,7 +777,7 @@ export async function updateWatchEvent(
     note: input.note,
   });
   if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
-  const occurred = toDate(parsed.data.occurredAt);
+  const occurred = await toViewingDate(userId, parsed.data.occurredAt);
   if (!occurred) return { error: "Invalid request. Refresh and try again." };
   const noteInput = parsed.data.note;
   const trimmedNote = noteInput?.trim();

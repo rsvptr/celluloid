@@ -832,6 +832,61 @@ export function resolveTimeZone(timeZone: string): string {
 }
 
 /**
+ * The inverse of dayKeyInZone: the instant a "YYYY-MM-DD" calendar day starts
+ * at in the owner's zone. A date input submits the day the owner picked, not an
+ * instant, so parsing it as UTC midnight put every viewing west of UTC on the
+ * previous activity day (AUD-05).
+ *
+ * The offset has to be probed twice. Probing it at UTC midnight is wrong
+ * whenever a DST change falls between local midnight and UTC midnight of the
+ * same date (Asia/Jerusalem springs forward at 02:00 local, which is 00:00 UTC),
+ * so the first guess is re-measured at the instant it produced and re-applied
+ * when it disagrees. When both probes disagree with each other, local midnight
+ * does not exist at all — a zone whose spring-forward gap opens at 00:00, such
+ * as America/Santiago — and the later of the two candidates is the first instant
+ * of that day. Returns an Invalid Date for a day string that will not parse, the
+ * same signal toDate's callers already handle.
+ */
+export function dayStartInZone(day: string, timeZone: string): Date {
+  const naive = Date.parse(`${day}T00:00:00.000Z`);
+  if (!Number.isFinite(naive)) return new Date(NaN);
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: resolveTimeZone(timeZone),
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  // Wall-clock time in the zone read back as if it were UTC, minus the instant:
+  // positive east of UTC, matching the `naive - offset` direction used below.
+  const offsetAt = (ms: number): number => {
+    const parts = fmt.formatToParts(new Date(ms));
+    const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+    // Some ICU builds render midnight as hour 24 of the same date; 24 and 0 mean
+    // the same wall clock, but only 0 keeps Date.UTC on the date ICU reported.
+    return (
+      Date.UTC(
+        get("year"),
+        get("month") - 1,
+        get("day"),
+        get("hour") % 24,
+        get("minute"),
+        get("second"),
+      ) - ms
+    );
+  };
+  const first = offsetAt(naive);
+  const second = offsetAt(naive - first);
+  if (second === first) return new Date(naive - first);
+  const third = offsetAt(naive - second);
+  if (third === second) return new Date(naive - second);
+  return new Date(naive - Math.min(second, third));
+}
+
+/**
  * Current and longest run of consecutive active days, over owner-local
  * "YYYY-MM-DD" keys. Once we have a Y-M-D key, stepping by 24h on a UTC-midnight
  * parse of that key always lands on the correct adjacent calendar date

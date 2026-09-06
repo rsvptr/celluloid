@@ -57,6 +57,7 @@ export function TitleControls({
   favorite,
   watchedAt,
   watchCount,
+  timeZone = "UTC",
 }: {
   id: string;
   status: WatchStatus;
@@ -65,6 +66,10 @@ export function TitleControls({
   favorite: boolean;
   watchedAt: string | null;
   watchCount: number;
+  /** The account's IANA zone (User.timeZone). "Date watched" is stored as an
+   *  instant but entered and read as a calendar day, so it has to be shown in
+   *  the same zone the server resolved it in and stats bucket it in (AUD-05). */
+  timeZone?: string;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -113,7 +118,7 @@ export function TitleControls({
   const [localStatus, setLocalStatus] = useState(status);
   const [localRating, setLocalRating] = useState(rating);
   const [localFav, setLocalFav] = useState(favorite);
-  const [localWatchedAt, setLocalWatchedAt] = useState(watchedAt?.slice(0, 10) ?? "");
+  const [localWatchedAt, setLocalWatchedAt] = useState(dayInZone(watchedAt, timeZone));
   const [localNotes, setLocalNotes] = useState(notes ?? "");
   const [savedNotes, setSavedNotes] = useState(notes ?? "");
   const [notesStatus, setNotesStatus] = useState<NotesStatus>("idle");
@@ -133,13 +138,13 @@ export function TitleControls({
     status,
     rating,
     favorite,
-    watchedAt: watchedAt?.slice(0, 10) ?? "",
+    watchedAt: dayInZone(watchedAt, timeZone),
   });
   const confirmedImmediateRef = useRef<ImmediateValues>({
     status,
     rating,
     favorite,
-    watchedAt: watchedAt?.slice(0, 10) ?? "",
+    watchedAt: dayInZone(watchedAt, timeZone),
   });
   const immediateSavingRef = useRef(false);
 
@@ -164,7 +169,7 @@ export function TitleControls({
       return;
     }
     lastSyncedRef.current = { status, rating, favorite, watchedAt };
-    const wa = watchedAt?.slice(0, 10) ?? "";
+    const wa = dayInZone(watchedAt, timeZone);
     setLocalStatus(status);
     setLocalRating(rating);
     setLocalFav(favorite);
@@ -175,7 +180,7 @@ export function TitleControls({
     // can't stomp an in-flight optimistic edit.
     latestImmediateRef.current = { status, rating, favorite, watchedAt: wa };
     confirmedImmediateRef.current = { status, rating, favorite, watchedAt: wa };
-  }, [status, rating, favorite, watchedAt, isPending]);
+  }, [status, rating, favorite, watchedAt, timeZone, isPending]);
 
   // Serialized drain for the immediate fields (see refs above). Only one
   // updateTitle is ever in flight; it carries every currently-dirty field, and
@@ -688,6 +693,32 @@ export function TitleControls({
       </Card>
     </>
   );
+}
+
+/**
+ * A stored instant as the yyyy-mm-dd a date input holds, read in the account's
+ * zone. Slicing the ISO string read it as UTC, so a viewing entered west of UTC
+ * came back showing the day before the one the server had filed it under
+ * (AUD-05). Falls back to UTC on a zone Intl rejects, as dayKeyInZone does
+ * server-side. Exported for the History list next door, which edits the same
+ * dates and must agree with this field to the day.
+ */
+export function dayInZone(iso: string | null | undefined, timeZone: string): string {
+  if (!iso) return "";
+  const options: Intl.DateTimeFormatOptions = {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  };
+  let fmt: Intl.DateTimeFormat;
+  try {
+    fmt = new Intl.DateTimeFormat("en-US", { ...options, timeZone });
+  } catch {
+    fmt = new Intl.DateTimeFormat("en-US", { ...options, timeZone: "UTC" });
+  }
+  const parts = fmt.formatToParts(new Date(iso));
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
 /** Today as yyyy-mm-dd in the viewer's local time — the log-watch date default. */

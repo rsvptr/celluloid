@@ -1,6 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { computeStreaks, dayKeyInZone, resolveTimeZone } from "../src/lib/data";
+import {
+  computeStreaks,
+  dayKeyInZone,
+  dayStartInZone,
+  resolveTimeZone,
+} from "../src/lib/data";
 
 // Day keys are what getStats' SQL bucketing produces: owner-local "YYYY-MM-DD".
 const days = (...keys: string[]) => keys;
@@ -44,6 +49,91 @@ describe("resolveTimeZone", () => {
     // Intl accepts offset identifiers; Postgres reads their sign the other way.
     assert.equal(resolveTimeZone("+05:30"), "UTC");
     assert.equal(resolveTimeZone("'; DROP TABLE \"Title\"; --"), "UTC");
+  });
+});
+
+describe("dayStartInZone", () => {
+  /** The property that matters: whatever instant we store, the heatmap has to
+   *  bucket it back into the day the owner picked. */
+  const roundTrips = (day: string, timeZone: string) =>
+    assert.equal(dayKeyInZone(dayStartInZone(day, timeZone), timeZone), day);
+
+  it("starts the day in the owner's zone west of UTC", () => {
+    // AUD-05's evidence: this day stored as UTC midnight bucketed as 2026-09-04.
+    assert.equal(
+      dayStartInZone("2026-09-05", "America/New_York").toISOString(),
+      "2026-09-05T04:00:00.000Z",
+    );
+    roundTrips("2026-09-05", "America/New_York");
+  });
+
+  it("starts the day in the owner's zone east of UTC", () => {
+    assert.equal(
+      dayStartInZone("2026-09-05", "Asia/Kolkata").toISOString(),
+      "2026-09-04T18:30:00.000Z",
+    );
+    roundTrips("2026-09-05", "Asia/Kolkata");
+  });
+
+  it("follows the offset across both DST boundaries", () => {
+    // New York springs forward on 2026-03-08 and falls back on 2026-11-01. A
+    // fixed offset gets one of the two wrong by an hour, which is enough to
+    // push midnight onto the neighbouring day.
+    assert.equal(
+      dayStartInZone("2026-03-08", "America/New_York").toISOString(),
+      "2026-03-08T05:00:00.000Z",
+    );
+    assert.equal(
+      dayStartInZone("2026-11-01", "America/New_York").toISOString(),
+      "2026-11-01T04:00:00.000Z",
+    );
+    roundTrips("2026-03-07", "America/New_York");
+    roundTrips("2026-03-08", "America/New_York");
+    roundTrips("2026-03-09", "America/New_York");
+    roundTrips("2026-10-31", "America/New_York");
+    roundTrips("2026-11-01", "America/New_York");
+    roundTrips("2026-11-02", "America/New_York");
+  });
+
+  it("handles a transition that falls between local and UTC midnight", () => {
+    // Jerusalem springs forward at 02:00 local on 2026-03-27, which is 00:00
+    // UTC: measuring the offset only at UTC midnight reads the post-jump value
+    // and lands on 2026-03-26.
+    assert.equal(
+      dayStartInZone("2026-03-27", "Asia/Jerusalem").toISOString(),
+      "2026-03-26T22:00:00.000Z",
+    );
+    roundTrips("2026-03-27", "Asia/Jerusalem");
+  });
+
+  it("takes the first real instant when local midnight does not exist", () => {
+    // Santiago's spring-forward gap opens at 00:00 on 2026-09-06, so that day
+    // begins at 01:00 local.
+    assert.equal(
+      dayStartInZone("2026-09-06", "America/Santiago").toISOString(),
+      "2026-09-06T04:00:00.000Z",
+    );
+    roundTrips("2026-09-06", "America/Santiago");
+  });
+
+  it("is UTC midnight for a UTC account, and for a zone Intl rejects", () => {
+    assert.equal(
+      dayStartInZone("2026-09-05", "UTC").toISOString(),
+      "2026-09-05T00:00:00.000Z",
+    );
+    assert.equal(
+      dayStartInZone("2026-09-05", "Mars/Olympus_Mons").toISOString(),
+      "2026-09-05T00:00:00.000Z",
+    );
+    assert.equal(
+      dayStartInZone("2026-09-05", "").toISOString(),
+      "2026-09-05T00:00:00.000Z",
+    );
+  });
+
+  it("reports an unparseable day as an Invalid Date", () => {
+    assert.ok(Number.isNaN(dayStartInZone("not-a-day", "America/New_York").getTime()));
+    assert.ok(Number.isNaN(dayStartInZone("", "UTC").getTime()));
   });
 });
 

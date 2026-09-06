@@ -38,6 +38,9 @@ class FakeWatchDb {
   deleteManyCalls = 0;
   lockQueries = 0;
   failNextTitleUpdate = false;
+  /** The owner's User.timeZone: the zone a submitted calendar day resolves in. */
+  timeZone = "UTC";
+  userReads = 0;
 
   private transactionTail: Promise<unknown> = Promise.resolve();
 
@@ -262,6 +265,12 @@ class FakeWatchDb {
       findFirst: async () => ({ id: "title-1" }),
       findMany: async () => [{ id: "title-1" }],
     },
+    user: {
+      findUnique: async () => {
+        this.userReads += 1;
+        return { timeZone: this.timeZone };
+      },
+    },
     season: {
       findFirst: async () => ({ titleId: "title-1" }),
     },
@@ -352,6 +361,10 @@ const {
   updateTitle,
   updateWatchEvent,
 } = await import("../src/lib/actions");
+// Imported after register() so it shares the mocked prisma with the actions
+// under test. dayKeyInZone is the bucket getStats' SQL puts an instant in, so
+// asserting through it connects a submitted date to the day it lands on.
+const { dayKeyInZone } = await import("../src/lib/data");
 
 describe("watch transition locking", { concurrency: false }, () => {
   it("returns safe action errors instead of throwing them", async () => {
@@ -810,5 +823,179 @@ describe("watch transition locking", { concurrency: false }, () => {
 
     assert.equal(activeDb.status, WatchStatus.WATCHED);
     assert.equal(activeDb.watchedEpisodes, 30);
+  });
+});
+
+/**
+ * AUD-05. A date input submits a calendar day, not an instant. Reading it as
+ * UTC midnight filed every viewing west of UTC under the previous activity day,
+ * so these assertions run the submitted day all the way through to the bucket
+ * dayKeyInZone (and getStats' SQL) would put the stored instant in.
+ */
+describe("submitted calendar dates", { concurrency: false }, () => {
+  /** A movie-shaped fixture: logWatch refuses a partly watched TV title. */
+  function loggableTitle(timeZone: string): FakeWatchDb {
+    const db = new FakeWatchDb();
+    db.mediaType = MediaType.MOVIE;
+    db.totalEpisodes = null;
+    db.timeZone = timeZone;
+    return db;
+  }
+
+  function loggedInstant(): Date {
+    const event = activeDb.events.at(-1);
+    assert.ok(event, "expected a logged watch event");
+    return event.occurredAt;
+  }
+
+  it("logs a day west of UTC on that day, not the one before", async () => {
+    activeDb = loggableTitle("America/New_York");
+
+    assert.deepEqual(await logWatch("title-1", { occurredAt: "2026-09-05" }), {
+      ok: true,
+      watchCount: 1,
+    });
+
+    // Midnight in New York, which UTC calls 04:00 — the first-pass evidence
+    // stored 2026-09-05T00:00:00.000Z here and grouped it as 2026-09-04.
+    assert.equal(loggedInstant().toISOString(), "2026-09-05T04:00:00.000Z");
+    assert.equal(dayKeyInZone(loggedInstant(), "America/New_York"), "2026-09-05");
+  });
+
+  it("logs a day east of UTC on that day", async () => {
+    activeDb = loggableTitle("Asia/Kolkata");
+
+    await logWatch("title-1", { occurredAt: "2026-09-05" });
+
+    assert.equal(loggedInstant().toISOString(), "2026-09-04T18:30:00.000Z");
+    assert.equal(dayKeyInZone(loggedInstant(), "Asia/Kolkata"), "2026-09-05");
+  });
+
+  it("keeps the spring-forward day on itself", async () => {
+    // 2026-03-08: New York loses 02:00-03:00, so the day starts at 05:00 UTC
+    // instead of the 04:00 that holds for the rest of the summer.
+    activeDb = loggableTitle("America/New_York");
+
+    await logWatch("title-1", { occurredAt: "2026-03-08" });
+
+    assert.equal(loggedInstant().toISOString(), "2026-03-08T05:00:00.000Z");
+    assert.equal(dayKeyInZone(loggedInstant(), "America/New_York"), "2026-03-08");
+  });
+
+  it("keeps the fall-back day on itself", async () => {
+    // 2026-11-01: the 01:00 hour repeats, but midnight is unambiguous at 04:00
+    // UTC — a day-start fixed at 05:00 would land on 2026-10-31 in the heatmap.
+    activeDb = loggableTitle("America/New_York");
+
+    await logWatch("title-1", { occurredAt: "2026-11-01" });
+
+    assert.equal(loggedInstant().toISOString(), "2026-11-01T04:00:00.000Z");
+    assert.equal(dayKeyInZone(loggedInstant(), "America/New_York"), "2026-11-01");
+  });
+
+  it("passes a full ISO instant through without reading the account zone", async () => {
+    activeDb = loggableTitle("America/New_York");
+
+    await logWatch("title-1", { occurredAt: "2026-09-05T23:30:00.000Z" });
+
+    assert.equal(loggedInstant().toISOString(), "2026-09-05T23:30:00.000Z");
+    assert.equal(activeDb.userReads, 0);
+  });
+
+  it("re-dates a history edit into the account's day", async () => {
+    activeDb = loggableTitle("America/New_York");
+    activeDb.status = WatchStatus.WATCHED;
+    activeDb.watchedAt = new Date("2026-09-05T04:00:00.000Z");
+    activeDb.events = [
+      {
+        id: "completion-1",
+        userId: "user-1",
+        titleId: "title-1",
+        kind: WatchEventKind.TITLE_COMPLETED,
+        source: WatchEventSource.MANUAL,
+        occurredAt: new Date("2026-09-05T04:00:00.000Z"),
+      },
+    ];
+
+    await updateWatchEvent("completion-1", { occurredAt: "2026-09-07" });
+
+    assert.equal(loggedInstant().toISOString(), "2026-09-07T04:00:00.000Z");
+    assert.equal(dayKeyInZone(loggedInstant(), "America/New_York"), "2026-09-07");
+    assert.equal(activeDb.watchedAt?.toISOString(), "2026-09-07T04:00:00.000Z");
+  });
+
+  it("round-trips a viewing edited without changing its day", async () => {
+    // What the History list sends when only the note changed: the stored
+    // instant, verbatim. The day it displays under must not move.
+    activeDb = loggableTitle("America/New_York");
+    activeDb.status = WatchStatus.WATCHED;
+    activeDb.watchedAt = new Date("2026-09-05T04:00:00.000Z");
+    activeDb.events = [
+      {
+        id: "completion-1",
+        userId: "user-1",
+        titleId: "title-1",
+        kind: WatchEventKind.TITLE_COMPLETED,
+        source: WatchEventSource.MANUAL,
+        occurredAt: new Date("2026-09-05T04:00:00.000Z"),
+      },
+    ];
+
+    await updateWatchEvent("completion-1", {
+      occurredAt: "2026-09-05T04:00:00.000Z",
+      note: "with Dad",
+    });
+
+    assert.equal(loggedInstant().toISOString(), "2026-09-05T04:00:00.000Z");
+    assert.equal(dayKeyInZone(loggedInstant(), "America/New_York"), "2026-09-05");
+  });
+
+  it("places updateTitle's Date watched on the account's day", async () => {
+    activeDb = loggableTitle("America/New_York");
+
+    await updateTitle("title-1", {
+      status: WatchStatus.WATCHED,
+      watchedAt: "2026-09-05",
+    });
+
+    assert.equal(activeDb.watchedAt?.toISOString(), "2026-09-05T04:00:00.000Z");
+    assert.equal(loggedInstant().toISOString(), "2026-09-05T04:00:00.000Z");
+    assert.equal(dayKeyInZone(loggedInstant(), "America/New_York"), "2026-09-05");
+  });
+
+  it("re-dates an existing completion into the account's day", async () => {
+    activeDb = loggableTitle("Asia/Kolkata");
+    activeDb.status = WatchStatus.WATCHED;
+    activeDb.watchedAt = new Date("2026-09-04T18:30:00.000Z");
+    activeDb.events = [
+      {
+        id: "completion-1",
+        userId: "user-1",
+        titleId: "title-1",
+        kind: WatchEventKind.TITLE_COMPLETED,
+        source: WatchEventSource.MANUAL,
+        occurredAt: new Date("2026-09-04T18:30:00.000Z"),
+      },
+    ];
+
+    await updateTitle("title-1", {
+      status: WatchStatus.WATCHED,
+      watchedAt: "2026-09-10",
+    });
+
+    assert.equal(loggedInstant().toISOString(), "2026-09-09T18:30:00.000Z");
+    assert.equal(dayKeyInZone(loggedInstant(), "Asia/Kolkata"), "2026-09-10");
+    assert.equal(activeDb.watchedAt?.toISOString(), "2026-09-09T18:30:00.000Z");
+  });
+
+  it("clears the date without consulting the account zone", async () => {
+    activeDb = loggableTitle("America/New_York");
+    activeDb.status = WatchStatus.WATCHED;
+    activeDb.watchedAt = new Date("2026-09-05T04:00:00.000Z");
+
+    await updateTitle("title-1", { watchedAt: null });
+
+    assert.equal(activeDb.watchedAt, null);
+    assert.equal(activeDb.userReads, 0);
   });
 });
