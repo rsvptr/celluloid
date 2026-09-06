@@ -8,17 +8,38 @@ import { Button, Card, Input } from "@/components/ui";
 import { useConfirm } from "@/components/confirm-dialog";
 import { deleteWatchEvent, updateWatchEvent } from "@/lib/actions";
 import { fullDate } from "@/lib/format";
+// Same page, same dates: the "Date watched" field and this list have to resolve
+// a stored instant to the same calendar day, so they share one implementation.
+import { dayInZone } from "./title-controls";
 
 export interface WatchEventVM {
   id: string;
   kind: "TITLE_COMPLETED" | "REWATCH";
-  /** ISO instant; the date input needs the YYYY-MM-DD prefix. */
+  /** ISO instant; the date input needs it as the account zone's calendar day. */
   occurredAt: string;
   note: string | null;
 }
 
 function kindLabel(kind: WatchEventVM["kind"]): string {
   return kind === "REWATCH" ? "Rewatched" : "Watched";
+}
+
+/**
+ * fullDate, read in the account's zone. A viewing entered as a calendar day is
+ * stored as that day's start in the account zone, so naming it in UTC prints
+ * the day before east of UTC and disagrees with the heatmap (AUD-05).
+ */
+function fullDateInZone(iso: string, timeZone: string): string {
+  try {
+    return new Date(iso).toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      timeZone,
+    });
+  } catch {
+    return fullDate(iso);
+  }
 }
 
 /**
@@ -34,9 +55,13 @@ function kindLabel(kind: WatchEventVM["kind"]): string {
 export function WatchHistoryList({
   events,
   total,
+  timeZone = "UTC",
 }: {
   events: WatchEventVM[];
   total: number;
+  /** The account's IANA zone (User.timeZone), the zone the server resolved
+   *  these dates in and stats bucket them in. */
+  timeZone?: string;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -68,7 +93,7 @@ export function WatchHistoryList({
 
   function beginEdit(event: WatchEventVM) {
     setEditingId(event.id);
-    setDraftDate(event.occurredAt.slice(0, 10));
+    setDraftDate(dayInZone(event.occurredAt, timeZone));
     setDraftNote(event.note ?? "");
   }
 
@@ -81,15 +106,17 @@ export function WatchHistoryList({
     if (!draftDate) return;
     start(async () => {
       const res = await updateWatchEvent(event.id, {
-        // The server reads a bare YYYY-MM-DD as UTC midnight, so submitting the
-        // truncated day rewrote the event's time even when only the note had
-        // changed — west of UTC that drags the watch onto the previous local day,
-        // moving it in the heatmap and potentially breaking a streak. An untouched
+        // The server resolves a bare YYYY-MM-DD to that day's start in the
+        // account zone, so submitting the truncated day would rewrite the
+        // event's time of day even when only the note had changed. An untouched
         // day therefore sends the original instant straight back (the action's
-        // date field accepts a full ISO string); a day the owner actually changed
-        // still submits as the plain date it was picked as.
+        // date field accepts a full ISO string and passes it through); a day the
+        // owner actually changed still submits as the plain date it was picked
+        // as. The comparison has to use the same zone the field was filled from.
         occurredAt:
-          draftDate === event.occurredAt.slice(0, 10) ? event.occurredAt : draftDate,
+          draftDate === dayInZone(event.occurredAt, timeZone)
+            ? event.occurredAt
+            : draftDate,
         note: draftNote,
       });
       if (res.error) {
@@ -176,7 +203,7 @@ export function WatchHistoryList({
                 <div className="flex items-start gap-2">
                   <div className="min-w-0 flex-1">
                     <p className="text-foreground/90">
-                      {fullDate(event.occurredAt)} · {kindLabel(event.kind)}
+                      {fullDateInZone(event.occurredAt, timeZone)} · {kindLabel(event.kind)}
                     </p>
                     {event.note && (
                       <p className="mt-0.5 break-words text-xs text-muted">
@@ -199,7 +226,7 @@ export function WatchHistoryList({
                       }}
                       onClick={() => beginEdit(event)}
                       disabled={pending}
-                      aria-label={`Edit the watch on ${fullDate(event.occurredAt)}`}
+                      aria-label={`Edit the watch on ${fullDateInZone(event.occurredAt, timeZone)}`}
                       className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-md text-faint transition-colors hover:text-foreground disabled:opacity-50 sm:min-h-8 sm:min-w-8"
                     >
                       <Pencil size={14} />
@@ -208,7 +235,7 @@ export function WatchHistoryList({
                       type="button"
                       onClick={() => remove(event)}
                       disabled={pending}
-                      aria-label={`Remove the watch on ${fullDate(event.occurredAt)}`}
+                      aria-label={`Remove the watch on ${fullDateInZone(event.occurredAt, timeZone)}`}
                       className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-md text-faint transition-colors hover:text-rose-300 disabled:opacity-50 sm:min-h-8 sm:min-w-8"
                     >
                       <Trash2 size={14} />
