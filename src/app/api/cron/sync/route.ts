@@ -5,11 +5,13 @@ import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 export const runtime = "nodejs";
 
 /**
- * 60s is the ceiling every Vercel plan allows without configuration, so the
- * schedule keeps working wherever this is deployed. The run stays inside it by
- * refusing to START another title once RUN_BUDGET_MS has elapsed rather than by
- * hoping ~50 TMDB round trips finish in time; whatever is left keeps its place
- * at the head of the queue and goes first tomorrow.
+ * 60s is the most a non-Fluid Hobby project can configure (its default without
+ * this export is 10s); non-Fluid Pro allows up to 300s, and Fluid compute
+ * raises the ceiling to 300s on Hobby and up to 800s on Pro. 60 is kept here so
+ * the schedule keeps working on the lowest common plan. The run stays inside it
+ * by refusing to START another title once RUN_BUDGET_MS has elapsed rather than
+ * by hoping ~50 TMDB round trips finish in time; whatever is left keeps its
+ * place at the head of the queue and goes first tomorrow.
  */
 export const maxDuration = 60;
 

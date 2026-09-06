@@ -855,11 +855,9 @@ async function syncOneTitle(
           // not un-watch a show the owner finished — the "New episodes" badge
           // is how that gets surfaced, and flipping the status here would
           // silently overwrite a choice they made by hand.
-          // Provider ids are cached here ahead of a consumer: nothing in the
-          // app reads them yet (nor User.myProviders), so this is the sync
-          // filling the column so the data is already warm whenever the
-          // "what can I watch tonight" view is built. Cheap to keep — it rides
-          // along on a request the sync makes anyway.
+          // Provider ids are cached here for the library's "On my services"
+          // filter, which reads them against User.myProviders. Cheap to keep
+          // — it rides along on a request the sync makes anyway.
           ...(providers
             ? {
                 streamProviderIds: streamProviderIdsForRegion(providers.results, region),

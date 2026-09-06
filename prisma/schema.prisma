@@ -39,9 +39,9 @@ model User {
   lastBackupAt DateTime?
 
   // TMDB watch-provider ids the owner actually subscribes to, to answer "what
-  // can I watch tonight without paying for anything new". Nothing reads this
-  // yet and no screen sets it: the column exists ahead of that view, alongside
-  // Title.streamProviderIds below, which the scheduled sync already fills.
+  // can I watch tonight without paying for anything new". Set from the picker
+  // in Settings; the library's "On my services" filter reads it against
+  // Title.streamProviderIds below, which the scheduled sync keeps warm.
   myProviders Int[] @default([])
 
   twoFactorEnabled Boolean? @default(false)
@@ -286,10 +286,9 @@ model Title {
 
   // Cached streaming availability for the owner's region, refreshed by the same
   // sync. TMDB provider ids only — names and logos are resolved at render time.
-  // Written but not yet read: these ride along on a request the sync makes
-  // anyway, so the data is warm for the "what can I watch tonight" view (see
-  // User.myProviders) whenever it is built. The title page still asks TMDB
-  // directly for what it shows today.
+  // These ride along on a request the sync makes anyway; the library's "On my
+  // services" filter reads them against User.myProviders. The title page still
+  // asks TMDB directly for what it shows today.
   streamProviderIds  Int[]     @default([])
   providersRegion    String?
   providersSyncedAt  DateTime?
