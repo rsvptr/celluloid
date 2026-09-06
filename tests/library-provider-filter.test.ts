@@ -71,6 +71,24 @@ describe("On my services availability state", () => {
     );
   });
 
+  it("matches on the account region even when the device cookie says elsewhere", () => {
+    // D-008: the nightly sync stamps the account region onto every cached row,
+    // so that is the region the library evaluates in. A phone whose region
+    // cookie still said GB used to read the whole library as unchecked.
+    const accountRegion = "US";
+    const deviceCookieRegion = "GB";
+    const synced = { ...checked, providersRegion: accountRegion };
+    assert.equal(serviceAvailabilityState(synced, accountRegion, new Set([8])), "MATCH");
+    assert.equal(
+      serviceAvailabilityState(synced, accountRegion, new Set([337])),
+      "NO_MATCH",
+    );
+    assert.equal(
+      serviceAvailabilityState(synced, deviceCookieRegion, new Set([8])),
+      "UNCHECKED",
+    );
+  });
+
   it("uses honest singular and plural unchecked copy", () => {
     assert.equal(uncheckedProviderCopy(1), "1 title not checked yet");
     assert.equal(uncheckedProviderCopy(3), "3 titles not checked yet");
