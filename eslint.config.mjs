@@ -14,6 +14,8 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Agent skill guidance (reference docs with example snippets, not app code).
     ".agents/**",
+    // Audit evidence and agent mailbox (isolated reproduction scripts, not app code).
+    ".agent-collaboration/**",
   ]),
 ]);
 
