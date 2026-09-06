@@ -114,6 +114,7 @@ function snapshotTitle(
             runtime: episode.runtime,
             watched: episode.watched,
             watchedAt: nullableIso(episode.watchedAt),
+            withdrawnAt: nullableIso(episode.withdrawnAt),
           }))
           .sort((a, b) => a.episodeNumber - b.episodeNumber),
       }))
@@ -485,6 +486,7 @@ function episodeScalars(episode: BackupEpisode) {
     stillPath: episode.stillPath,
     watched: episode.watched,
     watchedAt: nullableDate(episode.watchedAt),
+    withdrawnAt: nullableDate(episode.withdrawnAt),
   };
 }
 
@@ -723,6 +725,7 @@ async function updateTitle(
       stillPath: true,
       watched: true,
       watchedAt: true,
+      withdrawnAt: true,
     },
   });
   const episodeByKey = new Map(
@@ -763,8 +766,12 @@ async function updateTitle(
     // already computes them, but recounting here keeps the denormalized cache
     // authoritative even if a concurrent write slipped in under the row lock.
     const [watchedEpisodes, totalEpisodes] = await Promise.all([
-      tx.episode.count({ where: { season: { titleId: current.id }, watched: true } }),
-      tx.episode.count({ where: { season: { titleId: current.id } } }),
+      tx.episode.count({
+        where: { season: { titleId: current.id }, watched: true, withdrawnAt: null },
+      }),
+      tx.episode.count({
+        where: { season: { titleId: current.id }, withdrawnAt: null },
+      }),
     ]);
     await tx.title.update({
       where: { id: current.id },
@@ -795,6 +802,7 @@ function sameEpisodeScalars(
     stillPath: string | null;
     watched: boolean;
     watchedAt: Date | null;
+    withdrawnAt: Date | null;
   },
   next: ReturnType<typeof episodeScalars>,
 ): boolean {
@@ -808,7 +816,8 @@ function sameEpisodeScalars(
     existing.runtime === next.runtime &&
     (next.stillPath === undefined || existing.stillPath === next.stillPath) &&
     existing.watched === next.watched &&
-    sameDate(existing.watchedAt, next.watchedAt)
+    sameDate(existing.watchedAt, next.watchedAt) &&
+    sameDate(existing.withdrawnAt, next.withdrawnAt)
   );
 }
 

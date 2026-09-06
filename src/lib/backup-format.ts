@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { WATCH_REGIONS } from "@/lib/tmdb-extras";
+import { WITHDRAWN_EPISODE_NUMBER_OFFSET } from "@/lib/rematch-history";
 
 export const BACKUP_APP = "celluloid" as const;
 export const BACKUP_SCHEMA_VERSION = 2 as const;
@@ -31,7 +32,11 @@ export const backupEpisodeSchema = z
   .object({
     sourceId: sourceIdSchema,
     tmdbId: nullableInt,
-    episodeNumber: z.number().int().min(0).max(100_000),
+    episodeNumber: z
+      .number()
+      .int()
+      .min(0)
+      .max(WITHDRAWN_EPISODE_NUMBER_OFFSET + 100_000),
     name: nullableText(500),
     // TMDB-derived prose is omitted from new backups for size, but remains
     // optional so older v2 files that carried it continue to parse.
@@ -41,6 +46,8 @@ export const backupEpisodeSchema = z
     stillPath: nullableText(1_000).optional(),
     watched: z.boolean(),
     watchedAt: nullableTimestampSchema,
+    // Optional for backups created before withdrawn episodes had an explicit marker.
+    withdrawnAt: nullableTimestampSchema.optional().default(null),
   })
   .strict()
   .superRefine((episode, ctx) => {
@@ -594,6 +601,10 @@ function mergeEpisode(
         : existing.watched
           ? fillNullable(existing.watchedAt, incoming.watchedAt)
           : existing.watchedAt,
+    withdrawnAt:
+      mode === "replace-personal"
+        ? incoming.withdrawnAt
+        : fillNullable(existing.withdrawnAt, incoming.withdrawnAt),
   };
 }
 
@@ -674,8 +685,9 @@ export function mergeBackupTitle(
   // calls this same function), so the confirmation dialog stops reporting
   // phantom updates for titles whose only "change" was a recount.
   const mergedEpisodes = seasons.flatMap((season) => season.episodes);
+  const activeMergedEpisodes = mergedEpisodes.filter((episode) => episode.withdrawnAt === null);
   const hasEpisodeRows = mergedEpisodes.length > 0;
-  const mergedWatchedEpisodes = mergedEpisodes.filter((e) => e.watched).length;
+  const mergedWatchedEpisodes = activeMergedEpisodes.filter((e) => e.watched).length;
   const counterOnlyWatchedEpisodes =
     mode === "replace-personal" ? incoming.watchedEpisodes : existing.watchedEpisodes;
   const counterOnlyTotalEpisodes =
@@ -723,7 +735,7 @@ export function mergeBackupTitle(
     // Episode totals are exact: every episode row this merge persists is in
     // `seasons`, and recomputeProgress counts those same rows.
     totalEpisodes: hasEpisodeRows
-      ? mergedEpisodes.length
+      ? activeMergedEpisodes.length
       : counterOnlyTotalEpisodes === null
         ? null
         : Math.max(counterOnlyTotalEpisodes, counterOnlyWatchedEpisodes),

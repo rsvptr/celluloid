@@ -6,6 +6,9 @@ import type { MediaType } from "@/generated/prisma/client";
 import { WatchStatus } from "@/generated/prisma/client";
 import { STATUS_META, languageName } from "@/lib/format";
 import type { ExportRow } from "@/lib/export/format";
+import {
+  ACTIVE_EPISODE_FILTER,
+} from "@/lib/rematch-history";
 
 export interface LibraryItem {
   id: string;
@@ -105,6 +108,7 @@ export async function getLibraryItems(userId: string): Promise<LibraryItem[]> {
       WHERE t."userId" = ${userId}
         AND t."deletedAt" IS NULL
         AND t."mediaType" = 'TV'::"MediaType"
+        AND e."withdrawnAt" IS NULL
         AND e.watched = false
         AND e."airDate" IS NOT NULL
         AND e."airDate" <= ${now}
@@ -647,6 +651,7 @@ export const getTitleDetail = cache(async (userId: string, id: string) => {
           seasonNumber: true,
           name: true,
           episodes: {
+            where: ACTIVE_EPISODE_FILTER,
             orderBy: { episodeNumber: "asc" },
             select: {
               id: true,
@@ -1014,7 +1019,11 @@ export async function getStats(userId: string): Promise<LibraryStats> {
       // have no runtime to fall back on. Excludes soft-deleted titles the same
       // way the title query does, two relations up.
       prisma.episode.aggregate({
-        where: { watched: true, season: { title: { userId, deletedAt: null } } },
+        where: {
+          watched: true,
+          season: { title: { userId, deletedAt: null } },
+          ...ACTIVE_EPISODE_FILTER,
+        },
         _sum: { runtime: true },
         _count: { _all: true, runtime: true },
       }),
