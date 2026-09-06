@@ -1025,6 +1025,7 @@ function BulkBar({
   const router = useRouter();
   const [pending, start] = useTransition();
   const [newTag, setNewTag] = useState("");
+  const [bulkStatus, setBulkStatus] = useState<WatchStatus | "">("");
   // Phone-width disclosure for the secondary actions. The bar used to pack
   // every control into one line: below sm it wrapped to four or five rows and
   // swallowed ~40% of the viewport, and from sm to lg the nowrap scroller cut
@@ -1045,7 +1046,10 @@ function BulkBar({
   // the same compact bar rather than whatever the last one was left expanded to.
   if (open !== reconciledOpen) {
     setReconciledOpen(open);
-    if (!open) setShowMore(false);
+    if (!open) {
+      setShowMore(false);
+      setBulkStatus("");
+    }
   }
 
   function run(
@@ -1124,6 +1128,16 @@ function BulkBar({
     });
   }
 
+  function applyBulkStatus() {
+    if (!bulkStatus) return;
+    const status = bulkStatus;
+    run(async () => {
+      const result = await bulkSetStatus(ids, status);
+      if (!result.error) setBulkStatus("");
+      return result;
+    }, "Updated");
+  }
+
   return (
     <>
       {dialog}
@@ -1148,12 +1162,9 @@ function BulkBar({
             </span>
 
             <Select
-              value=""
+              value={bulkStatus}
               disabled={disabled}
-              onChange={(e) => {
-                const v = e.target.value as WatchStatus;
-                if (v) run(() => bulkSetStatus(ids, v), "Updated");
-              }}
+              onChange={(e) => setBulkStatus(e.target.value as WatchStatus | "")}
               aria-label="Set status for selected titles"
               className="w-auto min-h-11 shrink-0"
             >
@@ -1164,6 +1175,16 @@ function BulkBar({
                 </option>
               ))}
             </Select>
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              disabled={disabled || !bulkStatus}
+              onClick={applyBulkStatus}
+              className="min-h-11 shrink-0"
+            >
+              Apply
+            </Button>
 
             <button
               type="button"

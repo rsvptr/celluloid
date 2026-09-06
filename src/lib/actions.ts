@@ -99,6 +99,10 @@ const watchEventEditSchema = z.object({
   occurredAt: dateStringSchema,
   note: z.string().max(2000).nullable().optional(),
 });
+const undoWatchedTransitionSchema = z.object({
+  titleId: idSchema,
+  occurredAt: dateStringSchema,
+});
 const episodeToggleSchema = z.object({ episodeId: idSchema, watched: z.boolean() });
 const seasonToggleSchema = z.object({ seasonId: idSchema, watched: z.boolean() });
 const allEpisodesSchema = z.object({ titleId: idSchema, watched: z.boolean() });
@@ -336,8 +340,13 @@ export async function updateTitle(
     // truth. Computing from an earlier findFirst allowed two concurrent
     // "WATCHED" requests to both observe WATCHING, then each append a completion.
     const rows = await tx.$queryRaw<
-      { status: WatchStatus; watchedAt: Date | null; totalEpisodes: number | null }[]
-    >`SELECT status, "watchedAt", "totalEpisodes" FROM "Title"
+      {
+        status: WatchStatus;
+        watchedAt: Date | null;
+        totalEpisodes: number | null;
+        mediaType: MediaType;
+      }[]
+    >`SELECT status, "watchedAt", "totalEpisodes", "mediaType" FROM "Title"
       WHERE id = ${id} AND "userId" = ${userId} FOR UPDATE`;
     const title = rows[0];
     if (!title) return false;
@@ -359,6 +368,10 @@ export async function updateTitle(
         : (autoWatchedAt ?? title.watchedAt);
     const logsCompletion =
       nextStatus === WatchStatus.WATCHED && title.status !== WatchStatus.WATCHED;
+    const completionAt = logsCompletion ? (newWatchedAt ?? now) : null;
+    // A TV status transition is a reversible bulk operation: its completion and
+    // episode events use one source + instant as the transition identity.
+    const reversibleTvCompletion = logsCompletion && title.mediaType === MediaType.TV;
     const redatesCompletion =
       !logsCompletion &&
       input.watchedAt !== undefined &&
@@ -381,7 +394,7 @@ export async function updateTitle(
     // Completing a TV title from its status select also settles every aired
     // episode. Title-first locking keeps this ordered with all tracker writes.
     if (input.status === WatchStatus.WATCHED && (title.totalEpisodes ?? 0) > 0) {
-      const episodeWatchedAt = newWatchedAt ?? now;
+      const episodeWatchedAt = completionAt ?? newWatchedAt ?? now;
       const unwatchedAired = {
         season: { titleId: id },
         watched: false,
@@ -431,8 +444,10 @@ export async function updateTitle(
           userId,
           titleId: id,
           kind: WatchEventKind.TITLE_COMPLETED,
-          occurredAt: newWatchedAt ?? now,
-          source: WatchEventSource.MANUAL,
+          occurredAt: completionAt!,
+          source: reversibleTvCompletion
+            ? WatchEventSource.BULK
+            : WatchEventSource.MANUAL,
         },
       });
     } else if (redatesCompletion) {
@@ -458,11 +473,118 @@ export async function updateTitle(
     ) {
       await syncWatchedAtFromEvents(tx, id, null);
     }
-    return true;
+    return {
+      undoWatchedAt:
+        reversibleTvCompletion && completionAt ? completionAt.toISOString() : undefined,
+    };
   });
   if (!found) return { error: "Title not found." };
   revalidateAll(id);
-  return {};
+  return found.undoWatchedAt
+    ? { undo: { titleId: id, occurredAt: found.undoWatchedAt } }
+    : {};
+}
+
+/**
+ * D-019: undo one TV status transition to WATCHED. updateTitle gives every
+ * event from that transition the same title, BULK source and completion instant,
+ * which is enough identity for a short-lived toast action without a schema
+ * migration. Episodes are only unticked while their current watchedAt still
+ * equals that instant, protecting a later correction made before Undo is used.
+ */
+export async function undoWatchedTransition(
+  titleId: string,
+  occurredAt: string,
+): Promise<{ ok?: true; error?: string }> {
+  const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
+  const parsed = undoWatchedTransitionSchema.safeParse({ titleId, occurredAt });
+  if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
+  const transitionAt = toDate(parsed.data.occurredAt);
+  if (!transitionAt) return { error: "Invalid request. Refresh and try again." };
+
+  const undone = await prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<
+      {
+        id: string;
+        userId: string;
+        status: WatchStatus;
+        watchedAt: Date | null;
+        watchedEpisodes: number;
+        mediaType: MediaType;
+      }[]
+    >`SELECT id, "userId", status, "watchedAt", "watchedEpisodes", "mediaType"
+      FROM "Title" WHERE id = ${titleId} AND "userId" = ${userId} FOR UPDATE`;
+    const title = rows[0];
+    if (!title || title.mediaType !== MediaType.TV) return false;
+
+    const transitionEvents = await tx.watchEvent.findMany({
+      where: {
+        userId,
+        titleId,
+        source: WatchEventSource.BULK,
+        occurredAt: transitionAt,
+        kind: {
+          in: [WatchEventKind.EPISODE_WATCHED, WatchEventKind.TITLE_COMPLETED],
+        },
+      },
+      select: { kind: true, episodeId: true },
+    });
+    // A completion is the authority that this instant identifies a status
+    // transition, rather than an unrelated season/show bulk episode gesture.
+    if (!transitionEvents.some((event) => event.kind === WatchEventKind.TITLE_COMPLETED)) {
+      return false;
+    }
+
+    const episodeIds = transitionEvents.flatMap((event) =>
+      event.kind === WatchEventKind.EPISODE_WATCHED && event.episodeId
+        ? [event.episodeId]
+        : [],
+    );
+    if (episodeIds.length) {
+      await tx.episode.updateMany({
+        where: {
+          id: { in: episodeIds },
+          season: { titleId },
+          watched: true,
+          watchedAt: transitionAt,
+        },
+        data: { watched: false, watchedAt: null },
+      });
+    }
+    await tx.watchEvent.deleteMany({
+      where: {
+        userId,
+        titleId,
+        source: WatchEventSource.BULK,
+        occurredAt: transitionAt,
+        kind: {
+          in: [WatchEventKind.EPISODE_WATCHED, WatchEventKind.TITLE_COMPLETED],
+        },
+      },
+    });
+
+    const episodeRows = await tx.episode.count({ where: { season: { titleId } } });
+    if (episodeRows > 0) {
+      await recomputeProgress(tx, titleId, title);
+    } else {
+      // Imported TV titles can carry aggregate progress without materialized
+      // Episode rows. Preserve that counter and restore its natural non-complete
+      // state instead of recounting it to zero.
+      await tx.title.update({
+        where: { id: titleId },
+        data: {
+          status:
+            title.watchedEpisodes > 0 ? WatchStatus.WATCHING : WatchStatus.WATCHLIST,
+        },
+      });
+    }
+    return true;
+  });
+
+  if (!undone) return { error: "That watched change is no longer available to undo." };
+  revalidateAll(titleId);
+  return { ok: true };
 }
 
 /**

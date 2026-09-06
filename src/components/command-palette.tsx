@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Command } from "cmdk";
 import { Title as DialogTitle } from "@radix-ui/react-dialog";
@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import type { TitleIndexEntry } from "@/lib/data";
 import type { WatchStatus } from "@/generated/prisma/client";
-import { logWatch, updateTitle } from "@/lib/actions";
+import { logWatch, undoWatchedTransition, updateTitle } from "@/lib/actions";
 
 const NAV = [
   { href: "/", label: "Library", icon: Film },
@@ -107,14 +107,25 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
   // Remember what was focused so we can restore it when the palette closes.
   const opener = useRef<HTMLElement | null>(null);
 
+  const close = useCallback(() => {
+    setOpen(false);
+    setAction(null);
+    setSearch("");
+    // Controlled dialog has no Radix trigger, so restore focus ourselves after
+    // cmdk has removed the dialog from the tree.
+    requestAnimationFrame(() => opener.current?.focus());
+  }, []);
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        setOpen((v) => {
-          if (!v) opener.current = document.activeElement as HTMLElement | null;
-          return !v;
-        });
+        if (open) {
+          close();
+        } else {
+          opener.current = document.activeElement as HTMLElement | null;
+          setOpen(true);
+        }
       }
     }
     function onOpen() {
@@ -127,7 +138,7 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("celluloid:command", onOpen);
     };
-  }, []);
+  }, [close, open]);
 
   // Fetch the index each time the palette opens: lazily on the first open (the
   // layout no longer ships it with every page) and refreshed on later opens so
@@ -154,10 +165,6 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
       cancelled = true;
     };
   }, [open, retryKey]);
-
-  function close() {
-    setOpen(false);
-  }
 
   function go(href: string) {
     close();
@@ -194,10 +201,32 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
           toast.error(res.error);
           return;
         }
-        toast.success(
+        const message =
           kind === "watched"
             ? `Marked ${title.name} watched`
-            : `Moved ${title.name} to your watchlist`,
+            : `Moved ${title.name} to your watchlist`;
+        const undo = res.undo;
+        toast.success(
+          message,
+          undo
+            ? {
+                action: {
+                  label: "Undo",
+                  onClick: () => {
+                    void undoWatchedTransition(undo.titleId, undo.occurredAt)
+                      .then((undoResult) => {
+                        if (undoResult.error) toast.error(undoResult.error);
+                        else toast.success(`Undid watched change for ${title.name}`);
+                        router.refresh();
+                      })
+                      .catch(() => {
+                        toast.error("Couldn't undo that watched change. Try again.");
+                        router.refresh();
+                      });
+                  },
+                },
+              }
+            : undefined,
         );
       }
       close();
@@ -215,14 +244,8 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
     <Command.Dialog
       open={open}
       onOpenChange={(o) => {
-        setOpen(o);
-        if (!o) {
-          // Always reopen on the root list rather than mid-action.
-          setAction(null);
-          setSearch("");
-          // Controlled dialog has no Radix trigger, so restore focus ourselves.
-          requestAnimationFrame(() => opener.current?.focus());
-        }
+        if (o) setOpen(true);
+        else close();
       }}
       onKeyDown={(e) => {
         // Backspace on an empty query steps back out of an action — the same

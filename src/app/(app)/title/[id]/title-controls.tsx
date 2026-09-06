@@ -17,14 +17,31 @@ import { Button, Card, Input, Select, Textarea } from "@/components/ui";
 import { RatingStars } from "@/components/rating-stars";
 import { useConfirm } from "@/components/confirm-dialog";
 import { STATUS_META, STATUS_ORDER } from "@/lib/format";
-import { logWatch, removeTitle, restoreTitle, updateTitle } from "@/lib/actions";
+import {
+  logWatch,
+  removeTitle,
+  restoreTitle,
+  undoWatchedTransition,
+  updateTitle,
+} from "@/lib/actions";
 import { cn } from "@/lib/utils";
 
 type NotesStatus = "idle" | "saving" | "saved" | "error";
 
-/** The four fields that commit immediately (no debounce). Tracked as a group so
- * one serialized queue can persist them in order. watchedAt is held in the date
- * input's yyyy-mm-dd form (or "" when cleared), not the ISO prop form. */
+const STATUS_NAVIGATION_KEYS = new Set([
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "Home",
+  "End",
+  "PageUp",
+  "PageDown",
+]);
+
+/** The four non-debounced fields. Tracked as a group so one serialized queue can
+ * persist them in order; status joins the queue on blur/Enter. watchedAt is held
+ * in the date input's yyyy-mm-dd form (or "" when cleared), not the ISO prop form. */
 type ImmediateValues = {
   status: WatchStatus;
   rating: number | null;
@@ -89,6 +106,10 @@ export function TitleControls({
 
   const statusId = useId();
   const notesId = useId();
+  // Native selects fire `change` while arrowing on several desktop browsers.
+  // This transient flag distinguishes that navigation from a pointer/native-
+  // picker choice, which should retain immediate-save behaviour.
+  const statusNavigationRef = useRef(false);
   const [localStatus, setLocalStatus] = useState(status);
   const [localRating, setLocalRating] = useState(rating);
   const [localFav, setLocalFav] = useState(favorite);
@@ -100,7 +121,9 @@ export function TitleControls({
   const notesDirty = localNotes !== savedNotes;
 
   // --- Immediate-field autosave queue (status / rating / favorite / date) ----
-  // These four commit instantly, but — like notes — they serialize through one
+  // Rating, favorite and date commit instantly; status commits on Enter or blur
+  // so browsing a native select with arrow keys cannot trigger a mass TV update.
+  // Like notes, all four serialize through one
   // drain loop so rapid edits can never persist out of order. `latest` holds the
   // current optimistic value of each field; `confirmed` holds the last value the
   // server accepted. A field is dirty while the two differ. Newer edits to a
@@ -168,6 +191,7 @@ export function TitleControls({
     if (immediateSavingRef.current) return; // a drain is already running
     immediateSavingRef.current = true;
     let errorMessage: string | null = null;
+    let watchedUndo: { titleId: string; occurredAt: string } | null = null;
     try {
       while (
         (["status", "rating", "favorite", "watchedAt"] as const).some(
@@ -199,6 +223,7 @@ export function TitleControls({
         try {
           const res = await updateTitle(id, patch);
           if (res.error) throw new Error(res.error, { cause: "action" });
+          if (sent.status === "WATCHED" && res.undo) watchedUndo = res.undo;
           // Confirm only what we sent; anything changed during the await stays
           // dirty and the loop sends it on the next pass.
           Object.assign(confirmedImmediateRef.current, sent);
@@ -248,6 +273,26 @@ export function TitleControls({
       immediateSavingRef.current = false;
     }
     if (errorMessage) toast.error(errorMessage);
+    if (watchedUndo) {
+      const undo = watchedUndo;
+      toast.success("Marked watched", {
+        action: {
+          label: "Undo",
+          onClick: () => {
+            void undoWatchedTransition(undo.titleId, undo.occurredAt)
+              .then((result) => {
+                if (result.error) toast.error(result.error);
+                else toast.success("Watched change undone");
+                router.refresh();
+              })
+              .catch(() => {
+                toast.error("Couldn't undo that watched change. Try again.");
+                router.refresh();
+              });
+          },
+        },
+      });
+    }
     router.refresh();
   }, [id, router]);
 
@@ -445,7 +490,30 @@ export function TitleControls({
             const v = e.target.value as WatchStatus;
             setLocalStatus(v);
             latestImmediateRef.current.status = v;
+            if (statusNavigationRef.current) {
+              statusNavigationRef.current = false;
+              return;
+            }
             commitImmediate();
+          }}
+          onBlur={() => {
+            statusNavigationRef.current = false;
+            commitImmediate();
+          }}
+          onKeyDown={(e) => {
+            if (STATUS_NAVIGATION_KEYS.has(e.key)) {
+              statusNavigationRef.current = true;
+              return;
+            }
+            if (e.key === "Enter") {
+              statusNavigationRef.current = false;
+              commitImmediate();
+            }
+          }}
+          onKeyUp={(e) => {
+            // At a list boundary an arrow key may not emit change; do not let its
+            // marker leak into a later pointer selection.
+            if (STATUS_NAVIGATION_KEYS.has(e.key)) statusNavigationRef.current = false;
           }}
           className="w-full"
         >

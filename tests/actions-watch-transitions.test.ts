@@ -63,6 +63,19 @@ class FakeWatchDb {
             watchedAt: this.watchedAt,
             totalEpisodes: this.totalEpisodes,
             watchedEpisodes: this.watchedEpisodes,
+            mediaType: this.mediaType,
+          },
+        ];
+      }
+      if (sql.includes('SELECT id, "userId", status')) {
+        return [
+          {
+            id: "title-1",
+            userId: "user-1",
+            status: this.status,
+            watchedAt: this.watchedAt,
+            watchedEpisodes: this.watchedEpisodes,
+            mediaType: this.mediaType,
           },
         ];
       }
@@ -132,20 +145,50 @@ class FakeWatchDb {
         if (index < 0) throw new Error("missing fake watch event");
         return this.events.splice(index, 1)[0];
       },
-      deleteMany: async () => {
+      deleteMany: async ({ where }: { where?: Record<string, unknown> } = {}) => {
         this.deleteManyCalls += 1;
         const before = this.events.length;
-        this.events = this.events.filter(
-          (event) =>
-            !(
-              event.episodeId === "episode-1" &&
-              event.kind === WatchEventKind.EPISODE_WATCHED &&
-              (event.source === WatchEventSource.MANUAL ||
-                event.source === WatchEventSource.BULK) &&
-              event.note == null
-            ),
-        );
+        if (where?.occurredAt instanceof Date) {
+          const occurredAt = where.occurredAt;
+          this.events = this.events.filter(
+            (event) =>
+              !(
+                event.userId === where.userId &&
+                event.titleId === where.titleId &&
+                event.source === where.source &&
+                event.occurredAt.getTime() === occurredAt.getTime() &&
+                (event.kind === WatchEventKind.EPISODE_WATCHED ||
+                  event.kind === WatchEventKind.TITLE_COMPLETED)
+              ),
+          );
+        } else {
+          this.events = this.events.filter(
+            (event) =>
+              !(
+                event.episodeId === "episode-1" &&
+                event.kind === WatchEventKind.EPISODE_WATCHED &&
+                (event.source === WatchEventSource.MANUAL ||
+                  event.source === WatchEventSource.BULK) &&
+                event.note == null
+              ),
+          );
+        }
         return { count: before - this.events.length };
+      },
+      findMany: async ({ where }: { where: Record<string, unknown> }) => {
+        const occurredAt = where.occurredAt;
+        return this.events
+          .filter(
+            (event) =>
+              event.userId === where.userId &&
+              event.titleId === where.titleId &&
+              event.source === where.source &&
+              occurredAt instanceof Date &&
+              event.occurredAt.getTime() === occurredAt.getTime() &&
+              (event.kind === WatchEventKind.EPISODE_WATCHED ||
+                event.kind === WatchEventKind.TITLE_COMPLETED),
+          )
+          .map((event) => ({ kind: event.kind, episodeId: event.episodeId ?? null }));
       },
       findFirst: async () =>
         [...this.events]
@@ -305,6 +348,7 @@ const {
   setAllEpisodesWatched,
   setEpisodeWatched,
   setSeasonWatched,
+  undoWatchedTransition,
   updateTitle,
   updateWatchEvent,
 } = await import("../src/lib/actions");
@@ -325,6 +369,7 @@ describe("watch transition locking", { concurrency: false }, () => {
 
     assert.deepEqual(await updateTitle("", { status: WatchStatus.WATCHED }), invalid);
     assert.deepEqual(await setEpisodeWatched("", true), invalid);
+    assert.deepEqual(await undoWatchedTransition("", new Date().toISOString()), invalid);
     assert.deepEqual(
       await bulkSetStatus(
         Array.from({ length: 1001 }, (_, index) => `title-${index}`),
@@ -460,6 +505,35 @@ describe("watch transition locking", { concurrency: false }, () => {
         [WatchEventKind.EPISODE_WATCHED, completedAt],
         [WatchEventKind.TITLE_COMPLETED, completedAt],
       ],
+    );
+  });
+
+  it("undoes one TV WATCHED transition and removes every event from its instant", async () => {
+    activeDb = new FakeWatchDb();
+
+    const result = await updateTitle("title-1", { status: WatchStatus.WATCHED });
+    assert.ok(result.undo);
+    const transitionAt = result.undo.occurredAt;
+    assert.equal(activeDb.episodeWatched, true);
+    assert.equal(activeDb.events.length, 2);
+    assert.ok(
+      activeDb.events.every(
+        (event) =>
+          event.source === WatchEventSource.BULK &&
+          event.occurredAt.toISOString() === transitionAt,
+      ),
+    );
+
+    assert.deepEqual(
+      await undoWatchedTransition(result.undo.titleId, transitionAt),
+      { ok: true },
+    );
+    assert.equal(activeDb.episodeWatched, false);
+    assert.equal(activeDb.status, WatchStatus.WATCHLIST);
+    assert.equal(
+      activeDb.events.filter((event) => event.occurredAt.toISOString() === transitionAt)
+        .length,
+      0,
     );
   });
 
