@@ -2,7 +2,11 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import zlib from "node:zlib";
 import ExcelJS from "exceljs";
-import { preflightXlsxZip, parseUploadedList } from "../src/lib/import/parse-upload";
+import {
+  preflightXlsxZip,
+  parseUploadedList,
+  verifyXlsxInflation,
+} from "../src/lib/import/parse-upload";
 
 /**
  * Hand-build a ZIP purely from bytes so tests can control the *declared* sizes
@@ -114,6 +118,56 @@ describe("preflightXlsxZip", () => {
       },
     ]);
     assert.equal(preflightXlsxZip(zip).ok, false);
+  });
+
+  it("stops measured inflation when forged headers understate the output", async () => {
+    const expandedBytes = 12 * 1024 * 1024;
+    const deflated = zlib.deflateRawSync(Buffer.alloc(expandedBytes));
+    const zip = makeZip([
+      {
+        name: "xl/worksheets/sheet1.xml",
+        data: deflated,
+        method: 8,
+        // Both ZIP headers lie below the declared-size and ratio ceilings.
+        declaredUncompressed: 1024,
+        declaredCompressed: deflated.length,
+      },
+    ]);
+
+    assert.equal(preflightXlsxZip(zip).ok, true);
+    const measured = verifyXlsxInflation(zip);
+    assert.equal(measured.ok, false);
+    assert.equal(measured.reason, "entry-too-large");
+    assert.ok(
+      measured.inflatedBytes <= 10 * 1024 * 1024,
+      `bounded verifier retained ${measured.inflatedBytes} output bytes`,
+    );
+
+    const parsed = await parseUploadedList(zip, "forged.xlsx");
+    assert.deepEqual(parsed, {
+      titles: [],
+      error: "Spreadsheet is too large or malformed.",
+    });
+  });
+
+  it("stops measured aggregate output across individually valid entries", () => {
+    const expanded = Buffer.alloc(8 * 1024 * 1024);
+    const deflated = zlib.deflateRawSync(expanded);
+    const zip = makeZip(
+      [1, 2, 3].map((index) => ({
+        name: `xl/worksheets/sheet${index}.xml`,
+        data: deflated,
+        method: 8,
+        declaredUncompressed: 1024,
+        declaredCompressed: deflated.length,
+      })),
+    );
+
+    assert.equal(preflightXlsxZip(zip).ok, true);
+    const measured = verifyXlsxInflation(zip);
+    assert.equal(measured.ok, false);
+    assert.equal(measured.reason, "archive-too-large");
+    assert.ok(measured.inflatedBytes <= 20 * 1024 * 1024);
   });
 
   it("rejects a high compression ratio even when sizes are under the caps", () => {
