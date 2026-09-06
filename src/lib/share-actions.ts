@@ -112,7 +112,6 @@ export async function createShareList(
           userId,
           // The dialog caps this at 80 too; enforce it where it counts.
           name: data.name?.trim().slice(0, 80) || null,
-          titleIds,
           includeNotes: !!data.includeNotes,
           includeWatchlist: scope === "WHOLE_LIBRARY" && !!data.includeWatchlist,
           scope,

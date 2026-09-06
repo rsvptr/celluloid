@@ -4,6 +4,7 @@ import { createHash, createHmac } from "node:crypto";
 import { register } from "node:module";
 import {
   backupEnvelopeSchema,
+  backupTitleSchema,
   mergeBackupTitle,
   parseBackupEnvelope,
   planRestoreTitles,
@@ -379,6 +380,20 @@ describe("Celluloid backup envelope", () => {
     assert.equal(parsed.user.recommendModel, undefined);
     assert.equal(parsed.suppressions, undefined);
   });
+
+  it("rejects a watch region the application does not support", () => {
+    const invalidRegion = JSON.parse(JSON.stringify(envelope)) as {
+      user: { watchRegion: string };
+    };
+    invalidRegion.user.watchRegion = "ZZ";
+
+    const parsed = backupEnvelopeSchema.safeParse(invalidRegion);
+
+    assert.equal(parsed.success, false);
+    if (!parsed.success) {
+      assert.equal(parsed.error.issues[0]?.path.join("."), "user.watchRegion");
+    }
+  });
 });
 
 describe("backup merge policy", () => {
@@ -681,6 +696,48 @@ describe("backup merge policy — denormalized episode counters", () => {
     assert.equal(plan.counts.update, 1);
     assert.equal(plan.counts.skip, 0);
   });
+
+  it("adopts the backup counter pair together in replace-personal mode", () => {
+    const local = {
+      ...tv,
+      seasons: [],
+      totalEpisodes: 12,
+      watchedEpisodes: 5,
+    };
+    const incoming = {
+      ...tv,
+      seasons: [],
+      totalEpisodes: 24,
+      watchedEpisodes: 24,
+    };
+
+    const merged = mergeBackupTitle(local, incoming, "replace-personal");
+
+    assert.equal(merged.totalEpisodes, 24);
+    assert.equal(merged.watchedEpisodes, 24);
+    assert.equal(backupTitleSchema.safeParse(merged).success, true);
+  });
+
+  it("raises a merge denominator to the preserved local numerator", () => {
+    const local = {
+      ...tv,
+      seasons: [],
+      totalEpisodes: null,
+      watchedEpisodes: 24,
+    };
+    const incoming = {
+      ...tv,
+      seasons: [],
+      totalEpisodes: 12,
+      watchedEpisodes: 5,
+    };
+
+    const merged = mergeBackupTitle(local, incoming, "merge");
+
+    assert.equal(merged.totalEpisodes, 24);
+    assert.equal(merged.watchedEpisodes, 24);
+    assert.equal(backupTitleSchema.safeParse(merged).success, true);
+  });
 });
 
 // --- Restore confirmation (SB-4) ---------------------------------------------
@@ -761,6 +818,7 @@ function signRestoreToken(
     counts.update,
     counts.skip,
     counts.conflict,
+    counts.eventsCreate,
     counts.suppressionsCreate,
     counts.suppressionsUpdate,
     counts.suppressionsSkip,
@@ -794,6 +852,7 @@ describe("restore confirmation", () => {
     update: 1,
     skip: 3,
     conflict: 0,
+    eventsCreate: 2,
     suppressionsCreate: 4,
     suppressionsUpdate: 0,
     suppressionsSkip: 1,
@@ -852,6 +911,7 @@ describe("restore confirmation", () => {
       "update",
       "skip",
       "conflict",
+      "eventsCreate",
       "suppressionsCreate",
       "suppressionsUpdate",
       "suppressionsSkip",

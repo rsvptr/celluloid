@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { WATCH_REGIONS } from "@/lib/tmdb-extras";
 
 export const BACKUP_APP = "celluloid" as const;
 export const BACKUP_SCHEMA_VERSION = 2 as const;
@@ -242,7 +243,7 @@ export const backupUserSchema = z
       .min(1)
       .max(100)
       .refine(isValidTimeZone, "invalid IANA time zone"),
-    watchRegion: z.string().regex(/^[A-Z]{2}$/),
+    watchRegion: z.enum(WATCH_REGIONS),
     // Optional rather than defaulted so a pre-CEL-6 v2 backup remains
     // distinguishable from a newer backup that deliberately stores an empty
     // selection or the default recommendation model. Restore can then leave
@@ -501,6 +502,7 @@ export interface RestoreCounts {
 
 /** Non-title data shown in, and cryptographically bound to, a restore preview. */
 export interface SupplementalRestoreCounts {
+  eventsCreate: number;
   suppressionsCreate: number;
   suppressionsUpdate: number;
   suppressionsSkip: number;
@@ -674,6 +676,12 @@ export function mergeBackupTitle(
   const mergedEpisodes = seasons.flatMap((season) => season.episodes);
   const hasEpisodeRows = mergedEpisodes.length > 0;
   const mergedWatchedEpisodes = mergedEpisodes.filter((e) => e.watched).length;
+  const counterOnlyWatchedEpisodes =
+    mode === "replace-personal" ? incoming.watchedEpisodes : existing.watchedEpisodes;
+  const counterOnlyTotalEpisodes =
+    mode === "replace-personal"
+      ? incoming.totalEpisodes
+      : fillNullable(existing.totalEpisodes, incoming.totalEpisodes);
 
   return {
     ...existing,
@@ -716,12 +724,12 @@ export function mergeBackupTitle(
     // `seasons`, and recomputeProgress counts those same rows.
     totalEpisodes: hasEpisodeRows
       ? mergedEpisodes.length
-      : fillNullable(existing.totalEpisodes, incoming.totalEpisodes),
+      : counterOnlyTotalEpisodes === null
+        ? null
+        : Math.max(counterOnlyTotalEpisodes, counterOnlyWatchedEpisodes),
     watchedEpisodes: hasEpisodeRows
       ? mergedWatchedEpisodes
-      : mode === "replace-personal"
-        ? incoming.watchedEpisodes
-        : existing.watchedEpisodes,
+      : counterOnlyWatchedEpisodes,
     source: fillNullable(existing.source, incoming.source),
     // Merge must never change local trash state: a live local title stays live
     // even when the backup copy is trashed, and a trashed local title stays
@@ -735,7 +743,12 @@ export function mergeBackupTitle(
 }
 
 function equivalentTitle(left: BackupTitle, right: BackupTitle): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  // Zod emits schema-key order, making the comparison independent of the
+  // insertion order of objects assembled by a merge versus parsed from JSON.
+  return (
+    JSON.stringify(backupTitleSchema.parse(left)) ===
+    JSON.stringify(backupTitleSchema.parse(right))
+  );
 }
 
 /** Builds a deterministic title-level plan without touching the database. */
@@ -814,7 +827,10 @@ export function planRestoreTitles(
     }
 
     usedExistingIds.add(existing.sourceId);
-    const merged = mergeBackupTitle(existing, incoming, mode);
+    // Validate the exact row shape during planning, before restore opens any
+    // write transaction. This keeps database CHECK constraints as a final
+    // safeguard rather than the first place an impossible merge is discovered.
+    const merged = backupTitleSchema.parse(mergeBackupTitle(existing, incoming, mode));
     if (equivalentTitle(existing, merged)) {
       counts.skip += 1;
       items.push({ action: "skip", incoming, existingId: existing.sourceId });

@@ -31,6 +31,21 @@ type WatchEventState = {
   createdAt: Date;
 };
 
+type ShareState = {
+  id: string;
+  slug: string;
+  userId: string;
+  name: string | null;
+  titleIds: string[];
+  includeNotes: boolean;
+  includeWatchlist: boolean;
+  scope: "WHOLE_LIBRARY" | "SELECTION";
+  expiresAt: Date | null;
+  revokedAt: Date | null;
+  createdAt: Date;
+  items: Array<{ titleId: string; position: number }>;
+};
+
 function emptyEnvelope(user: BackupEnvelope["user"]): BackupEnvelope {
   return {
     app: "celluloid",
@@ -51,6 +66,7 @@ function previewCounts(overrides: Partial<BackupRestorePlan["counts"]> = {}) {
     update: 0,
     skip: 0,
     conflict: 0,
+    eventsCreate: 0,
     suppressionsCreate: 0,
     suppressionsUpdate: 0,
     suppressionsSkip: 0,
@@ -72,6 +88,7 @@ class FakeBackupDb {
   };
   suppressions: SuppressionState[] = [];
   watchEvents: WatchEventState[] = [];
+  shares: ShareState[] = [];
   exportTitles: Array<Record<string, unknown>> = [];
   restoreTitle: Record<string, unknown> | null = null;
   titleUpdates: Array<Record<string, unknown>> = [];
@@ -102,7 +119,52 @@ class FakeBackupDb {
       },
     },
     tag: { findMany: async () => [] },
-    shareList: { findMany: async () => [] },
+    shareList: {
+      findMany: async ({ where }: { where: Partial<ShareState> }) =>
+        this.shares.filter((share) =>
+          Object.entries(where).every(([key, value]) => {
+            const current = share[key as keyof ShareState];
+            if (current instanceof Date && value instanceof Date) {
+              return current.getTime() === value.getTime();
+            }
+            return current === value;
+          }),
+        ),
+      findUnique: async ({ where }: { where: { id?: string; slug?: string } }) =>
+        this.shares.find(
+          (share) => share.id === where.id || share.slug === where.slug,
+        ) ?? null,
+      create: async ({ data }: { data: Omit<ShareState, "id" | "items"> & { id?: string } }) => {
+        const created: ShareState = {
+          ...data,
+          id: data.id ?? `generated-share-${this.shares.length + 1}`,
+          titleIds: data.titleIds ?? [],
+          items: [],
+        };
+        this.shares.push(created);
+        return { id: created.id };
+      },
+      update: async ({ where, data }: { where: { id: string }; data: Partial<ShareState> }) => {
+        const share = this.shares.find((candidate) => candidate.id === where.id);
+        if (!share) throw new Error("missing fake share");
+        Object.assign(share, data);
+        return share;
+      },
+    },
+    shareListItem: {
+      deleteMany: async ({ where }: { where: { shareListId: string } }) => {
+        const share = this.shares.find((candidate) => candidate.id === where.shareListId);
+        if (share) share.items = [];
+        return { count: 0 };
+      },
+      createMany: async ({ data }: { data: Array<{ shareListId: string; titleId: string; position: number }> }) => {
+        for (const item of data) {
+          const share = this.shares.find((candidate) => candidate.id === item.shareListId);
+          if (share) share.items.push({ titleId: item.titleId, position: item.position });
+        }
+        return { count: data.length };
+      },
+    },
     watchEvent: {
       findMany: async ({ where }: { where?: Record<string, unknown> } = {}) => {
         this.watchEventFindManyCalls += 1;
@@ -135,6 +197,12 @@ class FakeBackupDb {
           });
         }
         return { count: data.length };
+      },
+      update: async ({ where, data }: { where: { id: string }; data: Partial<WatchEventState> }) => {
+        const event = this.watchEvents.find((candidate) => candidate.id === where.id);
+        if (!event) throw new Error("missing fake watch event");
+        Object.assign(event, data);
+        return event;
       },
     },
     suppression: {
@@ -188,13 +256,63 @@ class FakeBackupDb {
     },
     user: this.tx.user,
     title: {
-      findMany: async () =>
-        this.restoreTitle
-          ? [{ id: this.restoreTitle.id, seasons: [] }]
-          : [],
+      findMany: async ({ where }: { where?: { id?: { in?: string[] } } } = {}) =>
+        where?.id?.in
+          ? this.restoreTitle
+            ? [{ id: this.restoreTitle.id, seasons: [] }]
+            : []
+          : this.exportTitles,
     },
     tag: this.tx.tag,
     suppression: this.tx.suppression,
+    watchEvent: this.tx.watchEvent,
+  };
+}
+
+function movieFixture(sourceId = "local-movie"): BackupTitle {
+  return {
+    sourceId,
+    tmdbId: 101,
+    mediaType: "MOVIE",
+    name: "Event Fixture",
+    originalName: null,
+    overview: null,
+    releaseDate: null,
+    posterPath: null,
+    backdropPath: null,
+    language: "en",
+    tmdbRating: null,
+    runtime: 100,
+    genres: [],
+    status: "WATCHED",
+    rating: null,
+    notes: null,
+    watchedAt: stamp,
+    favorite: false,
+    totalSeasons: null,
+    totalEpisodes: null,
+    watchedEpisodes: 0,
+    source: "tmdb",
+    deletedAt: null,
+    createdAt: stamp,
+    updatedAt: stamp,
+    seasons: [],
+    tags: [],
+  };
+}
+
+function storedTitle(title: BackupTitle, userId = "user-1") {
+  return {
+    ...title,
+    id: title.sourceId,
+    userId,
+    releaseDate: title.releaseDate ? new Date(title.releaseDate) : null,
+    watchedAt: title.watchedAt ? new Date(title.watchedAt) : null,
+    deletedAt: title.deletedAt ? new Date(title.deletedAt) : null,
+    createdAt: new Date(title.createdAt),
+    updatedAt: new Date(title.updatedAt),
+    seasons: [],
+    tags: [],
   };
 }
 
@@ -344,6 +462,57 @@ describe("backup database paths", { concurrency: false }, () => {
     assert.equal("stillPath" in episode, false);
   });
 
+  it("exports empty curated shares after their last member is purged", async () => {
+    activeDb.shares = [
+      {
+        id: "empty-selection",
+        slug: "empty",
+        userId: "user-1",
+        name: "Purged selection",
+        titleIds: ["purged-title"],
+        includeNotes: false,
+        includeWatchlist: false,
+        scope: "SELECTION",
+        expiresAt: null,
+        revokedAt: new Date(stamp),
+        createdAt: new Date(stamp),
+        items: [],
+      },
+      {
+        id: "expired-whole-library",
+        slug: "expired",
+        userId: "user-1",
+        name: "Expired library",
+        titleIds: [],
+        includeNotes: false,
+        includeWatchlist: true,
+        scope: "WHOLE_LIBRARY",
+        expiresAt: new Date(stamp),
+        revokedAt: null,
+        createdAt: new Date(stamp),
+        items: [],
+      },
+    ];
+
+    const backup = await createBackupEnvelope("user-1");
+
+    assert.equal(backup.shares.length, 2);
+    assert.deepEqual(backup.shares[0], {
+      sourceId: "empty-selection",
+      name: "Purged selection",
+      titleIds: [],
+      includeNotes: false,
+      includeWatchlist: false,
+      scope: "SELECTION",
+      expiresAt: null,
+      revokedAt: stamp,
+      items: [],
+      createdAt: stamp,
+    });
+    assert.equal(backup.shares[1].scope, "WHOLE_LIBRARY");
+    assert.equal(backup.shares[1].expiresAt, stamp);
+  });
+
   it("previews and restores suppression dedup plus user preferences", async () => {
     activeDb.suppressions = [
       {
@@ -430,6 +599,70 @@ describe("backup database paths", { concurrency: false }, () => {
     assert.equal(plan.counts.providerPreferenceUpdate, 0);
     assert.equal(plan.counts.recommendModelPreferenceIncluded, 0);
     assert.equal(plan.counts.recommendModelPreferenceUpdate, 0);
+  });
+
+  it("leaves every user preference untouched in merge mode", async () => {
+    activeDb.user = {
+      timeZone: "Europe/London",
+      watchRegion: "GB",
+      myProviders: [8],
+      recommendModel: null,
+    };
+    const backup = emptyEnvelope({
+      timeZone: "America/New_York",
+      watchRegion: "US",
+      myProviders: [337],
+      recommendModel: "claude-opus-5",
+    });
+
+    const plan = await analyzeBackupRestore("user-1", backup, "merge");
+    await restoreBackup("user-1", backup, "merge", plan);
+
+    assert.deepEqual(activeDb.user, {
+      timeZone: "Europe/London",
+      watchRegion: "GB",
+      myProviders: [8],
+      recommendModel: null,
+    });
+    assert.equal(plan.counts.providerPreferenceUpdate, 0);
+    assert.equal(plan.counts.recommendModelPreferenceUpdate, 0);
+  });
+
+  it("previews wholesale event and suppression creates", async () => {
+    const incoming = movieFixture();
+    const row = storedTitle(incoming);
+    activeDb.exportTitles = [row];
+    const backup = emptyEnvelope({ timeZone: "UTC", watchRegion: "US" });
+    backup.titles = [incoming];
+    backup.watchEvents = [
+      {
+        sourceId: "event-new",
+        titleId: incoming.sourceId,
+        episodeId: null,
+        kind: "REWATCH",
+        occurredAt: stamp,
+        source: "RESTORE",
+        note: null,
+        createdAt: stamp,
+      },
+    ];
+    backup.suppressions = [
+      {
+        sourceId: "suppression-new",
+        matchKey: "tmdb:MOVIE:909",
+        tmdbId: 909,
+        mediaType: "MOVIE",
+        name: "Not for me",
+        year: 2026,
+        reason: "NOT_INTERESTED",
+        createdAt: stamp,
+      },
+    ];
+
+    const plan = await analyzeBackupRestore("user-1", backup, "merge");
+
+    assert.equal(plan.counts.eventsCreate, 1);
+    assert.equal(plan.counts.suppressionsCreate, 1);
   });
 
   it("keeps counter-only TV progress during a backup restore update", async () => {
@@ -572,5 +805,240 @@ describe("backup database paths", { concurrency: false }, () => {
     assert.equal(result.eventsSkipped, 0);
     assert.equal(activeDb.watchEventFindManyCalls, 4);
     assert.equal(activeDb.watchEventCreateManyCalls, 2);
+  });
+
+  it("uses source identity before tuple/scalar dedup in merge mode", async () => {
+    const incoming = movieFixture();
+    const row = storedTitle(incoming);
+    activeDb.exportTitles = [row];
+    activeDb.restoreTitle = row;
+    activeDb.watchEvents = [
+      {
+        id: "event-1",
+        userId: "user-1",
+        titleId: incoming.sourceId,
+        episodeId: null,
+        kind: "TITLE_COMPLETED",
+        occurredAt: new Date("2026-09-03T00:00:00.000Z"),
+        source: "MANUAL",
+        note: "edited locally",
+        createdAt: new Date(stamp),
+      },
+    ];
+    activeDb.shares = [
+      {
+        id: "share-1",
+        slug: "kept-private-link",
+        userId: "user-1",
+        name: "Renamed locally",
+        titleIds: [],
+        includeNotes: false,
+        includeWatchlist: false,
+        scope: "SELECTION",
+        expiresAt: null,
+        revokedAt: null,
+        createdAt: new Date(stamp),
+        items: [{ titleId: incoming.sourceId, position: 1 }],
+      },
+    ];
+    const backup = emptyEnvelope({ timeZone: "UTC", watchRegion: "US" });
+    backup.titles = [incoming];
+    backup.watchEvents = [
+      {
+        sourceId: "event-1",
+        titleId: incoming.sourceId,
+        episodeId: null,
+        kind: "TITLE_COMPLETED",
+        occurredAt: "2026-09-01T00:00:00.000Z",
+        source: "MANUAL",
+        note: null,
+        createdAt: stamp,
+      },
+    ];
+    backup.shares = [
+      {
+        sourceId: "share-1",
+        name: "Old backup name",
+        titleIds: [incoming.sourceId],
+        includeNotes: false,
+        includeWatchlist: false,
+        scope: "SELECTION",
+        expiresAt: null,
+        revokedAt: null,
+        items: [{ titleId: incoming.sourceId, position: 1 }],
+        createdAt: stamp,
+      },
+    ];
+
+    const plan = await analyzeBackupRestore("user-1", backup, "merge");
+    const result = await restoreBackup("user-1", backup, "merge", plan);
+
+    assert.equal(plan.counts.eventsCreate, 0);
+    assert.equal(result.eventsCreated, 0);
+    assert.equal(result.eventsSkipped, 1);
+    assert.equal(result.sharesCreated, 0);
+    assert.equal(result.sharesSkipped, 1);
+    assert.equal(activeDb.watchEvents.length, 1);
+    assert.equal(activeDb.watchEvents[0].note, "edited locally");
+    assert.equal(activeDb.shares.length, 1);
+    assert.equal(activeDb.shares[0].name, "Renamed locally");
+  });
+
+  it("updates source-identical events and shares in replace-personal mode", async () => {
+    const incoming = movieFixture();
+    const row = storedTitle(incoming);
+    activeDb.exportTitles = [row];
+    activeDb.restoreTitle = row;
+    activeDb.watchEvents = [
+      {
+        id: "event-1",
+        userId: "user-1",
+        titleId: incoming.sourceId,
+        episodeId: null,
+        kind: "TITLE_COMPLETED",
+        occurredAt: new Date("2026-09-03T00:00:00.000Z"),
+        source: "MANUAL",
+        note: "edited locally",
+        createdAt: new Date(stamp),
+      },
+    ];
+    activeDb.shares = [
+      {
+        id: "share-1",
+        slug: "kept-private-link",
+        userId: "user-1",
+        name: "Renamed locally",
+        titleIds: [incoming.sourceId],
+        includeNotes: false,
+        includeWatchlist: false,
+        scope: "SELECTION",
+        expiresAt: null,
+        revokedAt: null,
+        createdAt: new Date(stamp),
+        items: [{ titleId: incoming.sourceId, position: 1 }],
+      },
+    ];
+    const backup = emptyEnvelope({ timeZone: "UTC", watchRegion: "US" });
+    backup.titles = [incoming];
+    backup.watchEvents = [
+      {
+        sourceId: "event-1",
+        titleId: incoming.sourceId,
+        episodeId: null,
+        kind: "TITLE_COMPLETED",
+        occurredAt: "2026-09-01T00:00:00.000Z",
+        source: "MANUAL",
+        note: null,
+        createdAt: stamp,
+      },
+    ];
+    backup.shares = [
+      {
+        sourceId: "share-1",
+        name: "Old backup name",
+        titleIds: [incoming.sourceId],
+        includeNotes: true,
+        includeWatchlist: false,
+        scope: "SELECTION",
+        expiresAt: stamp,
+        revokedAt: stamp,
+        items: [{ titleId: incoming.sourceId, position: 1 }],
+        createdAt: stamp,
+      },
+    ];
+
+    const plan = await analyzeBackupRestore("user-1", backup, "replace-personal");
+    const result = await restoreBackup(
+      "user-1",
+      backup,
+      "replace-personal",
+      plan,
+    );
+
+    assert.equal(result.eventsCreated, 0);
+    assert.equal(activeDb.watchEvents[0].occurredAt.toISOString(), "2026-09-01T00:00:00.000Z");
+    assert.equal(activeDb.watchEvents[0].note, null);
+    assert.equal(result.sharesCreated, 0);
+    assert.equal(activeDb.shares[0].slug, "kept-private-link");
+    assert.equal(activeDb.shares[0].name, "Old backup name");
+    assert.deepEqual(activeDb.shares[0].titleIds, []);
+    assert.deepEqual(activeDb.shares[0].items, [
+      { titleId: incoming.sourceId, position: 1 },
+    ]);
+    assert.equal(activeDb.shares[0].revokedAt?.toISOString(), stamp);
+  });
+
+  it("does not adopt source ids occupied by another account", async () => {
+    const incoming = movieFixture();
+    const row = storedTitle(incoming);
+    activeDb.exportTitles = [row];
+    activeDb.restoreTitle = row;
+    activeDb.watchEvents = [
+      {
+        id: "occupied-event",
+        userId: "friend-2",
+        titleId: "friend-title",
+        episodeId: null,
+        kind: "REWATCH",
+        occurredAt: new Date(stamp),
+        source: "MANUAL",
+        note: null,
+        createdAt: new Date(stamp),
+      },
+    ];
+    activeDb.shares = [
+      {
+        id: "occupied-share",
+        slug: "friends-link",
+        userId: "friend-2",
+        name: "Friend's share",
+        titleIds: [],
+        includeNotes: false,
+        includeWatchlist: false,
+        scope: "SELECTION",
+        expiresAt: null,
+        revokedAt: null,
+        createdAt: new Date(stamp),
+        items: [],
+      },
+    ];
+    const backup = emptyEnvelope({ timeZone: "UTC", watchRegion: "US" });
+    backup.titles = [incoming];
+    backup.watchEvents = [
+      {
+        sourceId: "occupied-event",
+        titleId: incoming.sourceId,
+        episodeId: null,
+        kind: "REWATCH",
+        occurredAt: stamp,
+        source: "MANUAL",
+        note: null,
+        createdAt: stamp,
+      },
+    ];
+    backup.shares = [
+      {
+        sourceId: "occupied-share",
+        name: "My restored share",
+        titleIds: [incoming.sourceId],
+        includeNotes: false,
+        includeWatchlist: false,
+        scope: "SELECTION",
+        expiresAt: null,
+        revokedAt: null,
+        items: [{ titleId: incoming.sourceId, position: 1 }],
+        createdAt: stamp,
+      },
+    ];
+
+    const plan = await analyzeBackupRestore("user-1", backup, "merge");
+    const result = await restoreBackup("user-1", backup, "merge", plan);
+
+    assert.equal(result.eventsCreated, 1);
+    assert.equal(result.sharesCreated, 1);
+    assert.equal(activeDb.watchEvents[0].userId, "friend-2");
+    assert.notEqual(activeDb.watchEvents[1].id, "occupied-event");
+    assert.equal(activeDb.shares[0].userId, "friend-2");
+    assert.notEqual(activeDb.shares[1].id, "occupied-share");
   });
 });
