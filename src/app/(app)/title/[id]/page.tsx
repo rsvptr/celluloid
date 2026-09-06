@@ -235,6 +235,7 @@ export default async function TitlePage({
             favorite={title.favorite}
             watchedAt={title.watchedAt ? title.watchedAt.toISOString() : null}
             watchCount={watchCount}
+            timeZone={prefs?.timeZone ?? "UTC"}
           />
         </div>
 
@@ -259,7 +260,7 @@ export default async function TitlePage({
         )}
 
         <aside className="order-3 flex flex-col gap-5 lg:order-none lg:col-start-3 lg:row-start-2 lg:self-start">
-          <WatchHistory userId={user.id} titleId={title.id} total={watchCount} />
+          <WatchHistory userId={user.id} titleId={title.id} total={watchCount} timeZone={prefs?.timeZone ?? "UTC"} />
           <TagEditor
             titleId={title.id}
             current={title.tags.map((t) => ({ id: t.tag.id, name: t.tag.name }))}

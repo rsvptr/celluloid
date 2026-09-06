@@ -18,10 +18,13 @@ export async function WatchHistory({
   userId,
   titleId,
   total,
+  timeZone = "UTC",
 }: {
   userId: string;
   titleId: string;
   total: number;
+  /** Account time zone; viewing dates are shown as calendar days in it (AUD-05). */
+  timeZone?: string;
 }) {
   if (total === 0) return null;
 
@@ -48,5 +51,5 @@ export async function WatchHistory({
     note: e.note,
   }));
 
-  return <WatchHistoryList events={items} total={total} />;
+  return <WatchHistoryList events={items} total={total} timeZone={timeZone} />;
 }
