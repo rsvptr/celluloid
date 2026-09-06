@@ -59,7 +59,7 @@ Most trackers are good at storing what you watched and bad at the only question 
 - Tracks films and TV in one library, with TMDB metadata, posters, seasons, and episodes pulled in automatically
 - Every matched title shows where to stream, rent, or buy it (region-aware, via JustWatch data), a trailer link, and a "More like this" row you can add from in one click
 - Half star ratings from 0.5 to 10, private notes, favorites, and free form tags
-- Per episode and per season tracking for shows, with a progress bar, quick "mark season" and "mark show" actions, and a quiet "New" badge once a watching show has an aired episode you have not logged yet
+- Per episode and per season tracking for shows, with a progress bar, quick "mark season" and "mark show" actions (marking a show watched comes with an Undo that also clears the activity it wrote), and a quiet "New" badge once a watching show has an aired episode you have not logged yet
 - A nightly job re-reads TMDB for the shows you are still watching, so a new season appears in the library on its own instead of waiting for you to refresh the title by hand
 - Every viewing is logged to a private watch history, with an optional note. Logging again on a title you already finished counts as a rewatch instead of overwriting the first watch. A viewing logged on the wrong day, or twice, can be edited or deleted from the title page
 - Five watch states that map to a real backlog: watchlist, watching, watched, on hold, dropped
@@ -116,7 +116,7 @@ A few details that make the output better:
 - **Turn downs stick.** Dismissing a suggestion as "not interested" records it against your account, not just the open page. It is filtered out of every later run, and it is named in the brief's exclusion clause so the model spends its picks elsewhere. The Not interested list on the recommend page shows what you have turned down and puts any of it back.
 - **Language lean is computed, not assumed.** The brief states the languages you actually rate and favorite, so a model does not default to English language picks when your taste runs elsewhere.
 - **Recency reflects mood.** Titles you finished recently are weighted as your current direction. That includes a watch date an imported sheet supplied, because it is a real date; what the app will not do is invent one for a row that arrived without it.
-- **No repeats.** Suggestions are checked against your whole library by TMDB id and by a normalized name plus year, which also catches regional titles that were never matched to TMDB.
+- **No repeats.** Suggestions are checked against your whole library, Trash included, by TMDB id and by a normalized name plus year, which also catches regional titles that were never matched to TMDB.
 - **Honest confidence.** Each pick comes back with a confidence level, and the list is sorted high to low before it is trimmed, so a strong pick is never dropped in favor of a weak one.
 - **Scoped runs stay scoped.** Base a run on recent watches or hand picked titles and the rest of your library enters the brief only as names and years to avoid. Notes, ratings, and tags on titles outside the basis never leave the app.
 - **Requirements are checked, not just requested.** A language, genre, or era pick is verified against TMDB's own record for every suggestion that resolves, and a pick that fails is dropped, along with anything TMDB dates in the future. When that shortens a batch, the run says so rather than quietly padding the list with near misses.
@@ -163,9 +163,9 @@ A title used to be frozen at whatever TMDB said on the day you added it, so a sh
 
 `vercel.json` registers one cron entry, `/api/cron/sync`, which runs daily at 07:00 UTC. For each account it takes the fifty least recently synced shows, oldest (and never synced) first, and re-reads them from TMDB. It skips dropped shows, and shows TMDB reports as ended or cancelled once they have been synced at least once, so the budget goes to series that can still change.
 
-- Episodes are matched by season and episode number and updated in place, never deleted and recreated. That is what keeps the "New" badge meaningful: the badge keys on when an episode row first appeared, so rewriting every row nightly would mark the whole library as new and destroy the signal.
+- Episodes are matched by their TMDB id, so a renumbered episode keeps its watched tick, and they are updated in place rather than deleted and recreated. That is what keeps the "New" badge meaningful: the badge keys on when an episode row first appeared, so rewriting every row nightly would mark the whole library as new and destroy the signal.
 - An episode the sync stores for the first time only counts as newly discovered if it aired in the last month or has yet to air. A show added with some of its seasons missing gets them filled in eventually, and that back catalogue is dated to the title rather than to the night it arrived, so a season from 2015 does not turn up wearing a "New" badge.
-- Rows are never removed. TMDB occasionally drops or renumbers an episode for a day, and deleting on that basis would take your watched flag with it.
+- An episode TMDB withdraws is removed if you never watched it. If you had ticked it, the row stays with your tick and its history but leaves the progress count and the "New" badge, so the show can still reach 100%. If TMDB lists the episode again, the row comes back as it was.
 - Each run records the show's TMDB status, the air date of its next episode, and when the title was last synced along with the last error if there was one. It also caches which services carry the show in your Settings watch region; the library's "On my services" filter reads that cache against the services you pick in Settings (see [Notes and limitations](#notes-and-limitations)).
 - One title's failure is recorded against that title and the run continues. Whatever the run does not reach keeps its place at the front of the queue and goes first the next day.
 - The run has a wall clock budget, and a title in flight when it runs out stops fetching rather than finishing at its own pace, since one show with hundreds of episodes could otherwise start just under the wire and overrun the function limit. A title dropped that way is not marked as failed; it stays at the front of the queue. With more than one account the remaining budget is split evenly between the accounts still to go, so a later account cannot be starved by an earlier one.
@@ -259,7 +259,7 @@ These steps are manual owner responsibilities, not actions the application perfo
 
 ## Sharing
 
-You can publish a read only view of your library, or an ordered selection, at an unguessable link under `/s/`. Shared pages need no login and are marked no index. Notes are hidden unless you opt in, and a whole library share hides your not yet watched watchlist by default so you are not broadcasting your plans. Links can be permanent or expire after 7, 30, or 90 days.
+You can publish a read only view of your library, or an ordered selection, at an unguessable link under `/s/`. Shared pages need no login and are marked no index. Notes, star ratings, and favorites are hidden unless you opt in, and a whole library share hides your not yet watched watchlist by default so you are not broadcasting your plans. Links can be permanent or expire after 7, 30, or 90 days.
 
 Every link stays listed in Settings, and a published link is not a thing you have to remember the contents of:
 
@@ -554,6 +554,7 @@ celluloid/
 
 - A command palette opens from the header (⌘K on Mac, Ctrl+K elsewhere; the hint matches your platform) for fast navigation to any title or page.
 - The star rating is fully operable from the keyboard: arrow keys nudge by half or whole steps, Home and End jump to the ends, and 0 clears.
+- The status select can be browsed with the arrow keys without saving anything; Enter, or leaving the field, saves the choice, and picking with a pointer saves at once. The bulk status control in the library has its own Apply button.
 - The stats activity heatmap is one tab stop, not a year of them. Arrow keys move between days, up and down within a week and left and right across weeks, Home and End jump to the ends of the window, and Enter opens the selected day.
 - Every interactive control has a visible focus ring, icon only buttons carry labels, and toggles report their pressed state to screen readers.
 - The card hover lift and other motion respect the system "reduce motion" setting.

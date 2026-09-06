@@ -50,11 +50,3 @@ next-env.d.ts
 
 /src/generated/prisma
 
-# local AI-workflow artifacts (agent orchestration, audit notes, doc mirrors —
-# used during development, not part of the app)
-/AUDIT.md
-/CLAUDE.md
-/.agent-collaboration/
-/.claude/
-/.agents/
-/tmdb-docs/
