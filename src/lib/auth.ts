@@ -18,7 +18,16 @@ const trustedOrigins = [
 
 export const signupsDisabled = !env.SIGNUP_INVITE_CODE;
 
-const requireSignupInvite = createAuthMiddleware(async (context) => {
+const enforceAuthRequestPolicy = createAuthMiddleware(async (context) => {
+  if (context.path === "/delete-user") {
+    const body = context.body as Record<string, unknown> | undefined;
+    if (typeof body?.password !== "string" || body.password.length === 0) {
+      throw new APIError("BAD_REQUEST", {
+        message: "Enter your current password to delete your account.",
+      });
+    }
+    return;
+  }
   if (context.path !== "/sign-up/email") return;
 
   const body = context.body as Record<string, unknown> | undefined;
@@ -34,6 +43,10 @@ export const auth = betterAuth({
   secret: env.BETTER_AUTH_SECRET,
   baseURL: env.BETTER_AUTH_URL,
   database: prismaAdapter(prisma, { provider: "postgresql" }),
+  // Profile names have one validated write path (`updateProfile`). The server
+  // action still calls auth.api.updateUser internally so Better Auth refreshes
+  // the session cookie, while the public HTTP endpoint stays unavailable.
+  disabledPaths: ["/update-user"],
 
   emailAndPassword: {
     enabled: true,
@@ -43,12 +56,11 @@ export const auth = betterAuth({
     minPasswordLength: 10,
   },
 
-  hooks: { before: requireSignupInvite },
+  hooks: { before: enforceAuthRequestPolicy },
 
   user: {
-    // Lets the client call authClient.deleteUser({ password }); Better Auth
-    // verifies the password before deleting, so a stolen session cookie alone
-    // can't wipe the account. App data cascades from the user row.
+    // The before hook requires a password even for a fresh session; Better Auth
+    // then verifies it before deletion. App data cascades from the user row.
     deleteUser: { enabled: true },
   },
 
