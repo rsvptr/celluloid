@@ -23,12 +23,13 @@ export default async function AppLayout({
       </a>
       <Nav userName={user.name} />
       {/* Bottom padding clears the fixed mobile tab bar (~56px + safe-area
-          inset) so the last row of content is never hidden behind it; md+
-          reverts to the original symmetric py-6 since that bar is desktop-hidden. */}
+          inset) so the last row of content is never hidden behind it; lg+
+          reverts to the original symmetric py-6 since that bar is hidden at lg
+          (AUD-08 moved the nav's desktop/mobile switch from md to lg). */}
       <main
         id="main"
         tabIndex={-1}
-        className="mx-auto w-full max-w-7xl flex-1 px-4 pt-6 pb-[calc(5rem+env(safe-area-inset-bottom))] outline-none md:pb-6"
+        className="mx-auto w-full max-w-7xl flex-1 px-4 pt-6 pb-[calc(5rem+env(safe-area-inset-bottom))] outline-none lg:pb-6"
       >
         {children}
       </main>

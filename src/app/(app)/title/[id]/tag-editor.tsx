@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useId, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, Tag as TagIcon, X } from "lucide-react";
 import { toast } from "sonner";
@@ -25,6 +25,7 @@ export function TagEditor({
   const [, startTransition] = useTransition();
   const [tags, setTags] = useState<TagVM[]>(current);
   const [input, setInput] = useState("");
+  const captionId = useId();
 
   const appliedIds = new Set(tags.map((t) => t.id));
   const suggestions = all.filter((t) => !appliedIds.has(t.id));
@@ -111,7 +112,10 @@ export function TagEditor({
 
   return (
     <div className="flex flex-col gap-2">
-      <span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-faint">
+      <span
+        id={captionId}
+        className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-faint"
+      >
         <TagIcon size={12} /> Tags & lists
       </span>
       <div className="flex flex-wrap items-center gap-1.5">
@@ -148,6 +152,7 @@ export function TagEditor({
           placeholder="Add a tag (e.g. Horror night)…"
           list="tag-suggestions"
           maxLength={50}
+          aria-labelledby={captionId}
           className="h-11 sm:h-9"
         />
         <datalist id="tag-suggestions">

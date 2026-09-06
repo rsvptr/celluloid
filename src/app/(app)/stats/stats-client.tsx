@@ -131,7 +131,7 @@ export function StatsClient({
             </p>
           )}
 
-          <div className="grid gap-6 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             {/* Hero: watch activity over time, when there is any. */}
             {hasActivity && (
               <Card className="p-5 lg:col-span-2">

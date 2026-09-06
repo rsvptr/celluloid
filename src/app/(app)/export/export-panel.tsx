@@ -388,7 +388,7 @@ export function ExportPanel({
         </p>
 
         {/* Actions */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="primary"
             onClick={copy}

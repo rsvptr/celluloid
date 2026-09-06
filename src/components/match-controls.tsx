@@ -26,6 +26,7 @@ export function MatchControls({
   const [pending, start] = useTransition();
   const [refreshing, startRefresh] = useTransition();
   const opener = useRef<HTMLElement | null>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   // A title with no tmdbId has never been matched, so every string here has to
   // read as a first match rather than a correction.
   const unmatched = tmdbId == null;
@@ -94,6 +95,16 @@ export function MatchControls({
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-[dialog-overlay-in_0.2s_ease-out]" />
           <Dialog.Content
+            ref={contentRef}
+            onOpenAutoFocus={(e) => {
+              // No autofocus on mobile: keep Radix's default so the on-screen
+              // keyboard stays down (AUD-42 mirrors title-controls.tsx's guard).
+              if (window.matchMedia("(max-width: 767px)").matches) return;
+              e.preventDefault();
+              contentRef.current
+                ?.querySelector<HTMLInputElement>('input[name="tmdb-search"]')
+                ?.focus();
+            }}
             onCloseAutoFocus={(e) => {
               if (opener.current) {
                 e.preventDefault();

@@ -1052,7 +1052,7 @@ export function RecommendClient({
 type AddState =
   | { kind: "idle" }
   | { kind: "adding" }
-  | { kind: "done"; id: string };
+  | { kind: "done"; id: string; existing?: boolean };
 
 function RecCard({
   rec,
@@ -1113,7 +1113,7 @@ function RecCard({
               aria-label={`View ${rec.title} in your watchlist`}
               className="focus-ring flex min-h-11 items-center gap-1.5 rounded-lg bg-emerald-500/15 px-3 py-2 text-sm font-medium text-emerald-300 ring-1 ring-emerald-500/30 sm:min-h-0"
             >
-              <Check size={15} aria-hidden="true" /> Added
+              <Check size={15} aria-hidden="true" /> {state.existing ? "In library" : "Added"}
             </Link>
           ) : (
             <button
@@ -1127,7 +1127,12 @@ function RecCard({
                   try {
                     const res = await addFromTmdb(rec.tmdbId!, rec.mediaType);
                     if (res.id) {
-                      setState({ kind: "done", id: res.id });
+                      setState({ kind: "done", id: res.id, existing: res.existing });
+                      if (res.restored) {
+                        toast.success(
+                          "Restored from Trash with your old ratings and notes.",
+                        );
+                      }
                       return;
                     }
                     setState({ kind: "idle" });

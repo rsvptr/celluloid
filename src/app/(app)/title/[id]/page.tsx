@@ -220,12 +220,26 @@ export default async function TitlePage({
         </div>
       </div>
 
-      {/* Body: tracking + controls, then streamed-in extras. DOM order keeps
-          phones sensible (tracker, controls, extras); on lg the aside is pinned
-          to the third column so the extras flow into the left two. */}
-      <div className="grid gap-6 lg:grid-cols-3">
+      {/* Body: tracking + controls, then streamed-in extras. Below lg, `order`
+          puts controls first, then the tracker, then history/tags, then extras
+          (D-020); at lg the order utilities are dropped and explicit col/row
+          start classes reproduce the original layout: tracker spans the first
+          two columns, and controls/history/tags are pinned to the third. */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3 lg:grid-rows-[auto_1fr]">
+        <div className="order-1 lg:order-none lg:col-start-3 lg:row-start-1">
+          <TitleControls
+            id={title.id}
+            status={title.status}
+            rating={title.rating}
+            notes={title.notes}
+            favorite={title.favorite}
+            watchedAt={title.watchedAt ? title.watchedAt.toISOString() : null}
+            watchCount={watchCount}
+          />
+        </div>
+
         {isTv && (
-          <div className="flex flex-col gap-6 lg:col-span-2">
+          <div className="order-2 flex flex-col gap-6 lg:order-none lg:col-span-2 lg:col-start-1 lg:row-start-1 lg:row-span-2">
             <SeasonTracker
               titleId={title.id}
               seasons={title.seasons.map((s) => ({
@@ -244,16 +258,7 @@ export default async function TitlePage({
           </div>
         )}
 
-        <aside className="flex flex-col gap-5 lg:col-start-3 lg:row-start-1">
-          <TitleControls
-            id={title.id}
-            status={title.status}
-            rating={title.rating}
-            notes={title.notes}
-            favorite={title.favorite}
-            watchedAt={title.watchedAt ? title.watchedAt.toISOString() : null}
-            watchCount={watchCount}
-          />
+        <aside className="order-3 flex flex-col gap-5 lg:order-none lg:col-start-3 lg:row-start-2 lg:self-start">
           <WatchHistory userId={user.id} titleId={title.id} total={watchCount} />
           <TagEditor
             titleId={title.id}
@@ -263,7 +268,7 @@ export default async function TitlePage({
         </aside>
 
         {title.tmdbId != null && (
-          <div className="flex flex-col gap-6 lg:col-span-2 lg:col-start-1">
+          <div className="order-4 flex flex-col gap-6 lg:order-none lg:col-span-2 lg:col-start-1 lg:row-start-3">
             <Suspense fallback={<TitleExtrasFallback />}>
               <TitleExtras
                 userId={user.id}

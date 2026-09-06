@@ -139,13 +139,14 @@ export function Nav({ userName }: { userName?: string | null }) {
               nav reading as two things instead of one run-on row. Extra padding
               below md pads the logo's tap target out to 44px without shifting
               its visible position (the nav row still starts flush left). */}
-          <Wordmark size={28} textClassName="hidden md:inline" className="p-2 md:p-0" />
-          <span aria-hidden className="hidden h-5 w-px shrink-0 bg-line md:mx-2 md:block" />
+          <Wordmark size={28} textClassName="hidden lg:inline" className="p-2 lg:p-0" />
+          <span aria-hidden className="hidden h-5 w-px shrink-0 bg-line lg:mx-2 lg:block" />
           <LayoutGroup>
               {/* Desktop link row — unchanged from before, just newly gated to
-                  md+ now that the same four destinations live in the bottom bar
-                  on mobile. */}
-              <nav className="hidden items-center gap-1 md:flex">
+                  lg+ now that the same four destinations live in the bottom bar
+                  below lg (AUD-08: the md switch overflowed between 768 and
+                  849px). */}
+              <nav className="hidden items-center gap-1 lg:flex">
                 {LINKS.map((l) => {
                   const Icon = l.icon;
                   const active = isActive(l.href);
@@ -153,14 +154,14 @@ export function Nav({ userName }: { userName?: string | null }) {
                     <Link
                       key={l.href}
                       href={l.href}
-                      // Below md the text label is display:none, which removes it
+                      // Below lg the text label is display:none, which removes it
                       // from the accessibility tree — name the link explicitly.
                       aria-label={l.label}
                       aria-current={active ? "page" : undefined}
                       className={cn(
                         // Slimmer hit padding on phones: five links plus the brand
                         // and the action cluster must genuinely fit in 375px.
-                        "focus-ring relative flex items-center gap-2 rounded-lg px-2 py-2 text-sm transition-colors md:px-3",
+                        "focus-ring relative flex items-center gap-2 rounded-lg px-2 py-2 text-sm transition-colors lg:px-3",
                         active
                           ? "text-foreground"
                           : "text-muted hover:bg-surface-2/60 hover:text-foreground",
@@ -174,7 +175,7 @@ export function Nav({ userName }: { userName?: string | null }) {
                         />
                       )}
                       <Icon size={16} />
-                      <span className="hidden md:inline">{l.label}</span>
+                      <span className="hidden lg:inline">{l.label}</span>
                     </Link>
                   );
                 })}
@@ -188,7 +189,7 @@ export function Nav({ userName }: { userName?: string | null }) {
               aria-keyshortcuts="Control+K Meta+K"
               // 44px square hit target on mobile (icon stays 15px, centered);
               // reverts to the original content-sized pill at md+.
-              className="focus-ring flex h-11 w-11 items-center justify-center gap-1.5 rounded-lg text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground md:h-auto md:w-auto md:justify-start md:px-2 md:py-1.5"
+              className="focus-ring flex h-11 w-11 items-center justify-center gap-1.5 rounded-lg text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground lg:h-auto lg:w-auto lg:justify-start lg:px-2 lg:py-1.5"
             >
               <Search size={15} />
               <span className="hidden items-center gap-0.5 text-xs text-faint lg:flex">
@@ -203,7 +204,7 @@ export function Nav({ userName }: { userName?: string | null }) {
               title="Settings"
               aria-label="Settings"
               className={cn(
-                "focus-ring hidden h-8 w-8 items-center justify-center rounded-lg transition-colors md:flex",
+                "focus-ring hidden h-8 w-8 items-center justify-center rounded-lg transition-colors lg:flex",
                 pathname.startsWith("/settings")
                   ? "bg-surface-2 text-foreground"
                   : "text-muted hover:bg-surface-2/60 hover:text-foreground",
@@ -215,13 +216,13 @@ export function Nav({ userName }: { userName?: string | null }) {
               onClick={handleSignOut}
               title="Sign out"
               aria-label="Sign out"
-              className="focus-ring hidden h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2/60 hover:text-foreground md:flex"
+              className="focus-ring hidden h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2/60 hover:text-foreground lg:flex"
             >
               <LogOut size={16} />
             </button>
 
             {/* Mobile-only overflow menu: Export, Settings, Sign out. */}
-            <div className="relative md:hidden">
+            <div className="relative lg:hidden">
               <button
                 ref={moreTriggerRef}
                 onClick={() => setMoreOpen((v) => !v)}
@@ -287,7 +288,7 @@ export function Nav({ userName }: { userName?: string | null }) {
           behind this bar. */}
       <nav
         aria-label="Primary"
-        className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-surface/95 backdrop-blur-md pb-[env(safe-area-inset-bottom)] md:hidden"
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-surface/95 backdrop-blur-md pb-[env(safe-area-inset-bottom)] lg:hidden"
       >
         <div className="mx-auto flex max-w-7xl">
           {BOTTOM_LINKS.map((l) => {

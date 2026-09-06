@@ -88,6 +88,7 @@ export function TitleControls({
   }
 
   const statusId = useId();
+  const notesId = useId();
   const [localStatus, setLocalStatus] = useState(status);
   const [localRating, setLocalRating] = useState(rating);
   const [localFav, setLocalFav] = useState(favorite);
@@ -363,10 +364,16 @@ export function TitleControls({
               // No autofocus on mobile: move focus to the dialog container rather
               // than the date input, so the on-screen keyboard stays down while
               // the dialog is still announced and focus is trapped inside it.
+              // Desktop lands on the date field: the Close button is the first
+              // tabbable, so Radix's default would focus that instead.
               e.preventDefault();
-              logContentRef.current?.focus();
+              if (window.matchMedia("(max-width: 767px)").matches) {
+                logContentRef.current?.focus();
+                return;
+              }
+              document.getElementById(logDateId)?.focus();
             }}
-            className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-[var(--radius-card)] bg-surface p-5 ring-1 ring-line focus:outline-none data-[state=open]:animate-[dialog-content-in_0.2s_cubic-bezier(0.16,1,0.3,1)]"
+            className="fixed left-1/2 top-1/2 z-50 max-h-[85dvh] w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[var(--radius-card)] bg-surface p-5 ring-1 ring-line focus:outline-none data-[state=open]:animate-[dialog-content-in_0.2s_cubic-bezier(0.16,1,0.3,1)]"
           >
             <Dialog.Close
               className="absolute right-3 top-3 -m-3 flex min-h-11 min-w-11 items-center justify-center rounded text-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/60 sm:m-0 sm:min-h-0 sm:min-w-0"
@@ -485,8 +492,9 @@ export function TitleControls({
         />
       </Field>
 
-      <Field label="Notes">
+      <Field label="Notes" htmlFor={notesId}>
         <Textarea
+          id={notesId}
           value={localNotes}
           onChange={(e) => {
             const v = e.target.value;

@@ -34,6 +34,7 @@ export function ShareDialog({
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const resultActionRef = useRef<HTMLButtonElement>(null);
+  const titleInputRef = useRef<HTMLInputElement>(null);
 
   // Creating the link replaces the focused submit button with the result view.
   // Move focus into that view so it stays inside the open modal and lands on the
@@ -96,6 +97,13 @@ export function ShareDialog({
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-[dialog-overlay-in_0.2s_ease-out]" />
         <Dialog.Content
+          onOpenAutoFocus={(e) => {
+            // No autofocus on mobile: keep Radix's default so the on-screen
+            // keyboard stays down (AUD-42 mirrors title-controls.tsx's guard).
+            if (window.matchMedia("(max-width: 767px)").matches) return;
+            e.preventDefault();
+            titleInputRef.current?.focus();
+          }}
           onCloseAutoFocus={(e) => {
             if (opener?.current) {
               e.preventDefault();
@@ -134,6 +142,7 @@ export function ShareDialog({
                   Title (optional)
                 </span>
                 <Input
+                  ref={titleInputRef}
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="e.g. My horror favorites"
@@ -160,15 +169,20 @@ export function ShareDialog({
                   <option value="90">90 days</option>
                 </Select>
               </label>
-              <label className="flex min-h-11 cursor-pointer items-center gap-2 text-sm text-muted sm:min-h-0">
-                <input
-                  type="checkbox"
-                  checked={includeNotes}
-                  onChange={(e) => setIncludeNotes(e.target.checked)}
-                  className="h-4 w-4 accent-brand"
-                />
-                Include my personal notes
-              </label>
+              <div className="flex flex-col gap-1">
+                <label className="flex min-h-11 cursor-pointer items-center gap-2 text-sm text-muted sm:min-h-0">
+                  <input
+                    type="checkbox"
+                    checked={includeNotes}
+                    onChange={(e) => setIncludeNotes(e.target.checked)}
+                    className="h-4 w-4 accent-brand"
+                  />
+                  Include my ratings and notes
+                </label>
+                <p className="pl-6 text-xs text-faint">
+                  Your star rating and favorite stay private unless this is checked.
+                </p>
+              </div>
               {wholeLibrary && (
                 <label className="flex min-h-11 cursor-pointer items-center gap-2 text-sm text-muted sm:min-h-0">
                   <input
