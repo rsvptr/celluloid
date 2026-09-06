@@ -2,6 +2,8 @@
 
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
+import { auth } from "@/lib/auth";
 import { requireUserId } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { encryptSecret } from "@/lib/crypto";
@@ -57,12 +59,15 @@ const preferencesSchema = z.object({
 });
 
 export async function updateProfile(name: string): Promise<ActionResult> {
-  const userId = await requireUserId();
+  await requireUserId();
   const parsed = profileSchema.safeParse({ name });
   if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   const trimmed = parsed.data.name.trim().slice(0, 80);
   if (!trimmed) return { error: "Name can't be empty." };
-  await prisma.user.update({ where: { id: userId }, data: { name: trimmed } });
+  // Route the validated write through Better Auth so its session_data cookie
+  // is refreshed immediately; a direct Prisma update leaves the old name in
+  // the 60-second cookie cache used by the app shell.
+  await auth.api.updateUser({ headers: await headers(), body: { name: trimmed } });
   revalidatePath("/settings");
   return { ok: true };
 }

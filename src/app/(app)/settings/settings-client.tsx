@@ -2485,8 +2485,8 @@ function DangerSection() {
               return;
             start(async () => {
               setError(null);
-              // Better Auth verifies the password server-side before deleting,
-              // so a hijacked session alone can't destroy the account.
+              // The auth boundary requires and verifies this password even for
+              // a fresh session, so a session cookie alone cannot delete data.
               const { error } = await authClient.deleteUser({ password });
               if (error) {
                 setError(error.message ?? "Couldn't delete the account. Try again.");
