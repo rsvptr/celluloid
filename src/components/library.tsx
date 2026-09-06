@@ -105,7 +105,12 @@ function fold(value: string): string {
 
 type ServiceAvailabilityState = "MATCH" | "NO_MATCH" | "UNCHECKED" | "INELIGIBLE";
 
-/** Availability in the active device region, without treating unknown as no. */
+/**
+ * Availability in `region`, without treating unknown as no. Callers pass the
+ * account region (D-008), which is the one the nightly sync stamps onto
+ * `providersRegion`; a device cookie pointing somewhere else would make every
+ * cached row read as unchecked.
+ */
 export function serviceAvailabilityState(
   item: Pick<
     LibraryItem,
@@ -115,11 +120,11 @@ export function serviceAvailabilityState(
     | "providersSyncedAt"
     | "streamProviderIds"
   >,
-  watchRegion: string,
+  region: string,
   myProviderIds: ReadonlySet<number>,
 ): ServiceAvailabilityState {
   if (item.tmdbId === null || item.status === "DROPPED") return "INELIGIBLE";
-  if (item.providersSyncedAt === null || item.providersRegion !== watchRegion) {
+  if (item.providersSyncedAt === null || item.providersRegion !== region) {
     return "UNCHECKED";
   }
   return item.streamProviderIds.some((id) => myProviderIds.has(id))
@@ -131,8 +136,25 @@ export function uncheckedProviderCopy(count: number): string {
   return `${count} ${count === 1 ? "title" : "titles"} not checked yet`;
 }
 
+/**
+ * The filter state a URL encodes, as one comparable string. `Library` adopts an
+ * incoming `initialFilters` only when this key differs from the one the last
+ * prop carried, which is what keeps a re-render from being mistaken for a
+ * navigation.
+ */
+export function libraryFilterKey(filters: LibraryFilters): string {
+  return filtersToParams(filters).toString();
+}
+
 const addTitleButtonClass =
   "inline-flex min-h-11 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg brand-gradient px-4 text-sm font-semibold text-[#04121c] shadow-sm shadow-brand/20 transition-colors hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/60 sm:min-h-10";
+
+// Chrome moves focus to <body> the instant a focused control becomes
+// `disabled`, so every bulk and Trash action left the keyboard back at the skip
+// link. Those controls carry `aria-disabled` and return early instead, and
+// these classes reproduce the `disabled:` styling ui.tsx applies through the
+// native attribute.
+const softDisabledClass = "aria-disabled:cursor-not-allowed aria-disabled:opacity-50";
 
 export function Library({
   items,
@@ -143,7 +165,7 @@ export function Library({
   trashed,
   initialFilters,
   myProviders,
-  watchRegion,
+  accountRegion,
   providerStaleBefore,
   rememberFilters,
 }: {
@@ -160,8 +182,8 @@ export function Library({
   trashed: TrashedTitle[];
   initialFilters: LibraryFilters;
   myProviders: number[];
-  /** Effective per-device region: cookie, then account preference, then default. */
-  watchRegion: string;
+  /** Account region: the saved preference, or Celluloid's default (D-008). */
+  accountRegion: string;
   /** Server-stamped ISO cutoff (page render time minus seven days). */
   providerStaleBefore: string;
   rememberFilters: boolean;
@@ -189,6 +211,38 @@ export function Library({
   const [onlyOnServices, setOnlyOnServices] = useState(
     initialFilters.onlyOnServices ?? false,
   );
+  // The filters the server last handed down, so a genuinely new set can be told
+  // from the same set arriving again.
+  const [appliedFilterKey, setAppliedFilterKey] = useState(() =>
+    libraryFilterKey(initialFilters),
+  );
+
+  // Adopt the server's filters when they actually change, adjusted during
+  // render (React's "adjusting state when a prop changes" pattern, the same one
+  // the Trash count uses below). <Library> used to be keyed on these filters
+  // instead: once any filter had been changed, the router.refresh() that ends
+  // every bulk and Trash action re-rendered the page from the params this
+  // component had itself mirrored with replaceState, the key changed, and the
+  // remount threw away select mode, the selection, the open filters panel and
+  // Trash mode. That refresh now lands here with a key the last prop already
+  // carried, or with the mirrored one whose setters are all no-ops, while
+  // back/forward navigation still re-applies its URL.
+  const incomingFilterKey = libraryFilterKey(initialFilters);
+  if (incomingFilterKey !== appliedFilterKey) {
+    setAppliedFilterKey(incomingFilterKey);
+    setQuery(initialFilters.query);
+    setType(initialFilters.type);
+    setStatus(initialFilters.status);
+    setLanguage(initialFilters.language);
+    setTag(initialFilters.tag);
+    setGenre(initialFilters.genre);
+    setRating(initialFilters.rating);
+    setSort(initialFilters.sort);
+    setView(initialFilters.view);
+    setOnlyUnmatched(initialFilters.onlyUnmatched);
+    setOnlyOnServices(initialFilters.onlyOnServices ?? false);
+  }
+
   // The single advanced-filters disclosure (all widths); collapsed by default.
   const [showFilters, setShowFilters] = useState(false);
 
@@ -383,7 +437,7 @@ export function Library({
       if (onlyUnmatched && it.tmdbId != null) continue;
       if (q && !(searchIndex.get(it.id) ?? fold(it.name)).includes(q)) continue;
       if (onlyOnServices) {
-        const availability = serviceAvailabilityState(it, watchRegion, myProviderIds);
+        const availability = serviceAvailabilityState(it, accountRegion, myProviderIds);
         if (availability === "UNCHECKED") unchecked++;
         if (availability !== "MATCH") continue;
       }
@@ -421,7 +475,7 @@ export function Library({
     onlyUnmatched,
     onlyOnServices,
     myProviderIds,
-    watchRegion,
+    accountRegion,
   ]);
 
   // The brief intentionally defines staleness from the newest cached result:
@@ -939,7 +993,7 @@ export function Library({
 
       {onlyOnServices && filtered.length > 0 ? (
         <p className="-mt-2 text-xs text-faint">
-          Availability in {regionName(watchRegion)} via JustWatch
+          Availability in {regionName(accountRegion)} via JustWatch
           {uncheckedServiceCount > 0
             ? ` · ${uncheckedProviderCopy(uncheckedServiceCount)}`
             : ""}
@@ -954,7 +1008,7 @@ export function Library({
           onClear={clearFilters}
           onlyOnServices={onlyOnServices}
           hasConfiguredProviders={myProviders.length > 0}
-          watchRegion={watchRegion}
+          accountRegion={accountRegion}
           uncheckedServiceCount={uncheckedServiceCount}
         />
       ) : view === "grid" ? (
@@ -1052,6 +1106,29 @@ function BulkBar({
     }
   }
 
+  // On a phone the toast sits 4.5rem from the bottom, which is exactly over this
+  // bar's first row for its whole four seconds. Publishing the bar's measured
+  // height (the More disclosure changes it) lets the Toaster in (app)/layout.tsx
+  // clear it while it is open and fall back to its own offset once it is gone.
+  const barRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const bar = barRef.current;
+    if (!open || !bar) return;
+    const root = document.documentElement;
+    const sync = () =>
+      root.style.setProperty(
+        "--toast-bottom",
+        `${Math.ceil(bar.getBoundingClientRect().height) + 8}px`,
+      );
+    sync();
+    const observer = new ResizeObserver(sync);
+    observer.observe(bar);
+    return () => {
+      observer.disconnect();
+      root.style.removeProperty("--toast-bottom");
+    };
+  }, [open]);
+
   function run(
     fn: () => Promise<{ count?: number; tag?: string; error?: string }>,
     verb: string,
@@ -1144,6 +1221,7 @@ function BulkBar({
       <AnimatePresence>
       {open && (
         <motion.div
+          ref={barRef}
           // z-[45]: above the mobile tab bar (nav.tsx, z-40, md:hidden) — selection
           // mode is a transient modal-ish state that's meant to cover it — but
           // below dialogs/command palette (z-50) so a confirm dialog or the share
@@ -1225,9 +1303,9 @@ function BulkBar({
                   value={newTag}
                   onChange={(e) => setNewTag(e.target.value)}
                   placeholder="Add tag…"
-                  disabled={disabled}
+                  aria-disabled={disabled}
                   aria-label="Tag to add or remove"
-                  className="h-9 min-h-11 w-32 sm:min-h-0"
+                  className={cn("h-9 min-h-11 w-32 sm:min-h-0", softDisabledClass)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !disabled && newTag.trim()) {
                       run(() => bulkAddTag(ids, newTag.trim()), "Tagged");
@@ -1243,28 +1321,30 @@ function BulkBar({
                 <Button
                   size="sm"
                   variant="secondary"
-                  disabled={disabled || !newTag.trim()}
+                  aria-disabled={disabled || !newTag.trim()}
                   onClick={() => {
+                    if (disabled || !newTag.trim()) return;
                     run(() => bulkAddTag(ids, newTag.trim()), "Tagged");
                     setNewTag("");
                   }}
                   title="Add this tag to selected"
                   aria-label="Add this tag to selected"
-                  className="min-h-11 min-w-11 sm:min-w-0"
+                  className={cn("min-h-11 min-w-11 sm:min-w-0", softDisabledClass)}
                 >
                   <TagIcon size={14} />
                 </Button>
                 <Button
                   size="sm"
                   variant="secondary"
-                  disabled={disabled || !newTag.trim()}
+                  aria-disabled={disabled || !newTag.trim()}
                   onClick={() => {
+                    if (disabled || !newTag.trim()) return;
                     run(() => bulkRemoveTag(ids, newTag.trim()), "Untagged");
                     setNewTag("");
                   }}
                   title="Remove this tag from selected"
                   aria-label="Remove this tag from selected"
-                  className="min-h-11 min-w-11 sm:min-w-0"
+                  className={cn("min-h-11 min-w-11 sm:min-w-0", softDisabledClass)}
                 >
                   <Minus size={14} />
                 </Button>
@@ -1273,9 +1353,12 @@ function BulkBar({
               <Button
                 size="sm"
                 variant="secondary"
-                disabled={disabled}
-                onClick={() => run(() => bulkSetFavorite(ids, true), "Favorited")}
-                className="min-h-11"
+                aria-disabled={disabled}
+                onClick={() => {
+                  if (disabled) return;
+                  run(() => bulkSetFavorite(ids, true), "Favorited");
+                }}
+                className={cn("min-h-11", softDisabledClass)}
               >
                 <Heart size={14} /> Favorite
               </Button>
@@ -1283,9 +1366,12 @@ function BulkBar({
               <Button
                 size="sm"
                 variant="secondary"
-                disabled={disabled}
-                onClick={() => run(() => bulkSetFavorite(ids, false), "Unfavorited")}
-                className="min-h-11"
+                aria-disabled={disabled}
+                onClick={() => {
+                  if (disabled) return;
+                  run(() => bulkSetFavorite(ids, false), "Unfavorited");
+                }}
+                className={cn("min-h-11", softDisabledClass)}
               >
                 <Heart size={14} className="text-faint" /> Unfavorite
               </Button>
@@ -1293,9 +1379,12 @@ function BulkBar({
               <Button
                 size="sm"
                 variant="secondary"
-                disabled={disabled}
-                onClick={onShare}
-                className="min-h-11"
+                aria-disabled={disabled}
+                onClick={() => {
+                  if (disabled) return;
+                  onShare();
+                }}
+                className={cn("min-h-11", softDisabledClass)}
               >
                 <Share2 size={14} /> Share
               </Button>
@@ -1305,8 +1394,9 @@ function BulkBar({
               <Button
                 size="sm"
                 variant="danger"
-                disabled={disabled}
+                aria-disabled={disabled}
                 onClick={async () => {
+                  if (disabled) return;
                   if (
                     !(await confirm({
                       title: `Remove ${count} ${count === 1 ? "title" : "titles"}?`,
@@ -1321,7 +1411,7 @@ function BulkBar({
                     return;
                   removeSelected();
                 }}
-                className="min-h-11"
+                className={cn("min-h-11", softDisabledClass)}
               >
                 <Trash2 size={14} /> Remove
               </Button>
@@ -1490,14 +1580,14 @@ function EmptyState({
   onClear,
   onlyOnServices,
   hasConfiguredProviders,
-  watchRegion,
+  accountRegion,
   uncheckedServiceCount,
 }: {
   hasItems: boolean;
   onClear: () => void;
   onlyOnServices: boolean;
   hasConfiguredProviders: boolean;
-  watchRegion: string;
+  accountRegion: string;
   uncheckedServiceCount: number;
 }) {
   if (hasItems && onlyOnServices) {
@@ -1505,12 +1595,12 @@ function EmptyState({
       <div className="flex flex-col items-center justify-center rounded-[var(--radius-card)] border border-dashed border-line px-5 py-16 text-center">
         <p className="text-sm font-medium text-foreground">
           {hasConfiguredProviders
-            ? `No titles are confirmed on your services in ${regionName(watchRegion)}.`
+            ? `No titles are confirmed on your services in ${regionName(accountRegion)}.`
             : "Choose your streaming services to see what you can watch tonight."}
         </p>
         <p className="mt-2 max-w-xl text-sm text-muted">
           {uncheckedServiceCount > 0
-            ? `${uncheckedProviderCopy(uncheckedServiceCount)} for ${regionName(watchRegion)}. Availability refreshes nightly.`
+            ? `${uncheckedProviderCopy(uncheckedServiceCount)} for ${regionName(accountRegion)}. Availability refreshes nightly.`
             : hasConfiguredProviders
               ? "All eligible titles have been checked. Provider catalogues can still change between nightly refreshes."
             : "Add the subscriptions you use in Settings, then this one-tap view will match them against availability refreshed each night."}
@@ -1580,8 +1670,31 @@ function TrashView({
   const router = useRouter();
   const [pending, start] = useTransition();
   const { confirm, dialog } = useConfirm();
+  // Restoring or deleting a row unmounts the button that was focused, so focus
+  // has to be placed deliberately once the refreshed list arrives: on the row
+  // that took its place, or the row above when the last one went. Rows are
+  // collected by id because the row that must receive focus is not the one that
+  // was clicked. ui.tsx's Button takes no ref, so the row element is what is
+  // held and its first control — Restore — is what gets focused.
+  const rowRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
+  const focusAfterRemovalId = useRef<string | null>(null);
+
+  useEffect(() => {
+    const id = focusAfterRemovalId.current;
+    if (!id) return;
+    focusAfterRemovalId.current = null;
+    rowRefs.current.get(id)?.querySelector("button")?.focus();
+  }, [trashed]);
+
+  /** The row focus should land on once `id`'s row is gone. */
+  function neighbourRowId(id: string): string | null {
+    const index = trashed.findIndex((item) => item.id === id);
+    if (index === -1) return null;
+    return trashed[index + 1]?.id ?? trashed[index - 1]?.id ?? null;
+  }
 
   function restore(item: TrashedTitle) {
+    const neighbour = neighbourRowId(item.id);
     start(async () => {
       try {
         const res = await restoreTitle(item.id);
@@ -1589,6 +1702,7 @@ function TrashView({
           toast.error(res.error);
           return;
         }
+        focusAfterRemovalId.current = neighbour;
         toast.success(`Restored ${item.name}`);
       } catch {
         toast.error("Couldn't restore that title. Try again.");
@@ -1609,6 +1723,7 @@ function TrashView({
       }))
     )
       return;
+    const neighbour = neighbourRowId(item.id);
     start(async () => {
       try {
         const res = await purgeTitle(item.id);
@@ -1616,6 +1731,7 @@ function TrashView({
           toast.error(res.error);
           return;
         }
+        focusAfterRemovalId.current = neighbour;
         toast.success(`Deleted ${item.name}`);
       } catch {
         toast.error("Couldn't delete that title. Try again.");
@@ -1701,6 +1817,13 @@ function TrashView({
                 key={it.id}
                 item={it}
                 busy={pending}
+                rowRef={(el) => {
+                  const rows = rowRefs.current;
+                  rows.set(it.id, el);
+                  return () => {
+                    rows.delete(it.id);
+                  };
+                }}
                 onRestore={() => restore(it)}
                 onPurge={() => purge(it)}
               />
@@ -1715,16 +1838,18 @@ function TrashView({
 function TrashRow({
   item,
   busy,
+  rowRef,
   onRestore,
   onPurge,
 }: {
   item: TrashedTitle;
   busy: boolean;
+  rowRef: React.Ref<HTMLDivElement>;
   onRestore: () => void;
   onPurge: () => void;
 }) {
   return (
-    <div className="flex items-center gap-3 bg-surface px-3 py-2.5">
+    <div ref={rowRef} className="flex items-center gap-3 bg-surface px-3 py-2.5">
       <div className="w-9 shrink-0">
         <Poster
           path={item.posterPath}
@@ -1742,10 +1867,28 @@ function TrashRow({
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
-        <Button size="sm" variant="secondary" disabled={busy} onClick={onRestore}>
+        <Button
+          size="sm"
+          variant="secondary"
+          aria-disabled={busy}
+          onClick={() => {
+            if (busy) return;
+            onRestore();
+          }}
+          className={softDisabledClass}
+        >
           <RotateCcw size={14} /> Restore
         </Button>
-        <Button size="sm" variant="danger" disabled={busy} onClick={onPurge}>
+        <Button
+          size="sm"
+          variant="danger"
+          aria-disabled={busy}
+          onClick={() => {
+            if (busy) return;
+            onPurge();
+          }}
+          className={softDisabledClass}
+        >
           <Trash2 size={14} />
           <span className="hidden sm:inline">Delete forever</span>
           <span className="sm:hidden">Delete</span>

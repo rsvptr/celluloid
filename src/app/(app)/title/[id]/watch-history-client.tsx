@@ -91,6 +91,19 @@ export function WatchHistoryList({
     editButtons.current.get(id)?.focus();
   }, [editingId]);
 
+  // Removing a row unmounts the button that was focused and Chrome drops focus
+  // to <body>, so the next Tab restarts at the skip link. Once the refreshed
+  // list arrives, focus goes to the row that took its place — its Edit button,
+  // the non-destructive control, reusing the map above.
+  const focusAfterRemoveId = useRef<string | null>(null);
+
+  useEffect(() => {
+    const id = focusAfterRemoveId.current;
+    if (!id) return;
+    focusAfterRemoveId.current = null;
+    editButtons.current.get(id)?.focus();
+  }, [events]);
+
   function beginEdit(event: WatchEventVM) {
     setEditingId(event.id);
     setDraftDate(dayInZone(event.occurredAt, timeZone));
@@ -142,12 +155,15 @@ export function WatchHistoryList({
       }))
     )
       return;
+    const index = events.findIndex((e) => e.id === event.id);
+    const neighbour = events[index + 1]?.id ?? events[index - 1]?.id ?? null;
     start(async () => {
       const res = await deleteWatchEvent(event.id);
       if (res.error) {
         toast.error(res.error);
         return;
       }
+      focusAfterRemoveId.current = neighbour;
       toast.success("Watch removed");
       router.refresh();
     });
@@ -224,19 +240,29 @@ export function WatchHistoryList({
                           buttons.delete(event.id);
                         };
                       }}
-                      onClick={() => beginEdit(event)}
-                      disabled={pending}
+                      onClick={() => {
+                        if (pending) return;
+                        beginEdit(event);
+                      }}
+                      // aria-disabled, not disabled: Chrome drops focus to
+                      // <body> the moment the focused button is disabled, which
+                      // is exactly what a pending remove or save does to the row
+                      // the keyboard is sitting on.
+                      aria-disabled={pending}
                       aria-label={`Edit the watch on ${fullDateInZone(event.occurredAt, timeZone)}`}
-                      className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-md text-faint transition-colors hover:text-foreground disabled:opacity-50 sm:min-h-8 sm:min-w-8"
+                      className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-md text-faint transition-colors hover:text-foreground aria-disabled:cursor-not-allowed aria-disabled:opacity-50 sm:min-h-8 sm:min-w-8"
                     >
                       <Pencil size={14} />
                     </button>
                     <button
                       type="button"
-                      onClick={() => remove(event)}
-                      disabled={pending}
+                      onClick={() => {
+                        if (pending) return;
+                        void remove(event);
+                      }}
+                      aria-disabled={pending}
                       aria-label={`Remove the watch on ${fullDateInZone(event.occurredAt, timeZone)}`}
-                      className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-md text-faint transition-colors hover:text-rose-300 disabled:opacity-50 sm:min-h-8 sm:min-w-8"
+                      className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-md text-faint transition-colors hover:text-rose-300 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 sm:min-h-8 sm:min-w-8"
                     >
                       <Trash2 size={14} />
                     </button>

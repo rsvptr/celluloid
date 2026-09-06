@@ -38,7 +38,14 @@ export default async function AppLayout({
         theme="dark"
         richColors
         position="bottom-right"
-        mobileOffset={{ bottom: "calc(4.5rem + env(safe-area-inset-bottom))" }}
+        // 4.5rem clears the mobile tab bar, but not the library's bulk bar,
+        // which is taller and sat under the toast for its whole four seconds.
+        // The bulk bar publishes its measured height as --toast-bottom while it
+        // is open and drops the property when it closes, so the fallback stays
+        // the tab-bar offset the rest of the app needs.
+        mobileOffset={{
+          bottom: "var(--toast-bottom, calc(4.5rem + env(safe-area-inset-bottom)))",
+        }}
         toastOptions={{
           style: {
             background: "var(--color-surface)",

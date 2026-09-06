@@ -6,7 +6,7 @@ import {
   getTags,
   getTrashedTitles,
 } from "@/lib/data";
-import { filtersToParams, parseLibraryFilters } from "@/lib/library-filters";
+import { parseLibraryFilters } from "@/lib/library-filters";
 import {
   hasExplicitLibraryFilterParams,
   isRememberFiltersEnabled,
@@ -39,10 +39,12 @@ export default async function LibraryPage({
       getLibraryProviderPreferences(user.id),
       cookies(),
     ]);
-  const watchRegion = resolveWatchRegion(
-    cookieStore.get("celluloid-region")?.value,
-    providerPreferences?.watchRegion,
-  );
+  // D-008: "On my services" answers for the account region, because that is the
+  // region the nightly provider sync writes into every cached row. The
+  // per-device cookie steers only the title page's provider strip, so a phone
+  // whose cookie still said US after the account moved to IN no longer reads
+  // its whole library as unchecked.
+  const accountRegion = resolveWatchRegion(null, providerPreferences?.watchRegion);
   const providerStaleBefore = providerStaleCutoffIso();
 
   const tagNames = tags.map((t) => t.name);
@@ -76,10 +78,6 @@ export default async function LibraryPage({
 
   return (
     <Library
-      // Remount when back/forward navigation changes the filter params, so the
-      // restored URL actually re-applies its filters (typing only touches the
-      // URL via replaceState, which never re-renders this server component).
-      key={filtersToParams(initialFilters).toString()}
       items={items}
       languages={languages}
       tags={tagNames}
@@ -88,7 +86,7 @@ export default async function LibraryPage({
       trashed={trashed}
       initialFilters={initialFilters}
       myProviders={providerPreferences?.myProviders ?? []}
-      watchRegion={watchRegion}
+      accountRegion={accountRegion}
       providerStaleBefore={providerStaleBefore}
       rememberFilters={rememberFilters}
     />
