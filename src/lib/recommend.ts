@@ -12,6 +12,7 @@ import { norm, yearOf, pickBest, nameYearKey } from "@/lib/tmdb-match";
 import {
   anthropicClient,
   friendlyAnthropicError,
+  releaseSharedAiRun,
   reserveSharedAiRun,
   resolveAnthropicKey,
 } from "@/lib/anthropic";
@@ -95,6 +96,8 @@ export type RecStreamEvent =
   | { type: "error"; error: string };
 
 const THINKING_HEARTBEAT_MS = 5_000;
+export const RECOMMEND_KEEPALIVE_MS = 10_000;
+const MAX_PENDING_RECOMMENDATIONS = 50;
 
 /** Keep the wire alive during extended-thinking stretches without flooding it. */
 export function shouldSendThinkingHeartbeat(
@@ -441,7 +444,12 @@ export async function enrichRec(
   try {
     // The model's year narrows the search: without it a regional title
     // resolves to whichever entry TMDB ranks most popular, not the one asked for.
-    const results = await search(r.mediaType, r.title, 1, { year: r.year, signal });
+    const results = await search(r.mediaType, r.title, 1, {
+      year: r.year,
+      signal,
+      deadlineMs: 10_000,
+      retries: 1,
+    });
     const best = pickBest(results, r.title, r.year);
     if (!best) {
       // Unresolved: hard requirements still apply to what the model CLAIMED —
@@ -501,6 +509,9 @@ export async function enrichRec(
     // run's terminal warning says so once — silently conflating the two made
     // "TMDB was down" indistinguishable from "this title doesn't exist".
     if (signal?.aborted) return null;
+    if (violatesRequirements(ctx, { language: r.language ?? null, year: r.year })) {
+      return dropFiltered(ctx);
+    }
     if (ctx.tallies) ctx.tallies.lookupFailed += 1;
     return r;
   }
@@ -614,10 +625,14 @@ export async function runRecommendationStream(
 ): Promise<void> {
   const count = Math.min(30, Math.max(1, opts.count ?? 12));
   const type = opts.type ?? "all";
+  const stopController = new AbortController();
+  const runSignal = signal
+    ? AbortSignal.any([signal, stopController.signal])
+    : stopController.signal;
 
   // If the client already went away before we did any work, stop here. Bailing
   // is a clean, error-free return.
-  if (signal?.aborted) return;
+  if (runSignal.aborted) return;
 
   // These lookups share only the user id and request options, so start them
   // together instead of adding several round trips before the stream begins.
@@ -641,12 +656,18 @@ export async function runRecommendationStream(
     userPrefPromise,
     loadSuppressions(userId),
     prisma.title.findMany({
-      where: { userId, tmdbId: { not: null }, deletedAt: null },
-      select: { tmdbId: true, mediaType: true },
+      where: { userId },
+      select: {
+        tmdbId: true,
+        mediaType: true,
+        name: true,
+        releaseDate: true,
+        deletedAt: true,
+      },
     }),
     genreIdsPromise,
   ]);
-  if (signal?.aborted) return;
+  if (runSignal.aborted) return;
 
   const { key, usedFallback, hadUserKey } = keyInfo;
   if (!key) {
@@ -740,19 +761,39 @@ export async function runRecommendationStream(
     opts.focus,
     // Naming refused titles up front is cheaper than filtering them afterwards:
     // every suppressed suggestion that still comes back costs a TMDB lookup.
-    mergeExcludeNames(opts.exclude ?? [], suppressed.recentNames),
+    mergeExcludeNames(
+      [
+        ...(opts.exclude ?? []),
+        ...existing.filter((title) => title.deletedAt !== null).map((title) => title.name),
+      ],
+      suppressed.recentNames,
+    ),
     opts.language,
     opts.genre,
     opts.era,
   );
 
   // Dedup / ownership context shared by every suggestion in this run. Trashed
-  // titles are excluded (deletedAt: null) so a soft-deleted title no longer blocks
-  // being recommended again — consistent with it being absent from the taste brief,
-  // which is built from getExportRows (also deletedAt-filtered).
+  // titles remain owned identities: they stay out of the taste signal but join
+  // both TMDB and name/year exclusion sets so Claude cannot recommend them back.
   const ctx: StreamContext = {
-    existingSet: new Set(existing.map((e) => `${e.mediaType}:${e.tmdbId}`)),
-    libNameYear: new Set(rows.map((r) => nameYearKey(r.mediaType, r.name, r.year))),
+    existingSet: new Set(
+      existing
+        .filter((title) => title.tmdbId !== null)
+        .map((title) => `${title.mediaType}:${title.tmdbId}`),
+    ),
+    libNameYear: new Set([
+      ...rows.map((r) => nameYearKey(r.mediaType, r.name, r.year)),
+      ...existing
+        .filter((title) => title.deletedAt !== null)
+        .map((title) =>
+          nameYearKey(
+            title.mediaType === MediaType.TV ? "tv" : "movie",
+            title.name,
+            title.releaseDate?.getUTCFullYear() ?? null,
+          ),
+        ),
+    ]),
     excludeSet: new Set((opts.exclude ?? []).map((t) => norm(t))),
     seenKeys: new Set(),
     resolvedKeys: new Set(),
@@ -779,12 +820,24 @@ export async function runRecommendationStream(
   const briefIsCacheable =
     (SYSTEM_PROMPT.length + brief.length) / APPROX_CHARS_PER_TOKEN >= cacheMinTokens;
 
-  if (signal?.aborted) return;
+  if (runSignal.aborted) return;
+  let sharedReservationDay: string | null = null;
+  const releaseUnusedSharedSlot = () => {
+    const day = sharedReservationDay;
+    if (!day) return;
+    sharedReservationDay = null;
+    void releaseSharedAiRun(day).catch((error) => {
+      console.error("Could not release an unused shared AI allowance slot:", error);
+    });
+  };
   try {
-    const budgetError = await sharedAiBudgetError(usedFallback);
-    if (budgetError) {
-      emit({ type: "error", error: budgetError });
-      return;
+    if (usedFallback) {
+      const reservation = await reserveSharedAiRun();
+      if (!reservation.allowed) {
+        emit({ type: "error", error: SHARED_AI_LIMIT_REACHED });
+        return;
+      }
+      sharedReservationDay = reservation.day;
     }
   } catch (error) {
     console.error("Could not reserve the shared AI daily allowance:", error);
@@ -795,7 +848,10 @@ export async function runRecommendationStream(
     });
     return;
   }
-  if (signal?.aborted) return;
+  if (runSignal.aborted) {
+    releaseUnusedSharedSlot();
+    return;
+  }
 
   const client = anthropicClient(key);
   const stream = client.messages.stream({
@@ -837,36 +893,83 @@ export async function runRecommendationStream(
     // Client went away (or asked to stop): stop paying for generation. Guard the
     // race where the signal fired between the last checkpoint and here — a fresh
     // "abort" would never fire on an already-aborted signal, so abort directly.
-    if (signal.aborted) stream.abort();
-    else signal.addEventListener("abort", () => stream.abort(), { once: true });
+    if (runSignal.aborted) stream.abort();
+    else runSignal.addEventListener("abort", () => stream.abort(), { once: true });
   }
 
   const extractor = createRecExtractor();
   let accepted = 0;
-  // Slots claimed by in-flight enrichments. `accepted` alone can't gate the
-  // lanes: it is incremented AFTER `await enrichRec`, so several lanes could
-  // pass an `accepted < count` check concurrently and every one of them would
-  // then emit — returning up to (lanes - 1) more suggestions than asked for and
-  // burning that many extra TMDB searches. Reserving up front makes `count` a
-  // hard ceiling on both.
-  let reserved = 0;
   let statusSent: "thinking" | "generating" | null = null;
   let lastHeartbeatAt: number | null = null;
   let stopped = false; // no further emits once set (enough results, or a failure)
   let hitMaxTokens = false; // model ran into the output ceiling (budget exhausted)
   let hitRefusal = false; // safety classifier declined the request (HTTP 200, not a thrown error)
+  let sawMessageStart = false;
   // Prompt-cache counters, read off the opening usage. They are settled by
   // message_start, so they survive the abort we fire once enough suggestions
   // land — which is the normal path, and one that leaves no final message.
   let cacheCreated: number | null = null;
   let cacheRead: number | null = null;
-  // Round-robin lanes bound enrichment concurrency: a model that bursts out 40
-  // suggestions can't burst-fire 40 TMDB searches at once.
-  const lanes: Promise<void>[] = Array.from({ length: 5 }, () => Promise.resolve());
-  let nextLane = 0;
+  // A bounded queue preserves burst candidates until rejected matches release
+  // capacity. Five active lookups remain the concurrency ceiling.
+  const pending: Recommendation[] = [];
+  const enrichments = new Set<Promise<void>>();
+  let inFlight = 0;
+  let keepAliveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const scheduleKeepAlive = () => {
+    keepAliveTimer = setTimeout(() => {
+      if (stopped || runSignal.aborted) return;
+      emit({ type: "status", phase: statusSent === "generating" ? "generating" : "thinking" });
+      scheduleKeepAlive();
+    }, RECOMMEND_KEEPALIVE_MS);
+  };
+
+  const stopKeepAlive = () => {
+    if (keepAliveTimer !== null) clearTimeout(keepAliveTimer);
+    keepAliveTimer = null;
+  };
+
+  const pump = () => {
+    while (
+      !stopped &&
+      !runSignal.aborted &&
+      accepted + inFlight < count &&
+      inFlight < 5 &&
+      pending.length > 0
+    ) {
+      const rec = pending.shift()!;
+      inFlight += 1;
+      const task = (async () => {
+        const enriched = await enrichRec(rec, ctx, searchByType, runSignal);
+        if (!enriched || stopped || runSignal.aborted) return;
+        accepted += 1;
+        emit({ type: "rec", rec: enriched });
+        if (accepted >= count) {
+          stopped = true;
+          pending.length = 0;
+          stopController.abort();
+          stream.abort();
+        }
+      })().finally(() => {
+        inFlight -= 1;
+        enrichments.delete(task);
+        pump();
+      });
+      enrichments.add(task);
+    }
+  };
+
+  const settleEnrichments = async () => {
+    pump();
+    while (enrichments.size > 0) {
+      await Promise.allSettled([...enrichments]);
+      pump();
+    }
+  };
 
   const handleParsed = (raw: unknown) => {
-    if (stopped || accepted >= count) return;
+    if (stopped || runSignal.aborted || accepted >= count) return;
     if (!isValidRec(raw)) return;
     const rec = raw as Recommendation;
     // Near-duplicate of an earlier suggestion this run?
@@ -880,34 +983,16 @@ export async function runRecommendationStream(
     if (isSuppressedByName(ctx.suppressed, rec.mediaType, rec.title, rec.year)) return;
     if (opts.type && opts.type !== "all" && rec.mediaType !== opts.type) return;
 
-    // Enrich concurrently with parsing; emit the moment each one resolves.
-    const lane = nextLane++ % lanes.length;
-    lanes[lane] = lanes[lane].then(async () => {
-      if (stopped || reserved >= count) return;
-      reserved++; // claim the slot BEFORE the await
-      let used = false;
-      try {
-        const r = await enrichRec(rec, ctx, searchByType, signal);
-        // enrichRec returns null when the suggestion turns out to be in the
-        // library already; that consumed no slot, so release it below.
-        if (!r || stopped) return;
-        used = true;
-        accepted++;
-        emit({ type: "rec", rec: r });
-        if (accepted >= count) {
-          // Enough accepted — stop the model mid-generation to save tokens.
-          stopped = true;
-          stream.abort();
-        }
-      } finally {
-        if (!used) reserved--;
-      }
-    });
+    if (pending.length >= MAX_PENDING_RECOMMENDATIONS) return;
+    pending.push(rec);
+    pump();
   };
 
+  scheduleKeepAlive();
   try {
     for await (const event of stream) {
       if (event.type === "message_start") {
+        sawMessageStart = true;
         cacheCreated = event.message.usage.cache_creation_input_tokens;
         cacheRead = event.message.usage.cache_read_input_tokens;
       } else if (event.type === "content_block_start") {
@@ -946,16 +1031,21 @@ export async function runRecommendationStream(
     // An abort we triggered (enough results) or the client triggered is not an
     // error; anything else gets a friendly explanation. Partial results already
     // emitted stay valid — the client keeps them alongside the error.
-    if (!stopped && !signal?.aborted) {
+    if (!stopped && !runSignal.aborted) {
       stopped = true;
-      await Promise.allSettled(lanes);
+      stopController.abort();
+      await settleEnrichments();
+      stopKeepAlive();
+      if (!sawMessageStart) releaseUnusedSharedSlot();
       console.error("Recommendation request failed:", e);
       emit({ type: "error", error: friendlyAnthropicError(e) });
       return;
     }
   }
 
-  await Promise.allSettled(lanes);
+  await settleEnrichments();
+  stopKeepAlive();
+  if (!sawMessageStart) releaseUnusedSharedSlot();
   // Whether the breakpoint actually cached is otherwise invisible — a prefix
   // under the model's minimum is ignored without any error — so leave a trail.
   if (cacheCreated !== null || cacheRead !== null) {

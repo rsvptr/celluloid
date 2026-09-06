@@ -35,7 +35,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const items = await searchMulti(q);
+    const items = await searchMulti(q, 1, { signal: request.signal });
     const results: SearchResult[] = items.map((it) => ({
       tmdbId: it.id,
       mediaType: it.media_type,

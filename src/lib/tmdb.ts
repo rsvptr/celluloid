@@ -31,7 +31,7 @@ function getToken(): string {
 
 type FetchInit = RequestInit & { next?: { revalidate?: number } };
 
-interface TmdbOptions {
+export interface TmdbOptions {
   /** Next.js cache revalidation seconds (ignored outside Next). */
   revalidate?: number;
   retries?: number;
@@ -72,6 +72,11 @@ async function tmdb<T>(
   const retries = opts.retries ?? 3;
   const deadline = Date.now() + (opts.deadlineMs ?? 15000);
   for (let attempt = 0; ; attempt++) {
+    if (opts.signal?.aborted) throw opts.signal.reason;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      throw new DOMException("TMDB request deadline exceeded.", "TimeoutError");
+    }
     const init: FetchInit = {
       headers: {
         Authorization: `Bearer ${getToken()}`,
@@ -84,7 +89,7 @@ async function tmdb<T>(
     // and bypass the retry/backoff below (which only triggers on rejection
     // or a non-2xx response). The caller's own signal rides alongside it so a
     // cancelled run stops paying for TMDB work already in flight.
-    const timeoutSignal = AbortSignal.timeout(8000);
+    const timeoutSignal = AbortSignal.timeout(Math.max(1, Math.min(8000, remaining)));
     init.signal = opts.signal
       ? AbortSignal.any([opts.signal, timeoutSignal])
       : timeoutSignal;
@@ -98,7 +103,7 @@ async function tmdb<T>(
       if (res.ok) return (await res.json()) as T;
     } catch (err) {
       if (shouldRetry(attempt, retries, deadline, opts.signal)) {
-        await sleep(400 * 2 ** attempt);
+        await sleepWithinBudget(400 * 2 ** attempt, deadline, opts.signal);
         continue;
       }
       throw err;
@@ -113,7 +118,7 @@ async function tmdb<T>(
     ) {
       const retryAfter = Number(res.headers.get("retry-after"));
       const wait = Math.min(retryAfter > 0 ? retryAfter * 1000 : 500 * 2 ** attempt, 5000);
-      await sleep(wait);
+      await sleepWithinBudget(wait, deadline, opts.signal);
       continue;
     }
 
@@ -122,8 +127,24 @@ async function tmdb<T>(
   }
 }
 
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
+function sleepWithinBudget(ms: number, deadline: number, signal?: AbortSignal) {
+  const remaining = deadline - Date.now();
+  if (signal?.aborted) return Promise.reject(signal.reason);
+  if (remaining <= 0) {
+    return Promise.reject(new DOMException("TMDB request deadline exceeded.", "TimeoutError"));
+  }
+  const wait = Math.min(ms, remaining);
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, wait);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 // --- Response types --------------------------------------------------------
@@ -225,12 +246,13 @@ export interface TmdbSeasonDetails {
 export async function searchMulti(
   query: string,
   page = 1,
+  opts: Pick<TmdbOptions, "deadlineMs" | "retries" | "signal"> = {},
 ): Promise<(TmdbSearchItem & { media_type: "movie" | "tv" })[]> {
   if (!query.trim()) return [];
   const data = await tmdb<TmdbPage<TmdbSearchItem>>(
     "/search/multi",
     { query, page, include_adult: false, language: "en-US" },
-    { revalidate: 60 * 60 },
+    { revalidate: 60 * 60, ...opts },
   );
   return data.results.filter(
     (r): r is TmdbSearchItem & { media_type: "movie" | "tv" } =>
@@ -248,6 +270,8 @@ export interface SearchOptions {
    */
   year?: number | null;
   signal?: AbortSignal;
+  deadlineMs?: number;
+  retries?: number;
 }
 
 export async function searchByType(
@@ -266,7 +290,12 @@ export async function searchByType(
     tmdb<TmdbPage<TmdbSearchItem>>(
       `/search/${kind}`,
       year === undefined ? base : { ...base, [yearKey]: year },
-      { revalidate: 60 * 60, signal: opts.signal },
+      {
+        revalidate: 60 * 60,
+        signal: opts.signal,
+        deadlineMs: opts.deadlineMs,
+        retries: opts.retries,
+      },
     );
 
   const year = opts.year ?? undefined;

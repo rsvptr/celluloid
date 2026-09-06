@@ -585,6 +585,24 @@ describe("enrichRec hard-requirement enforcement", () => {
     assert.equal(out, r);
     assert.equal(tallies.lookupFailed, 1);
   });
+
+  it("drops a known language/year contradiction when the lookup fails", async () => {
+    const tallies = tallied();
+    const throwing = async () => {
+      throw new Error("TMDB unavailable");
+    };
+    const out = await enrichRec(
+      rec({ language: "en", year: 2020 }),
+      ctx({
+        requirements: { language: "fr", era: { from: 1990, to: 1999 } },
+        tallies,
+      }),
+      throwing,
+    );
+
+    assert.equal(out, null);
+    assert.deepEqual(tallies, { filteredOut: 1, lookupFailed: 0 });
+  });
 });
 
 describe("terminalRecEvents requirement/outage warnings", () => {

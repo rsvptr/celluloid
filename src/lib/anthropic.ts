@@ -35,6 +35,7 @@ export function sharedAiUtcDay(now: Date): string {
 }
 
 export type SharedAiRunReserver = (day: string, limit: number) => Promise<number | null>;
+export type SharedAiRunReleaser = (day: string) => Promise<void>;
 
 async function reserveSharedAiRunInDatabase(
   day: string,
@@ -49,6 +50,14 @@ async function reserveSharedAiRunInDatabase(
     RETURNING "runCount"
   `;
   return rows[0]?.runCount ?? null;
+}
+
+async function releaseSharedAiRunInDatabase(day: string): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "SharedAiDailyUsage"
+    SET "runCount" = "runCount" - 1
+    WHERE "day" = ${day}::date AND "runCount" > 0
+  `;
 }
 
 export interface SharedAiRunReservation {
@@ -75,6 +84,14 @@ export async function reserveSharedAiRun(
   const day = sharedAiUtcDay(now);
   const runCount = await reserve(day, limit);
   return { allowed: runCount !== null, day, limit, runCount };
+}
+
+/** Return a reservation that never reached Anthropic's message_start event. */
+export async function releaseSharedAiRun(
+  day: string | null,
+  release: SharedAiRunReleaser = releaseSharedAiRunInDatabase,
+): Promise<void> {
+  if (day) await release(day);
 }
 
 /**

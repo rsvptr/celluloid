@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   parseSharedAiDailyRunLimit,
+  releaseSharedAiRun,
   reserveSharedAiRun,
   sharedAiUtcDay,
   type SharedAiRunReserver,
+  type SharedAiRunReleaser,
 } from "../src/lib/anthropic";
 
 const NOW = new Date("2026-08-29T23:59:59.999Z");
@@ -62,5 +64,17 @@ describe("shared AI daily run limit", () => {
     assert.ok(
       results.every((result) => result.day === "2026-08-29" && result.limit === 3),
     );
+  });
+
+  it("releases only a counted shared-key reservation", async () => {
+    const days: string[] = [];
+    const release: SharedAiRunReleaser = async (day) => {
+      days.push(day);
+    };
+
+    await releaseSharedAiRun(null, release);
+    await releaseSharedAiRun("2026-08-29", release);
+
+    assert.deepEqual(days, ["2026-08-29"]);
   });
 });
