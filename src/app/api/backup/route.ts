@@ -1,4 +1,3 @@
-import { after } from "next/server";
 import { createBackupEnvelope } from "@/lib/backup";
 import { MAX_BACKUP_BYTES } from "@/lib/backup-format";
 import { prisma } from "@/lib/prisma";
@@ -44,23 +43,19 @@ export async function GET() {
 
     // Record when the owner last took a copy, so Settings can say how stale the
     // off-site backup is instead of offering a button with no feedback at all.
-    // Stamped once the envelope is built, in after() so the download doesn't
-    // wait on the write (VE-15): whether the file reached disk is not
-    // observable here, and a stamp that is occasionally a few seconds
-    // optimistic is far better than the freshness signal being absent. A
-    // failure to record must not cost the owner the backup itself, so it is
-    // logged and swallowed.
-    const userId = session.user.id;
-    after(async () => {
-      try {
-        await prisma.user.update({
-          where: { id: userId },
-          data: { lastBackupAt: new Date() },
-        });
-      } catch (stampError) {
-        console.error("Backup export: could not record lastBackupAt:", stampError);
-      }
-    });
+    // Stamped once the envelope is built and about to stream: whether the file
+    // reached disk is not observable here, and a stamp that is occasionally a
+    // few seconds optimistic is far better than the freshness signal being
+    // absent. A failure to record must not cost the owner the backup itself, so
+    // it is logged and swallowed.
+    try {
+      await prisma.user.update({
+        where: { id: session.user.id },
+        data: { lastBackupAt: new Date() },
+      });
+    } catch (stampError) {
+      console.error("Backup export: could not record lastBackupAt:", stampError);
+    }
 
     return new Response(stream, {
       headers: {
