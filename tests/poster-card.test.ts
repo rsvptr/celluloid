@@ -69,18 +69,54 @@ describe("Poster placeholder (JK-29)", () => {
 });
 
 // renderToStaticMarkup can't fire an image's onError, so this pins the shape:
-// a failed URL swaps in the placeholder and unmounts <Image> (no retry loop),
+// a failed URL swaps in the placeholder and unmounts the image (no retry loop),
 // and the state is keyed by URL so a new path gets a fresh attempt.
 describe("Poster load failure (JK-14)", () => {
   it("falls back to the placeholder for the URL that failed", async () => {
     const src = await readFile(new URL("../src/components/poster.tsx", import.meta.url), "utf8");
     assert.match(src, /const \[failedUrl, setFailedUrl\] = useState<string \| null>\(null\);/);
-    const at = src.indexOf("{url && failedUrl !== url ? (");
+    const at = src.indexOf("{path && failedUrl !== url ? (");
     assert.notEqual(at, -1);
     const branch = src.slice(at);
-    const image = branch.slice(branch.indexOf("<Image"), branch.indexOf("/>"));
+    const image = branch.slice(branch.indexOf("<TmdbImage"), branch.indexOf("/>"));
     assert.match(image, /onError=\{\(\) => setFailedUrl\(url\)\}/);
     assert.match(branch, /^[^]*?\/>\s*\) : \(\s*<PlaceholderPoster name=\{name\} mediaType=\{mediaType\} \/>/);
+  });
+});
+
+/** Every URL an <img> can fetch: its src and each srcset candidate. */
+function imageUrls(html: string): string[] {
+  const img = html.match(/<img [^>]*>/)?.[0] ?? "";
+  const srcset = img.match(/srcSet="([^"]*)"/)?.[1] ?? "";
+  const src = img.match(/ src="([^"]*)"/)?.[1] ?? "";
+  return [...srcset.split(", ").map((candidate) => candidate.split(" ")[0]), src];
+}
+
+// VE-07: TMDB serves each size itself, so the browser fetches from it directly
+// rather than through /_next/image, and no slot fetches more than it did.
+describe("Poster loads from TMDB (VE-07)", () => {
+  it("fetches a list thumbnail at w92 only", () => {
+    const urls = imageUrls(poster({ size: "w92", sizes: "36px" }));
+    assert.equal(urls.length, 16);
+    assert.deepEqual(new Set(urls), new Set(["https://image.tmdb.org/t/p/w92/abc.jpg"]));
+  });
+
+  it("fetches a grid card at w342 at most, the size it used before", () => {
+    const urls = imageUrls(poster());
+    assert.deepEqual(new Set(urls), new Set(["https://image.tmdb.org/t/p/w342/abc.jpg"]));
+  });
+
+  it("steps through TMDB's sizes as the slot grows", () => {
+    const html = poster({ sizes: "(max-width: 640px) 128px, 176px" });
+    const srcset = html.match(/srcSet="([^"]*)"/)?.[1] ?? "";
+    assert.match(srcset, /\/w92\/abc\.jpg 64w, [^,]*\/w154\/abc\.jpg 96w, [^,]*\/w154\/abc\.jpg 128w, [^,]*\/w342\/abc\.jpg 256w/);
+    assert.doesNotMatch(html, /_next\/image|\/w500\//);
+  });
+
+  it("keeps the preload and fetch priority hints", () => {
+    const html = poster({ lcp: "preload" });
+    assert.match(html, /fetchPriority="high"/i);
+    assert.doesNotMatch(html, /_next\/image/);
   });
 });
 

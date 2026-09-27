@@ -1,11 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import Image from "next/image";
 import { Film, Tv } from "lucide-react";
 import type { MediaType } from "@/generated/prisma/client";
 import { posterUrl, type PosterSize } from "@/lib/images";
 import { cn } from "@/lib/utils";
+import { TmdbImage } from "./tmdb-image";
 
 export function Poster({
   path,
@@ -31,7 +31,8 @@ export function Poster({
 }) {
   const url = posterUrl(path, size);
   // Keyed by URL, so a new path (e.g. after a re-match) gets a fresh attempt.
-  // If a custom loader lands (VE-07), check onError still fires for TMDB 404s.
+  // The browser now fetches from TMDB itself (VE-07), and TMDB answers a
+  // missing file with a 404 HTML page, which fails to decode: onError fires.
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   return (
     <div
@@ -41,9 +42,11 @@ export function Poster({
       )}
       aria-hidden={decorative || undefined}
     >
-      {url && failedUrl !== url ? (
-        <Image
-          src={url}
+      {path && failedUrl !== url ? (
+        <TmdbImage
+          path={path}
+          kind="poster"
+          maxSize={size}
           alt={decorative ? "" : name}
           fill
           sizes={sizes ?? "(max-width: 640px) 40vw, 180px"}

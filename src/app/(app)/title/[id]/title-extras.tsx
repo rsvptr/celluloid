@@ -1,12 +1,11 @@
-import Image from "next/image";
 import { ExternalLink, Play, UserRound } from "lucide-react";
 import { prisma } from "@/lib/prisma";
 import { getWatchRegions, type TitleBundle } from "@/lib/tmdb";
 import { pickTrailer, regionName, regionWatchInfo } from "@/lib/tmdb-extras";
-import { TMDB_IMAGE_BASE } from "@/lib/images";
 import { yearOf } from "@/lib/tmdb-match";
 import { Badge, Card } from "@/components/ui";
 import { Poster } from "@/components/poster";
+import { TmdbImage } from "@/components/tmdb-image";
 import { MediaType } from "@/generated/prisma/client";
 import { QuickAdd, RegionSelect } from "./title-extras-client";
 
@@ -159,8 +158,10 @@ export async function TitleExtras({
                       className="flex items-center gap-1.5 rounded-lg bg-surface-2 py-1 pl-1 pr-2.5 text-xs text-foreground/90 ring-1 ring-line"
                     >
                       {p.logo_path ? (
-                        <Image
-                          src={`${TMDB_IMAGE_BASE}w45${p.logo_path}`}
+                        <TmdbImage
+                          path={p.logo_path}
+                          kind="logo"
+                          maxSize="w45"
                           alt=""
                           width={20}
                           height={20}
@@ -211,8 +212,10 @@ export async function TitleExtras({
               >
                 <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-full bg-surface-2 ring-1 ring-line">
                   {c.profilePath ? (
-                    <Image
-                      src={`${TMDB_IMAGE_BASE}w185${c.profilePath}`}
+                    <TmdbImage
+                      path={c.profilePath}
+                      kind="profile"
+                      maxSize="w185"
                       alt={c.name}
                       fill
                       sizes="56px"

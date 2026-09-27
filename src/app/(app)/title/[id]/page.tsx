@@ -1,6 +1,5 @@
 import { Suspense } from "react";
 import type { Metadata } from "next";
-import Image from "next/image";
 import Link from "next/link";
 import { cookies, headers } from "next/headers";
 import { notFound } from "next/navigation";
@@ -10,8 +9,8 @@ import { dayKeyInZone, getTags, getTitleDetail, getUserPrefs } from "@/lib/data"
 import { prisma } from "@/lib/prisma";
 import { WatchEventKind } from "@/generated/prisma/client";
 import { Poster } from "@/components/poster";
+import { TmdbImage } from "@/components/tmdb-image";
 import { Badge } from "@/components/ui";
-import { backdropUrl } from "@/lib/images";
 import {
   STATUS_META,
   fullDate,
@@ -68,8 +67,7 @@ export default async function TitlePage({
   if (!title) notFound();
 
   const status = STATUS_META[title.status];
-  // w780, not the w1280 default: it sits at 30% under two gradients (TM-13).
-  const backdrop = backdropUrl(title.backdropPath, "w780");
+  const backdrop = title.backdropPath;
   const isTv = title.mediaType === "TV";
 
   // Region precedence: the per-device cookie (set by the inline picker) beats
@@ -140,8 +138,11 @@ export default async function TitlePage({
       <div className="relative overflow-hidden rounded-[var(--radius-card)] ring-1 ring-line">
         {backdrop && (
           <div className="absolute inset-0">
-            <Image
-              src={backdrop}
+            <TmdbImage
+              path={backdrop}
+              kind="backdrop"
+              // w780, not w1280: it sits at 30% under two gradients (TM-13).
+              maxSize="w780"
               alt=""
               fill
               sizes="(min-width: 1280px) 1280px, 100vw"
