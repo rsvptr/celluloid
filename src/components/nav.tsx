@@ -328,10 +328,16 @@ export function Nav({ userName }: { userName?: string | null }) {
                 href={l.href}
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  "focus-ring flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 py-2.5 text-[11px] font-medium transition-colors",
+                  "focus-ring relative flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 py-2.5 text-[11px] font-medium transition-colors",
                   active ? "text-foreground" : "text-muted hover:text-foreground",
                 )}
               >
+                {/* Active marker beyond lightness (foreground vs muted is only
+                    2.54:1). A border, not a background, so it survives forced
+                    colors. */}
+                {active && (
+                  <span aria-hidden className="absolute inset-x-0 top-0 mx-auto w-8 border-t-2 border-foreground" />
+                )}
                 <Icon size={19} aria-hidden />
                 {l.label}
               </Link>
