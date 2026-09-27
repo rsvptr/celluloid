@@ -24,7 +24,8 @@ Object.assign(globalThis, {
     BETTER_AUTH_SECRET: "isolated-session-test-secret-1234567890123456",
     SIGNUP_INVITE_CODE: "test-invite",
   },
-  __CELLULOID_AUTH_PRISMA__: {},
+  // Only the audit trail reaches Prisma here; its writes are tests/auth-events.test.ts's.
+  __CELLULOID_AUTH_PRISMA__: { authEvent: { create: async () => ({}) } },
   __CELLULOID_AUTH_INSTANCE__: null,
   __CELLULOID_AUTH_HEADERS__: async () => new Headers({ cookie: cookieHeader(), origin }),
   __CELLULOID_AUTH_COOKIES__: async () => ({

@@ -1,9 +1,10 @@
 import "server-only";
-import { betterAuth } from "better-auth";
-import { APIError, createAuthMiddleware } from "better-auth/api";
+import { betterAuth, type GenericEndpointContext } from "better-auth";
+import { APIError, createAuthMiddleware, isAPIError } from "better-auth/api";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { nextCookies } from "better-auth/next-js";
 import { twoFactor } from "better-auth/plugins/two-factor";
+import { recordAuthEvent, type AuthEventType } from "@/lib/auth-events";
 import { env } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 import { consumeSignupInvite } from "@/lib/signup-invite";
@@ -66,6 +67,81 @@ const enforceAuthRequestPolicy = createAuthMiddleware(async (context) => {
   delete body.image;
 });
 
+// Auth audit trail (BA-15). recordAuthEvent never throws, so a lost row can't
+// fail the sign-in, sign-out or change it describes.
+
+// The endpoints whose new session is a sign-in (sign-up signs in too).
+const signInPaths = new Set([
+  "/sign-in/email",
+  "/sign-up/email",
+  "/two-factor/verify-totp",
+  "/two-factor/verify-backup-code",
+]);
+
+/**
+ * Whether a new session is a sign-in. Two kinds of new session aren't:
+ * - A signed-in request replacing its own session (`context.session` is set).
+ *   Turning 2FA on does this through verify-totp.
+ * - The password step for an account with 2FA. The plugin's after hook deletes
+ *   that session and clears `newSession`, and the verified code then creates
+ *   the real one. Over HTTP, Better Auth runs this hook only after the
+ *   request's after hooks (runWithAdapter, better-auth auth/base.mjs), so
+ *   `newSession` is final here. tests/auth-events.test.ts pins that order.
+ */
+function isSignIn(session: { token: string }, context: GenericEndpointContext | null): boolean {
+  return (
+    !!context &&
+    signInPaths.has(context.path) &&
+    !context.context.session &&
+    context.context.newSession?.session.token === session.token
+  );
+}
+
+// Sign-out never loads the session, so the deleted row is where its user is.
+// Revoking uses the deleted row too: the endpoint reports success even when
+// the token matched nothing.
+const sessionEndEvents = new Map<string, AuthEventType>([
+  ["/sign-out", "sign_out"],
+  ["/revoke-session", "session_revoked"],
+]);
+
+/**
+ * A signed-in user's security changes, recorded once the endpoint has
+ * succeeded. After hooks run for failures too, with the APIError as
+ * `returned`.
+ */
+const recordAccountChange = createAuthMiddleware(async (ctx) => {
+  const session = ctx.context.session;
+  if (!session || isAPIError(ctx.context.returned)) return;
+  let type: AuthEventType | null = null;
+  switch (ctx.path) {
+    case "/change-password":
+      type = "password_changed";
+      break;
+    case "/two-factor/verify-totp":
+      // The setup's confirming code. Only the one that turns 2FA on replaces
+      // this device's session, which sets newSession.
+      type = ctx.context.newSession ? "two_factor_enabled" : null;
+      break;
+    case "/two-factor/enable":
+      // Starting setup changes nothing yet, but with 2FA already on this
+      // replaces the authenticator key and the backup codes at once. The UI
+      // never does that; a stolen session and password could.
+      type = session.user.twoFactorEnabled ? "two_factor_secret_replaced" : null;
+      break;
+    case "/two-factor/disable":
+      type = "two_factor_disabled";
+      break;
+    case "/two-factor/generate-backup-codes":
+      type = "backup_codes_regenerated";
+      break;
+    case "/revoke-other-sessions":
+      type = "other_sessions_revoked";
+      break;
+  }
+  if (type) await recordAuthEvent(session.user.id, type, ctx);
+});
+
 export const auth = betterAuth({
   appName: "Celluloid",
   secret: env.BETTER_AUTH_SECRET,
@@ -88,7 +164,23 @@ export const auth = betterAuth({
     minPasswordLength: 10,
   },
 
-  hooks: { before: enforceAuthRequestPolicy },
+  hooks: { before: enforceAuthRequestPolicy, after: recordAccountChange },
+
+  databaseHooks: {
+    session: {
+      create: {
+        async after(session, context) {
+          if (isSignIn(session, context)) await recordAuthEvent(session.userId, "sign_in", context);
+        },
+      },
+      delete: {
+        async after(session, context) {
+          const type = context ? sessionEndEvents.get(context.path) : undefined;
+          if (type) await recordAuthEvent(session.userId, type, context);
+        },
+      },
+    },
+  },
 
   user: {
     // The before hook requires a password even for a fresh session; Better Auth
