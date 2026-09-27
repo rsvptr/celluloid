@@ -164,7 +164,6 @@ export interface TitleIndexEntry {
   name: string;
   year: number | null;
   mediaType: MediaType;
-  posterPath: string | null;
 }
 
 /** Lightweight list for the command palette. */
@@ -177,7 +176,6 @@ export async function getTitleIndex(userId: string): Promise<TitleIndexEntry[]> 
       name: true,
       releaseDate: true,
       mediaType: true,
-      posterPath: true,
     },
   });
   return rows.map((t) => ({
@@ -185,7 +183,6 @@ export async function getTitleIndex(userId: string): Promise<TitleIndexEntry[]> 
     name: t.name,
     year: t.releaseDate ? t.releaseDate.getUTCFullYear() : null,
     mediaType: t.mediaType,
-    posterPath: t.posterPath,
   }));
 }
 
