@@ -8,6 +8,7 @@ import {
   describeTarget,
   pendingMigrations,
   prodMigrationEnv,
+  sameEndpointWarning,
 } from "../scripts/deploy-prod-migrations.mjs";
 import { loadEnv } from "../scripts/load-env.mjs";
 
@@ -75,6 +76,29 @@ describe("deploy-prod-migrations target description", () => {
       database: "(the role's default database)",
     });
     assert.equal(describeTarget("not a url").endpoint, "(unparseable connection string)");
+  });
+});
+
+describe("deploy-prod-migrations same-endpoint warning", () => {
+  it("warns when both variables name one endpoint, pooled or direct, without printing credentials", () => {
+    for (const [prod, app] of [
+      [PROD_POOLED, PROD_DIRECT],
+      [PROD_DIRECT, PROD_POOLED],
+      [DEV_POOLED, DEV_DIRECT],
+    ]) {
+      const warning = sameEndpointWarning(prod, app);
+      assert.match(warning ?? "", /both point at Neon endpoint ep-(prod-main-z9y8x7|dev-branch-a1b2c3)\./);
+      assert.doesNotMatch(warning ?? "", /secret|owner@|sslmode/);
+    }
+  });
+
+  it("stays quiet for different endpoints, non-Neon or unparseable values, and a missing DATABASE_URL", () => {
+    assert.equal(sameEndpointWarning(PROD_POOLED, DEV_POOLED), null);
+    assert.equal(sameEndpointWarning(PROD_DIRECT, DEV_DIRECT), null);
+    assert.equal(sameEndpointWarning(PROD_POOLED, undefined), null);
+    assert.equal(sameEndpointWarning(PROD_POOLED, "postgresql://u:pw@localhost:5432/celluloid"), null);
+    assert.equal(sameEndpointWarning("postgresql://u:pw@localhost:5432/a", "postgresql://u:pw@localhost:5432/a"), null);
+    assert.equal(sameEndpointWarning("not a url", "not a url"), null);
   });
 });
 
