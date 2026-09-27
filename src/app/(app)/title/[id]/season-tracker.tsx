@@ -408,7 +408,7 @@ export function SeasonTracker({
                   onClick={() => void requestSeasonToggle(season, !sComplete)}
                   aria-pressed={sComplete}
                   className={cn(
-                    "focus-ring flex min-h-11 shrink-0 items-center justify-center rounded-md px-2 py-1 text-xs ring-1 transition-colors sm:min-h-0",
+                    "focus-ring flex min-h-11 shrink-0 items-center justify-center rounded-md px-2 py-1 text-xs ring-1 press sm:min-h-0",
                     sComplete
                       ? "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30"
                       : "bg-surface-2 text-muted ring-line hover:text-foreground",
@@ -442,7 +442,7 @@ export function SeasonTracker({
                           // min-h grows the whole row's hit target to >=44px on
                           // touch without inflating the h-5 w-5 checkbox glyph;
                           // sm:min-h-0 restores the original content-driven height.
-                          className="focus-ring flex min-h-11 flex-1 items-center gap-3 px-4 py-2.5 text-left hover:bg-surface-2/40 sm:min-h-0"
+                          className="focus-ring flex min-h-11 flex-1 items-center gap-3 px-4 py-2.5 text-left hover:bg-surface-2/40 active:bg-surface-2/60 sm:min-h-0"
                         >
                           <span
                             className={cn(

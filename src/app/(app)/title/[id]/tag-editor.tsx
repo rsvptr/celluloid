@@ -120,7 +120,7 @@ export function TagEditor({
             <span className="break-words">{t.name}</span>
             <button
               onClick={() => remove(t)}
-              className="focus-ring -m-1.5 rounded p-1.5 text-faint hover:text-rose-300 sm:m-0 sm:p-0"
+              className="focus-ring -m-1.5 rounded p-1.5 text-faint press hover:text-rose-300 sm:m-0 sm:p-0"
               aria-label={`Remove ${t.name}`}
             >
               <X size={12} />
@@ -156,7 +156,7 @@ export function TagEditor({
         </datalist>
         <button
           type="submit"
-          className="focus-ring flex h-9 min-h-11 w-9 min-w-11 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-muted ring-1 ring-line hover:text-foreground sm:min-h-0 sm:min-w-0"
+          className="focus-ring flex h-9 min-h-11 w-9 min-w-11 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-muted ring-1 ring-line press hover:text-foreground sm:min-h-0 sm:min-w-0"
           aria-label="Add tag"
         >
           <Plus size={16} />
@@ -169,7 +169,7 @@ export function TagEditor({
             <button
               key={t.id}
               onClick={() => apply(t)}
-              className="focus-ring flex min-h-11 items-center rounded-full px-2 py-0.5 text-xs text-muted ring-1 ring-line hover:text-foreground sm:min-h-0"
+              className="focus-ring flex min-h-11 items-center rounded-full px-2 py-0.5 text-xs text-muted ring-1 ring-line press hover:text-foreground sm:min-h-0"
             >
               + {t.name}
             </button>

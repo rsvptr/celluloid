@@ -17,7 +17,6 @@ import {
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
-import { authClient } from "@/lib/auth-client";
 import {
   AnimatePresence,
   EASE_OUT,
@@ -102,6 +101,10 @@ export function Nav({ userName }: { userName?: string | null }) {
     if (signingOutRef.current) return;
     signingOutRef.current = true;
     try {
+      // Loaded on demand: the auth client is only needed here, and a static
+      // import put it in the shell of every signed-in page (VE-11). A failed
+      // chunk load lands in the catch below like a failed request.
+      const { authClient } = await import("@/lib/auth-client");
       await authClient.signOut();
       router.push("/login");
       router.refresh();
@@ -222,7 +225,7 @@ export function Nav({ userName }: { userName?: string | null }) {
               aria-keyshortcuts="Control+K Meta+K"
               // 44px square hit target on mobile (icon stays 15px, centered);
               // reverts to the original content-sized pill at md+.
-              className="focus-ring flex h-11 w-11 items-center justify-center gap-1.5 rounded-lg text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground lg:h-auto lg:w-auto lg:justify-start lg:px-2 lg:py-1.5"
+              className="focus-ring flex h-11 w-11 items-center justify-center gap-1.5 rounded-lg text-sm text-muted ring-1 ring-line press hover:text-foreground lg:h-auto lg:w-auto lg:justify-start lg:px-2 lg:py-1.5"
             >
               <Search size={15} />
               <span className="hidden items-center gap-0.5 text-xs text-faint lg:flex">
@@ -237,7 +240,7 @@ export function Nav({ userName }: { userName?: string | null }) {
               title="Settings"
               aria-label="Settings"
               className={cn(
-                "focus-ring hidden h-8 w-8 items-center justify-center rounded-lg transition-colors lg:flex",
+                "focus-ring hidden h-8 w-8 items-center justify-center rounded-lg press lg:flex",
                 pathname.startsWith("/settings")
                   ? "bg-surface-2 text-foreground"
                   : "text-muted hover:bg-surface-2/60 hover:text-foreground",
@@ -249,7 +252,7 @@ export function Nav({ userName }: { userName?: string | null }) {
               onClick={handleSignOut}
               title="Sign out"
               aria-label="Sign out"
-              className="focus-ring hidden h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2/60 hover:text-foreground lg:flex"
+              className="focus-ring hidden h-8 w-8 items-center justify-center rounded-lg text-muted press hover:bg-surface-2/60 hover:text-foreground lg:flex"
             >
               <LogOut size={16} />
             </button>
@@ -263,7 +266,7 @@ export function Nav({ userName }: { userName?: string | null }) {
                 aria-controls="nav-more-menu"
                 aria-label="More"
                 title="More"
-                className="focus-ring flex h-11 w-11 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2/60 hover:text-foreground"
+                className="focus-ring flex h-11 w-11 items-center justify-center rounded-lg text-muted press hover:bg-surface-2/60 hover:text-foreground"
               >
                 <MoreHorizontal size={18} />
               </button>
@@ -334,7 +337,7 @@ export function Nav({ userName }: { userName?: string | null }) {
                 href={l.href}
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  "focus-ring relative flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 py-2.5 text-[11px] font-medium transition-colors",
+                  "focus-ring relative flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 py-2.5 text-[11px] font-medium press",
                   active ? "text-foreground" : "text-muted hover:text-foreground",
                 )}
               >

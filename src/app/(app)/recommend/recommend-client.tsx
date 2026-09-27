@@ -592,7 +592,7 @@ export function RecommendClient({
                     disabled={loading}
                     onClick={() => applyPreset(preset.label, preset)}
                     className={cn(
-                      "focus-ring min-h-11 rounded-full px-3 py-1.5 text-sm ring-1 transition-colors disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0",
+                      "focus-ring min-h-11 rounded-full px-3 py-1.5 text-sm ring-1 press disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0",
                       selected
                         ? "bg-brand/15 text-brand ring-brand/40"
                         : "bg-surface-2 text-foreground/85 ring-line hover:bg-surface-2/70 hover:text-foreground",
@@ -617,7 +617,7 @@ export function RecommendClient({
                       })
                     }
                     className={cn(
-                      "focus-ring min-h-11 max-w-full min-w-0 break-words rounded-full px-3 py-1.5 text-sm ring-1 transition-colors disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0",
+                      "focus-ring min-h-11 max-w-full min-w-0 break-words rounded-full px-3 py-1.5 text-sm ring-1 press disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0",
                       selected
                         ? "bg-brand/20 text-brand ring-brand/50"
                         : "bg-brand/10 text-brand ring-brand/30 hover:bg-brand/15",
@@ -648,7 +648,7 @@ export function RecommendClient({
                     disabled={loading}
                     onClick={() => setType(value)}
                     className={cn(
-                      "focus-ring min-h-11 rounded-lg px-3 py-1.5 text-sm ring-1 transition-colors disabled:opacity-50 sm:min-h-0",
+                      "focus-ring min-h-11 rounded-lg px-3 py-1.5 text-sm ring-1 press disabled:opacity-50 sm:min-h-0",
                       type === value
                         ? "bg-brand/15 text-brand ring-brand/40"
                         : "text-muted ring-line hover:text-foreground",
@@ -671,7 +671,7 @@ export function RecommendClient({
                     disabled={loading}
                     onClick={() => setCountStr(String(value))}
                     className={cn(
-                      "focus-ring min-h-11 rounded-lg px-3 py-1.5 text-sm tabular-nums ring-1 transition-colors disabled:opacity-50 sm:min-h-0",
+                      "focus-ring min-h-11 rounded-lg px-3 py-1.5 text-sm tabular-nums ring-1 press disabled:opacity-50 sm:min-h-0",
                       count === value
                         ? "bg-brand/15 text-brand ring-brand/40"
                         : "text-muted ring-line hover:text-foreground",
@@ -741,7 +741,7 @@ export function RecommendClient({
                         }
                         onClick={() => setBasisMode(mode)}
                         className={cn(
-                          "focus-ring min-h-11 rounded-lg px-3 py-1.5 text-sm ring-1 transition-colors disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0",
+                          "focus-ring min-h-11 rounded-lg px-3 py-1.5 text-sm ring-1 press disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0",
                           basisMode === mode
                             ? "bg-brand/15 text-brand ring-brand/40"
                             : "text-muted ring-line hover:text-foreground",
@@ -764,7 +764,7 @@ export function RecommendClient({
                       disabled={loading}
                       onClick={() => setRecentCount(value)}
                       className={cn(
-                        "focus-ring min-h-11 rounded-full px-3 py-1 text-sm ring-1 transition-colors disabled:opacity-50 sm:min-h-0",
+                        "focus-ring min-h-11 rounded-full px-3 py-1 text-sm ring-1 press disabled:opacity-50 sm:min-h-0",
                         recentCount === value
                           ? "bg-brand/15 text-brand ring-brand/40"
                           : "text-muted ring-line hover:text-foreground",

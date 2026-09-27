@@ -694,7 +694,7 @@ export function Library({
                 onClick={() => setType(opt.value)}
                 aria-pressed={type === opt.value}
                 className={cn(
-                  "focus-ring flex min-h-11 items-center justify-center rounded-md px-3 text-sm transition-colors sm:min-h-8",
+                  "focus-ring flex min-h-11 items-center justify-center rounded-md px-3 text-sm press sm:min-h-8",
                   type === opt.value
                     ? "bg-surface text-foreground shadow-sm"
                     : "text-muted hover:text-foreground",
@@ -714,7 +714,7 @@ export function Library({
                 : "Choose your services in Settings"
             }
             className={cn(
-              "focus-ring flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-sm ring-1 transition-colors sm:min-h-8",
+              "focus-ring flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-sm ring-1 press sm:min-h-8",
               onlyOnServices
                 ? "bg-brand/15 text-brand ring-brand/40"
                 : "text-muted ring-line hover:text-foreground",
@@ -731,7 +731,7 @@ export function Library({
             aria-controls="library-advanced-filters"
             aria-label={advancedCount > 0 ? `Filters, ${advancedCount} active` : "Filters"}
             className={cn(
-              "focus-ring ml-auto flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-sm ring-1 transition-colors sm:min-h-8",
+              "focus-ring ml-auto flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-sm ring-1 press sm:min-h-8",
               showFilters || advancedCount > 0
                 ? "bg-surface-2 text-foreground ring-line-strong"
                 : "text-muted ring-line hover:text-foreground",
@@ -760,7 +760,7 @@ export function Library({
                 type="button"
                 onClick={chip.clear}
                 aria-label={`Remove ${chip.label} filter`}
-                className="focus-ring flex min-h-11 min-w-0 items-center gap-1.5 rounded-full bg-surface-2 px-3 text-xs text-foreground ring-1 ring-line transition-colors hover:text-foreground sm:min-h-0 sm:py-1"
+                className="focus-ring flex min-h-11 min-w-0 items-center gap-1.5 rounded-full bg-surface-2 px-3 text-xs text-foreground ring-1 ring-line press hover:text-foreground sm:min-h-0 sm:py-1"
               >
                 <span className="break-words">{chip.label}</span>
                 <X size={13} aria-hidden className="text-muted" />

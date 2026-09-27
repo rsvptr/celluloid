@@ -1,21 +1,33 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { FileSpreadsheet, RotateCcw, Upload, UploadCloud, X } from "lucide-react";
 import { Button, Card, Spinner } from "@/components/ui";
-import { ImportReview } from "@/components/import-review";
 import type { StagedImportJobView } from "@/lib/import-staging-views";
 import { cn } from "@/lib/utils";
+
+// Loaded only once there is a job to review, so /add doesn't ship the review
+// UI (and its dialog) to every visit (VE-12).
+const ImportReview = dynamic(
+  () => import("@/components/import-review").then((mod) => mod.ImportReview),
+  {
+    loading: () => (
+      <p role="status" className="flex items-center gap-2 text-sm text-muted">
+        <Spinner /> Loading the review…
+      </p>
+    ),
+  },
+);
 
 const MAX_BYTES = 2 * 1024 * 1024;
 const ACCEPT_RE = /\.(xlsx|csv)$/i;
 const ACTIVE_CHECK_ERROR =
   "Celluloid couldn't verify whether an import is already unfinished. Uploads are paused until this check succeeds.";
 
-async function fetchActiveImport(signal?: AbortSignal): Promise<StagedImportJobView | null> {
+async function fetchActiveImport(): Promise<StagedImportJobView | null> {
   const response = await fetch("/api/import/jobs/active", {
     cache: "no-store",
-    signal,
   });
   const body = (await response.json().catch(() => null)) as
     | { job?: StagedImportJobView | null; error?: string }
@@ -34,28 +46,26 @@ function formatSize(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
-export function ImportUpload() {
+/**
+ * The page checks for an unfinished import on the server and passes the result
+ * in, so uploads aren't paused behind a fetch after hydration. Retry check
+ * still goes through the API route.
+ */
+export function ImportUpload({
+  initialJob,
+  initialActiveError,
+}: {
+  initialJob: StagedImportJobView | null;
+  initialActiveError: string | null;
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [loadingActive, setLoadingActive] = useState(true);
-  const [activeError, setActiveError] = useState<string | null>(null);
+  const [loadingActive, setLoadingActive] = useState(false);
+  const [activeError, setActiveError] = useState<string | null>(initialActiveError);
   const [error, setError] = useState<string | null>(null);
-  const [job, setJob] = useState<StagedImportJobView | null>(null);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    fetchActiveImport(controller.signal)
-      .then((activeJob) => setJob(activeJob))
-      .catch((activeError) => {
-        if (!(activeError instanceof Error) || activeError.name !== "AbortError") {
-          setActiveError(activeError instanceof Error ? activeError.message : ACTIVE_CHECK_ERROR);
-        }
-      })
-      .finally(() => setLoadingActive(false));
-    return () => controller.abort();
-  }, []);
+  const [job, setJob] = useState<StagedImportJobView | null>(initialJob);
 
   async function retryActiveCheck() {
     setLoadingActive(true);

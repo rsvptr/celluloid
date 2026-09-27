@@ -307,9 +307,14 @@ export function ExportPanel({
           </fieldset>
           {tags.length > 0 && (
             <Labeled label="Tag">
+              {/* A long tag name would widen the select past a 320px viewport.
+                  Capped to the row, it clips the chosen name, which the title
+                  and the open list show in full. */}
               <Select
                 value={scope.tag ?? ""}
                 onChange={(e) => update("tag", e.target.value || null)}
+                title={scope.tag ?? undefined}
+                className="w-full"
               >
                 <option value="">Any tag</option>
                 {tags.map((t) => (
@@ -474,7 +479,7 @@ function Labeled({
   children: React.ReactNode;
 }) {
   return (
-    <label className="flex flex-col gap-1">
+    <label className="flex min-w-0 flex-col gap-1">
       <span className="text-xs font-medium text-faint">{label}</span>
       {children}
     </label>
