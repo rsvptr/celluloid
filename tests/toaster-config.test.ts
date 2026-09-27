@@ -50,3 +50,25 @@ describe("app Toaster config", () => {
     );
   });
 });
+
+describe("match dialog duplicate toast", () => {
+  it("raises the Open action only after the modal dialog has closed", async () => {
+    const controls = await source("../src/components/match-controls.tsx");
+    const pick = controls.slice(controls.indexOf("function pick("), controls.indexOf("function refresh("));
+    // While a Radix modal is open the page outside it is inert, so the toast
+    // with the action is queued, the dialog closes, and Radix's
+    // onCloseAutoFocus (called after unmount) raises it.
+    assert.match(pick, /if \(!existingId\) \{\s*toast\.error\(error\);\s*return;\s*\}/);
+    const duplicate = pick.slice(pick.indexOf("if (!existingId)") + "if (!existingId)".length);
+    const queued = duplicate.slice(duplicate.indexOf("return;") + "return;".length);
+    assert.match(queued, /afterClose\.current = \(\) =>\s*toast\.error\(error, \{/);
+    assert.match(queued, /setOpen\(false\);\s*return;/);
+    assert.equal(queued.match(/toast\.error\(/g)?.length, 1);
+    assert.match(queued, /action: \{ label: "Open", onClick: \(\) => router\.push\(`\/title\/\$\{existingId\}`\) \}/);
+    // As long as an undo toast, with a close button.
+    assert.match(queued, /duration: 10_000,\s*closeButton: true,/);
+
+    const onClose = controls.slice(controls.indexOf("onCloseAutoFocus={"), controls.indexOf("className=", controls.indexOf("onCloseAutoFocus={")));
+    assert.match(onClose, /afterClose\.current\?\.\(\);\s*afterClose\.current = null;/);
+  });
+});

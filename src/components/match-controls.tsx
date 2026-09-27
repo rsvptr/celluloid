@@ -27,6 +27,8 @@ export function MatchControls({
   const [refreshing, startRefresh] = useTransition();
   const opener = useRef<HTMLElement | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  // A toast to raise once the dialog has fully closed (see pick).
+  const afterClose = useRef<(() => void) | null>(null);
   // A title with no tmdbId has never been matched, so every string here has to
   // read as a first match rather than a correction.
   const unmatched = tmdbId == null;
@@ -36,17 +38,24 @@ export function MatchControls({
     start(async () => {
       const res = await rematchTitle(titleId, r.tmdbId, r.mediaType);
       if (res.error) {
-        toast.error(
-          res.error,
-          res.existingId
-            ? {
-                action: {
-                  label: "Open",
-                  onClick: () => router.push(`/title/${res.existingId}`),
-                },
-              }
-            : undefined,
-        );
+        const { error, existingId } = res;
+        if (!existingId) {
+          toast.error(error);
+          return;
+        }
+        // The pick is already in the library, and the toast offers to open
+        // it. While this modal dialog is open the rest of the page is inert
+        // (Radix sets pointer-events: none on <body>, traps focus and
+        // aria-hides everything else), so that action couldn't be clicked,
+        // tabbed to or heard. Close the dialog and raise the toast once it
+        // has gone, for as long as an undo toast stays.
+        afterClose.current = () =>
+          toast.error(error, {
+            duration: 10_000,
+            closeButton: true,
+            action: { label: "Open", onClick: () => router.push(`/title/${existingId}`) },
+          });
+        setOpen(false);
         return;
       }
       toast.success(unmatched ? "Match saved" : "Match updated");
@@ -106,6 +115,10 @@ export function MatchControls({
                 e.preventDefault();
                 opener.current.focus();
               }
+              // Radix calls this after the dialog has unmounted and restored
+              // the page, so a toast raised here is clickable and announced.
+              afterClose.current?.();
+              afterClose.current = null;
             }}
             className="fixed left-1/2 top-1/2 z-50 flex max-h-[85dvh] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col rounded-[var(--radius-card)] bg-surface p-5 ring-1 ring-line focus:outline-none data-[state=open]:animate-[dialog-content-in_0.2s_cubic-bezier(0.16,1,0.3,1)]"
           >
