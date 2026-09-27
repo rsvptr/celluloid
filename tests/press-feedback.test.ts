@@ -102,7 +102,9 @@ describe("press feedback (EM-01)", () => {
     const rows = [...library.matchAll(/"(cv-auto focus-ring flex items-center gap-3 [^"]*)"/g)];
     assert.equal(rows.length, 2);
     for (const [, row] of rows) {
-      assert.match(row, /(^| )active:bg-surface-2\/60 active:transition-none( |$)/);
+      // duration-0, not transition-none: reduced motion (globals.css) sets
+      // transition-property, which would bring a fade back.
+      assert.match(row, /(^| )active:bg-surface-2\/60 active:duration-0( |$)/);
       assert.doesNotMatch(row, /(^| )press( |$)/);
     }
   });

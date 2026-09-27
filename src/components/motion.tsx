@@ -7,13 +7,12 @@ import {
   LazyMotion,
   MotionConfig,
   useIsPresent,
-  useReducedMotion,
 } from "motion/react";
 
 // Re-export the bits the rest of the app uses so imports stay in one place.
 // Consumers keep the existing `motion.div` spelling, but the value is Motion's
 // lean `m` component and receives its features from MotionProvider below.
-export { AnimatePresence, m as motion, useReducedMotion };
+export { AnimatePresence, m as motion };
 
 // `layout` (recommendation cards) needs domMax rather than domAnimation.
 // The async feature import keeps that larger feature bundle

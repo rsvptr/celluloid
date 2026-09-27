@@ -353,12 +353,48 @@ label {
   transform: none !important;
 }
 
-/* Respect reduced motion */
+/* Reduced motion (EM-04): fewer and gentler, not none (emil-design-eng).
+   - Kill switch: every CSS animation, including any added later, finishes at
+     once and never loops, unless it is allowed below. That stops the shimmer
+     and any other decorative loop.
+   - Transitions keep their authored durations, but only on properties that
+     don't move anything: colour, opacity and shadow still ease; transform,
+     translate, scale, rotate and size changes snap.
+   - Allowed: the dialog fades (the content fades without its scale), and the
+     spinner pulses in place, so it still shows that work is under way.
+   Motion's own animations follow MotionConfig reducedMotion="user". */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.001ms !important;
-    transition-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-property: color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to, opacity, box-shadow !important;
+    scroll-behavior: auto !important;
+  }
+  .dialog-overlay[data-state="open"],
+  .dialog-content[data-state="open"] {
+    animation-duration: var(--duration-dialog-in) !important;
+  }
+  .dialog-overlay[data-state="closed"],
+  .dialog-content[data-state="closed"] {
+    animation-duration: var(--duration-dialog-out) !important;
+  }
+  .dialog-content[data-state="open"] {
+    animation-name: dialog-overlay-in;
+  }
+  .dialog-content[data-state="closed"] {
+    animation-name: dialog-overlay-out;
+  }
+  .animate-spin {
+    animation: spinner-pulse 1s ease-in-out infinite alternate !important;
+  }
+}
+@keyframes spinner-pulse {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.35;
   }
 }

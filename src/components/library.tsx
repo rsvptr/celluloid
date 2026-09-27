@@ -47,13 +47,7 @@ import { IntentLink } from "./intent-link";
 import { Poster } from "./poster";
 import { ShareDialog } from "./share-dialog";
 import { useConfirm } from "./confirm-dialog";
-import {
-  AnimatePresence,
-  EASE_OUT,
-  InertOnExit,
-  motion,
-  useReducedMotion,
-} from "./motion";
+import { AnimatePresence, EASE_OUT, InertOnExit, motion } from "./motion";
 import { STATUS_META, STATUS_ORDER, fullDate, languageName, progressPct } from "@/lib/format";
 import {
   bulkAddTag,
@@ -194,7 +188,6 @@ export function Library({
   rememberFilters: boolean;
 }) {
   const router = useRouter();
-  const reduceMotion = useReducedMotion();
   // Trash is a distinct mode that replaces the whole toolbar + grid; entered from
   // the Filters panel, exited via "Back to library". trashedCount drives the entry.
   const [trashMode, setTrashMode] = useState(false);
@@ -794,7 +787,7 @@ export function Library({
               initial={false}
               animate={{ opacity: 1, height: "auto" }}
               exit={{ opacity: 0, height: 0 }}
-              transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: EASE_OUT }}
+              transition={{ duration: 0.2, ease: EASE_OUT }}
               className="-mt-4 grid grid-rows-[1fr] overflow-hidden motion-safe:animate-[collapse-in_200ms_var(--ease-out)]"
             >
               <InertOnExit className="min-h-0">
@@ -1551,7 +1544,7 @@ const ListRow = memo(function ListRow({
         onClick={() => onToggle(item.id)}
         aria-pressed={selected}
         className={cn(
-          "cv-auto focus-ring flex items-center gap-3 px-3 py-2.5 text-left transition-colors active:bg-surface-2/60 active:transition-none",
+          "cv-auto focus-ring flex items-center gap-3 px-3 py-2.5 text-left transition-colors active:bg-surface-2/60 active:duration-0",
           selected ? "bg-brand/10" : "bg-surface hover:bg-surface-2/50",
         )}
       >
@@ -1571,7 +1564,7 @@ const ListRow = memo(function ListRow({
   return (
     <IntentLink
       href={`/title/${item.id}`}
-      className="cv-auto focus-ring flex items-center gap-3 bg-surface px-3 py-2.5 transition-colors hover:bg-surface-2/50 active:bg-surface-2/60 active:transition-none"
+      className="cv-auto focus-ring flex items-center gap-3 bg-surface px-3 py-2.5 transition-colors hover:bg-surface-2/50 active:bg-surface-2/60 active:duration-0"
     >
       {inner}
     </IntentLink>
