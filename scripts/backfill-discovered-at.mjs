@@ -12,9 +12,10 @@
 //   prod  PROD_DATABASE_URL, on its direct host
 // Add --yes only after checking the printed target.
 
+import { realpathSync } from "node:fs";
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client.ts";
 import { resolveMigrationTarget, toDirectUrl } from "./db-urls.mjs";
@@ -129,8 +130,10 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   }
 }
 
+// Node resolves symlinks in import.meta.url but not in argv[1].
 const isDirectRun =
-  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+  process.argv[1] !== undefined &&
+  realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (isDirectRun) {
   loadEnv();

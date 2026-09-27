@@ -13,11 +13,11 @@
  *
  * Add --yes only after independently verifying the printed target.
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client.ts";
 import { toDirectUrl } from "./db-urls.mjs";
@@ -317,8 +317,10 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   }
 }
 
+// Node resolves symlinks in import.meta.url but not in argv[1].
 const isDirectRun =
-  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+  process.argv[1] !== undefined &&
+  realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (isDirectRun) {
   try {
