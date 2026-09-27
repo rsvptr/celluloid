@@ -191,6 +191,9 @@ model Verification {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
+  // Better Auth declares this index; two-factor sign-in looks challenges up by
+  // identifier.
+  @@index([identifier])
   @@map("verification")
 }
 
