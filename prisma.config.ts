@@ -5,8 +5,8 @@ import { loadEnv } from "./scripts/load-env.mjs";
 loadEnv();
 
 // Migrations/DDL use the DIRECT (unpooled) Neon connection: DIRECT_URL, then
-// DATABASE_URL_UNPOOLED, then DATABASE_URL with "-pooler" removed from its
-// host. scripts/db-urls.mjs explains why the pooler can't be used.
+// DATABASE_URL_UNPOOLED, then DATABASE_URL, with "-pooler" removed from the
+// chosen host. scripts/db-urls.mjs explains why the pooler can't be used.
 const migration = resolveMigrationTarget();
 if (migration.mismatch) {
   // Refuse only where it matters. With no URL, every command that connects to

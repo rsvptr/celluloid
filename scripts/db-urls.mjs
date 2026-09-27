@@ -66,8 +66,10 @@ function describeDatabase(name) {
  * The URL for migrations and DDL, the variable that supplied it, and whether
  * it passes the same-endpoint guard.
  *
- * Precedence: DIRECT_URL || DATABASE_URL_UNPOOLED || toDirectUrl(DATABASE_URL).
- * `||` rather than `??`, so a variable that is present but blank falls through.
+ * Precedence: DIRECT_URL || DATABASE_URL_UNPOOLED || DATABASE_URL, whichever
+ * wins passed through toDirectUrl, so a pooled string pasted into DIRECT_URL
+ * still migrates over the direct host. `||` rather than `??`, so a variable
+ * that is present but blank falls through.
  *
  * Guard: DIRECT_URL and DATABASE_URL_UNPOOLED both win over DATABASE_URL, so
  * either one naming another branch sends migrations away from the database
@@ -88,10 +90,10 @@ export function resolveMigrationTarget(env = process.env) {
   let url;
   let source;
   if (env.DIRECT_URL) {
-    url = env.DIRECT_URL;
+    url = toDirectUrl(env.DIRECT_URL);
     source = "DIRECT_URL";
   } else if (env.DATABASE_URL_UNPOOLED) {
-    url = env.DATABASE_URL_UNPOOLED;
+    url = toDirectUrl(env.DATABASE_URL_UNPOOLED);
     source = "DATABASE_URL_UNPOOLED";
   } else if (env.DATABASE_URL) {
     url = toDirectUrl(env.DATABASE_URL);

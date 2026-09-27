@@ -93,6 +93,19 @@ describe("resolveMigrationTarget precedence", () => {
     });
   });
 
+  it("converts a pooled DIRECT_URL or DATABASE_URL_UNPOOLED to the direct host", () => {
+    assert.deepEqual(resolveMigrationTarget({ DIRECT_URL: DEV_POOLED, DATABASE_URL: DEV_POOLED }), {
+      url: DEV_DIRECT,
+      source: "DIRECT_URL",
+      mismatch: null,
+    });
+    assert.deepEqual(resolveMigrationTarget({ DATABASE_URL_UNPOOLED: PROD_POOLED }), {
+      url: PROD_DIRECT,
+      source: "DATABASE_URL_UNPOOLED",
+      mismatch: null,
+    });
+  });
+
   it("lets a blank variable fall through instead of handing Prisma an empty URL (PR-13)", () => {
     assert.deepEqual(
       resolveMigrationTarget({ DIRECT_URL: "", DATABASE_URL_UNPOOLED: "", DATABASE_URL: DEV_POOLED }),
