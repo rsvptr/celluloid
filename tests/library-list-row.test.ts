@@ -30,4 +30,13 @@ describe("library list rows (VE-04)", () => {
       /const toggle = useCallback\(\(id: string\) => \{[\s\S]*?\n {2}\}, \[\]\);/,
     );
   });
+
+  it("prefetches rows on intent, not on viewport entry (VE-06)", async () => {
+    const library = await source("../src/components/library.tsx");
+    const start = library.indexOf("const ListRow = memo(function ListRow(");
+    const listRow = library.slice(start, library.indexOf("\n});", start));
+    // The href is built inside the row, so no new prop reaches the memo.
+    assert.match(listRow, /<IntentLink\s+href=\{`\/title\/\$\{item\.id\}`\}/);
+    assert.doesNotMatch(listRow, /<Link\b/);
+  });
 });

@@ -43,6 +43,7 @@ import type { LibraryItem, TrashedTitle } from "@/lib/data";
 import type { WatchStatus } from "@/generated/prisma/client";
 import { Badge, Button, Card, Input, Select } from "./ui";
 import { TitleCard } from "./title-card";
+import { IntentLink } from "./intent-link";
 import { Poster } from "./poster";
 import { ShareDialog } from "./share-dialog";
 import { useConfirm } from "./confirm-dialog";
@@ -1568,12 +1569,12 @@ const ListRow = memo(function ListRow({
   }
 
   return (
-    <Link
+    <IntentLink
       href={`/title/${item.id}`}
       className="cv-auto focus-ring flex items-center gap-3 bg-surface px-3 py-2.5 transition-colors hover:bg-surface-2/50"
     >
       {inner}
-    </Link>
+    </IntentLink>
   );
 });
 
