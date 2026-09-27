@@ -256,11 +256,23 @@ async function findOrCreateTag(
   }
 }
 
-function revalidateAll(id?: string) {
+/**
+ * Expires the library-wide pages. After any revalidatePath, whatever the path,
+ * Next also re-renders the current page into the calling action's response
+ * (and the client refetches it when a response carries none), so a title page
+ * edit still comes back rendered.
+ *
+ * The title's own path is left out on purpose (VE-03). Title pages are
+ * dynamic, so their path tag only keys the TMDB Data Cache entries fetched
+ * while rendering them; expiring it made every edit, notes autosaves included,
+ * refetch TMDB. rematchTitle expires it itself. This stays on revalidatePath:
+ * refresh() throws in route handlers, and the import commit route runs
+ * addFromTmdb and rematchTitle.
+ */
+function revalidateAll() {
   revalidatePath("/");
   revalidatePath("/stats");
   revalidatePath("/export");
-  if (id) revalidatePath(`/title/${id}`);
 }
 
 /**
@@ -564,7 +576,7 @@ export async function updateTitle(
     };
   });
   if (!found) return { error: "Title not found." };
-  revalidateAll(id);
+  revalidateAll();
   return found.undoWatchedAt
     ? {
         undo: {
@@ -724,7 +736,7 @@ export async function undoWatchedTransition(
   });
 
   if (!undone) return { error: "That watched change is no longer available to undo." };
-  revalidateAll(titleId);
+  revalidateAll();
   return { ok: true };
 }
 
@@ -813,7 +825,7 @@ export async function logWatch(
 
   if (!result) return { error: "Title not found." };
   if ("error" in result) return result;
-  revalidateAll(titleId);
+  revalidateAll();
   return { ok: true, watchCount: result.watchCount };
 }
 
@@ -909,7 +921,7 @@ export async function updateWatchEvent(
     await syncWatchedAtFromEvents(tx, event.titleId, currentWatchedAt);
   });
 
-  revalidateAll(event.titleId);
+  revalidateAll();
   return { ok: true };
 }
 
@@ -954,7 +966,7 @@ export async function deleteWatchEvent(
     });
   });
 
-  revalidateAll(event.titleId);
+  revalidateAll();
   return { ok: true, watchCount };
 }
 
@@ -973,7 +985,7 @@ export async function removeTitle(id: string) {
     where: { id, userId, deletedAt: null },
     data: { deletedAt: new Date() },
   });
-  revalidateAll(id);
+  revalidateAll();
   return {};
 }
 
@@ -989,7 +1001,7 @@ export async function restoreTitle(id: string) {
     where: { id, userId, deletedAt: { not: null } },
     data: { deletedAt: null },
   });
-  revalidateAll(id);
+  revalidateAll();
   return {};
 }
 
@@ -1095,7 +1107,7 @@ export async function setEpisodeWatched(episodeId: string, watched: boolean) {
     }
     await recomputeProgress(tx, titleId, title);
   });
-  revalidateAll(titleId);
+  revalidateAll();
   return {};
 }
 
@@ -1153,7 +1165,7 @@ export async function setSeasonWatched(seasonId: string, watched: boolean) {
     }
     await recomputeProgress(tx, titleId, title);
   });
-  revalidateAll(titleId);
+  revalidateAll();
   return {};
 }
 
@@ -1212,7 +1224,7 @@ export async function setAllEpisodesWatched(titleId: string, watched: boolean) {
     }
     await recomputeProgress(tx, titleId, locked);
   });
-  revalidateAll(titleId);
+  revalidateAll();
   return {};
 }
 
@@ -1284,7 +1296,7 @@ export async function setEpisodesWatchedThrough(
     return toWatch.length;
   });
 
-  revalidateAll(titleId);
+  revalidateAll();
   return { count: changed };
 }
 
@@ -1510,7 +1522,7 @@ export async function addFromTmdb(
     // soft-delete flag and keep all personal data (ratings, notes, progress).
     if (dup.deletedAt) {
       await prisma.title.update({ where: { id: dup.id }, data: { deletedAt: null } });
-      revalidateAll(dup.id);
+      revalidateAll();
       return { id: dup.id, restored: true };
     }
     return { id: dup.id, existing: true };
@@ -1628,7 +1640,7 @@ export async function addFromTmdb(
             where: { id: existing.id },
             data: { deletedAt: null },
           });
-          revalidateAll(existing.id);
+          revalidateAll();
           return { id: existing.id, restored: true };
         }
         return { id: existing.id, existing: true };
@@ -1973,7 +1985,10 @@ export async function rematchTitle(
       if (!found) return { error: "Title not found." };
     }
 
-    revalidateAll(titleId);
+    revalidateAll();
+    // A metadata refresh is the one write that should also re-pull the title
+    // page's TMDB extras (cast, providers, videos), cached under its path tag.
+    revalidatePath(`/title/${titleId}`);
     return { ok: true };
   } catch (err) {
     console.error(
@@ -2259,7 +2274,7 @@ export async function toggleTitleTag(titleId: string, tagId: string, on: boolean
   } else {
     await prisma.titleTag.deleteMany({ where: { titleId, tagId } });
   }
-  revalidateAll(titleId);
+  revalidateAll();
   return {};
 }
 
