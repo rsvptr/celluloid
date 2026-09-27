@@ -24,6 +24,7 @@ import {
 } from "@/lib/tmdb";
 import { mapLimit } from "@/lib/async";
 import { PRISMA_POOL_MAX } from "@/lib/db-pool";
+import { isRecordNotFound, isUniqueViolation } from "@/lib/prisma-errors";
 import { isTagColor } from "@/lib/tag-colors";
 import { tagNameFilter } from "@/lib/tag-name";
 import {
@@ -904,23 +905,32 @@ export async function updateWatchEvent(
   });
   if (!event) return { error: "Watch not found." };
 
-  await prisma.$transaction(async (tx) => {
+  const eventGone = await prisma.$transaction(async (tx) => {
     // Title lock first (invariant), so the event edit and the cache resync are
     // one unit and can't interleave with a concurrent logWatch on this title.
     const rows = await tx.$queryRaw<{ id: string; watchedAt: Date | null }[]>`
       SELECT id, "watchedAt" FROM "Title" WHERE id = ${event.titleId} FOR UPDATE`;
     const title = rows[0];
-    if (!title) return; // title removed concurrently
-    await tx.watchEvent.update({
-      where: { id: event.id },
-      data: { occurredAt: occurred, ...noteUpdate },
-    });
+    if (!title) return false; // title removed concurrently
+    try {
+      await tx.watchEvent.update({
+        where: { id: event.id },
+        data: { occurredAt: occurred, ...noteUpdate },
+      });
+    } catch (err) {
+      // Deleted in another tab since the read above. Say so, as that read would
+      // have, rather than throw to the error page (PR-10).
+      if (isRecordNotFound(err, "WatchEvent")) return true;
+      throw err;
+    }
     const currentWatchedAt =
       title.watchedAt?.getTime() === event.occurredAt.getTime()
         ? occurred
         : title.watchedAt;
     await syncWatchedAtFromEvents(tx, event.titleId, currentWatchedAt);
+    return false;
   });
+  if (eventGone) return { error: "Watch not found." };
 
   revalidateAll();
   return { ok: true };
@@ -951,7 +961,14 @@ export async function deleteWatchEvent(
       SELECT id, "watchedAt" FROM "Title" WHERE id = ${event.titleId} FOR UPDATE`;
     const title = rows[0];
     if (!title) return 0; // title removed concurrently
-    await tx.watchEvent.delete({ where: { id: event.id } });
+    try {
+      await tx.watchEvent.delete({ where: { id: event.id } });
+    } catch (err) {
+      // Another tab deleted it since the read above, so it's gone, as asked.
+      // That delete already resynced the date; doing it again below changes
+      // nothing, and the count still reports what survives (PR-10).
+      if (!isRecordNotFound(err, "WatchEvent")) throw err;
+    }
     await syncWatchedAtFromEvents(
       tx,
       event.titleId,
@@ -2287,11 +2304,18 @@ export async function toggleTitleTag(titleId: string, tagId: string, on: boolean
   if (!title || !tag) return { error: "Title or tag not found." };
 
   if (on) {
-    await prisma.titleTag.upsert({
-      where: { titleId_tagId: { titleId, tagId } },
-      create: { titleId, tagId },
-      update: {},
-    });
+    try {
+      await prisma.titleTag.upsert({
+        where: { titleId_tagId: { titleId, tagId } },
+        create: { titleId, tagId },
+        update: {},
+      });
+    } catch (err) {
+      // This upsert isn't native (a read, then an insert), so two "on" toggles
+      // can both miss the read. The loser's duplicate of this exact pair means
+      // the tag is on, as asked (PR-10).
+      if (!isUniqueViolation(err, "TitleTag", "TitleTag_pkey")) throw err;
+    }
   } else {
     await prisma.titleTag.deleteMany({ where: { titleId, tagId } });
   }
