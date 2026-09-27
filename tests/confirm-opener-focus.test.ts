@@ -6,6 +6,12 @@ async function source(path: string) {
   return readFile(new URL(path, import.meta.url), "utf8");
 }
 
+/** These files of the settings route, read as one text. */
+async function settingsSource(...names: string[]) {
+  const files = await Promise.all(names.map((name) => source(`../src/app/(app)/settings/${name}.tsx`)));
+  return files.join("\n");
+}
+
 /** The `<Button ...>...</Button>` that contains `marker`, and its handler's
  * scope: the button itself, or for a submit button, its form up to the button. */
 function buttonAround(file: string, marker: string): { button: string; handler: string } {
@@ -36,7 +42,7 @@ function assertSoftDisabled({ button, handler }: { button: string; handler: stri
 // JK-08 aria-disabled pattern instead.
 describe("confirm openers keep focus after confirming (JK-03)", () => {
   it("settings openers soft-disable", async () => {
-    const settings = await source("../src/app/(app)/settings/settings-client.tsx");
+    const settings = await settingsSource("shared-links-section", "tags-section", "settings-client", "backup-section");
     for (const marker of [
       "{pendingAction === `revoke:",
       "{pendingAction === `delete:",
@@ -68,6 +74,9 @@ describe("soft-disabled styling", () => {
     );
     for (const path of [
       "../src/app/(app)/settings/settings-client.tsx",
+      "../src/app/(app)/settings/shared-links-section.tsx",
+      "../src/app/(app)/settings/tags-section.tsx",
+      "../src/app/(app)/settings/backup-section.tsx",
       "../src/components/library.tsx",
       "../src/components/import-review.tsx",
     ]) {

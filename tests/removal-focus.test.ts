@@ -32,7 +32,7 @@ function elementWithId(file: string, id: string): string {
 // issue 7). Each now moves focus somewhere sensible that exists afterwards.
 describe("focus after an action removes its own control", () => {
   it("deleted rows hand focus to their section's heading", async () => {
-    const settings = await settingsSource("settings-ui", "settings-client");
+    const settings = await settingsSource("settings-ui", "shared-links-section", "tags-section", "settings-client");
     const heading = between(settings, "function Section(", "function Notice(");
     assert.match(heading, /id=\{headingId\}\s+tabIndex=\{headingId \? -1 : undefined\}/);
 
@@ -76,7 +76,7 @@ describe("focus after an action removes its own control", () => {
   });
 
   it("a restore hands focus to its result once the preview is gone", async () => {
-    const settings = await settingsSource("settings-client", "settings-ui");
+    const settings = await settingsSource("backup-section", "settings-ui");
     const body = between(settings, "async function commitRestore()", "return (");
     assert.match(
       body,

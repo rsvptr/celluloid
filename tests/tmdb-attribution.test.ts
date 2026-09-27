@@ -25,14 +25,15 @@ describe("TMDB attribution (TM-01)", () => {
   });
 
   it("renders on the public share page and in the settings About section", async () => {
-    const [share, settings] = await Promise.all([
+    const [share, settings, aboutSection] = await Promise.all([
       source("../src/app/s/[slug]/page.tsx"),
       source("../src/app/(app)/settings/settings-client.tsx"),
+      source("../src/app/(app)/settings/about-section.tsx"),
     ]);
     const footer = share.slice(share.indexOf("<footer"), share.indexOf("</footer>"));
     assert.match(footer, /<TmdbAttribution\b/);
 
-    const about = settings.slice(settings.indexOf("function AboutSection"));
+    const about = aboutSection.slice(aboutSection.indexOf("function AboutSection"));
     assert.match(about, /title="About"/);
     assert.match(about, /<TmdbAttribution \/>/);
     assert.match(about, /JustWatch/);
