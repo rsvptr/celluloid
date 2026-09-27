@@ -1,5 +1,7 @@
 import { PrismaClient } from "@/generated/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
+import type { PoolConfig } from "pg";
+import { PRISMA_POOL_MAX } from "@/lib/db-pool";
 
 /**
  * Single PrismaClient instance backed by the node-postgres driver adapter
@@ -27,6 +29,28 @@ function warnIfNotPooled(url: string) {
   }
 }
 
+/** node-postgres pool settings for the runtime client. */
+export function poolConfig(
+  url: string | undefined,
+): PoolConfig & { enableChannelBinding: boolean } {
+  return {
+    connectionString: url,
+    // Bounds how many client connections each serverless instance opens to
+    // Neon's pooler, which multiplexes them onto Postgres connections.
+    max: PRISMA_POOL_MAX,
+    // pg otherwise waits forever, both to connect and for a free pool slot,
+    // and ignores a connect_timeout in the URL (NE-04). 15 s leaves room for a
+    // Neon compute waking from scale-to-zero.
+    connectionTimeoutMillis: 15_000,
+    // pg ignores channel_binding=require in the URL (NE-10). This opts in to
+    // SCRAM-SHA-256-PLUS whenever the server offers it. pg falls back to plain
+    // SCRAM-SHA-256 when it isn't offered, so it can't enforce binding the way
+    // libpq's channel_binding=require does. @types/pg doesn't declare the
+    // option, hence the widened type.
+    enableChannelBinding: true,
+  };
+}
+
 function createPrisma() {
   const url = process.env.DATABASE_URL;
   // Only fail fast in production: code paths that skip env.ts's validation
@@ -44,9 +68,7 @@ function createPrisma() {
   } else if (process.env.NODE_ENV === "production") {
     warnIfNotPooled(url);
   }
-  // Explicit pool max: bounds how many direct connections each serverless
-  // instance can open at once.
-  const adapter = new PrismaPg({ connectionString: url, max: 5 });
+  const adapter = new PrismaPg(poolConfig(url));
   return new PrismaClient({ adapter });
 }
 
