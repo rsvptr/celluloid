@@ -2,13 +2,16 @@ import { prisma } from "@/lib/prisma";
 import { MediaType, WatchStatus } from "@/generated/prisma/client";
 import {
   getMovie,
-  getSeason,
+  getSeasons,
   getTv,
+  MAX_APPENDED_SEASONS,
   searchByType,
   type TmdbSearchItem,
+  type TmdbSeasonDetails,
 } from "@/lib/tmdb";
 import { pickBest } from "@/lib/tmdb-match";
 import { mapLimit } from "@/lib/async";
+import { chunks } from "@/lib/rematch-history";
 import { parseWatchedWorkbook, type ParsedTitle } from "./parse-excel";
 
 export interface ImportResult {
@@ -103,7 +106,7 @@ interface EnrichedTitle {
 
 type MovieDetail = Awaited<ReturnType<typeof getMovie>>;
 type TvDetail = Awaited<ReturnType<typeof getTv>>;
-type FetchedSeason = { n: number; sd: Awaited<ReturnType<typeof getSeason>> };
+type FetchedSeason = { n: number; sd: TmdbSeasonDetails };
 /** A TV title's fetched details plus every season that loaded. `incomplete` is
  * true when one or more listed seasons failed to fetch. */
 type TvFetch = { tv: TvDetail; seasons: FetchedSeason[]; incomplete: boolean };
@@ -447,9 +450,10 @@ export function deriveStatus(
 /**
  * Fetch a TV title's details and every released season's episodes from TMDB
  * (network only, no DB writes) so this enrichment can overlap across titles.
- * Best-effort per season: any that fails to load is skipped and logged, and
- * `incomplete` is set so the caller can flag the title's enrichment as partial.
- * Season 0 / specials are excluded by the n >= 1 filter.
+ * Seasons load up to 20 per request. Best-effort per request: one that fails
+ * is skipped and logged, and `incomplete` is set so the caller can flag the
+ * title's enrichment as partial. Season 0 / specials are excluded by the
+ * season_number >= 1 filter.
  */
 async function fetchTvData(
   tmdbId: number,
@@ -457,22 +461,21 @@ async function fetchTvData(
   log: Logger,
 ): Promise<TvFetch> {
   const tv = await getTv(tmdbId);
-  const seasonNumbers = tv.seasons
-    .map((s) => s.season_number)
-    .filter((n) => n >= 1)
-    .sort((a, b) => a - b);
+  const listed = tv.seasons
+    .filter((s) => s.season_number >= 1)
+    .sort((a, b) => a.season_number - b.season_number);
 
   const seasons: FetchedSeason[] = [];
-  for (const n of seasonNumbers) {
+  for (const chunk of chunks(listed, MAX_APPENDED_SEASONS)) {
     try {
-      seasons.push({ n, sd: await getSeason(tmdbId, n) });
+      seasons.push(...(await getSeasons(tmdbId, chunk)));
     } catch (err) {
       log(
-        `    ! season ${n} fetch failed for ${tv.name || fallbackName}: ${(err as Error).message}`,
+        `    ! seasons ${chunk.map((s) => s.season_number).join(", ")} fetch failed for ${tv.name || fallbackName}: ${(err as Error).message}`,
       );
     }
   }
-  return { tv, seasons, incomplete: seasons.length < seasonNumbers.length };
+  return { tv, seasons, incomplete: seasons.length < listed.length };
 }
 
 async function writeTv(

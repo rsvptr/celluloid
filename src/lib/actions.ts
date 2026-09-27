@@ -15,7 +15,13 @@ import {
   Prisma,
 } from "@/generated/prisma/client";
 import { dayStartInZone } from "@/lib/data";
-import { getMovie, getSeason, getTv } from "@/lib/tmdb";
+import {
+  getMovie,
+  getSeasons,
+  getTv,
+  MAX_APPENDED_SEASONS,
+  type TmdbSeasonDetails,
+} from "@/lib/tmdb";
 import { mapLimit } from "@/lib/async";
 import { isTagColor } from "@/lib/tag-colors";
 import { tagNameFilter } from "@/lib/tag-name";
@@ -1238,7 +1244,7 @@ export async function setEpisodesWatchedThrough(
   return { count: changed };
 }
 
-type FetchedSeason = { n: number; sd: Awaited<ReturnType<typeof getSeason>> };
+type FetchedSeason = { n: number; sd: TmdbSeasonDetails };
 
 type PriorEpisode = {
   tmdbId: number | null;
@@ -1273,19 +1279,18 @@ async function fetchSeasonData(
   tv: Awaited<ReturnType<typeof getTv>>,
   opts: { fresh?: boolean } = {},
 ): Promise<{ seasons: FetchedSeason[]; allOk: boolean }> {
-  const seasonNumbers = tv.seasons
-    .map((s) => s.season_number)
-    .filter((n) => n >= 1)
-    .sort((a, b) => a - b);
+  const listed = tv.seasons
+    .filter((s) => s.season_number >= 1)
+    .sort((a, b) => a.season_number - b.season_number);
 
-  // Season fetches are independent — run them concurrently (bounded, so a
-  // 40-season soap doesn't burst-fire at TMDB) instead of one at a time.
-  const fetched = await mapLimit(seasonNumbers, 6, async (n) => ({
-    n,
-    sd: await getSeason(tvTmdbId, n, opts).catch(() => null),
-  }));
-  const seasons = fetched.filter((f): f is FetchedSeason => f.sd !== null);
-  return { seasons, allOk: seasons.length === seasonNumbers.length };
+  // Up to 20 seasons ride on one request. The requests are independent, so
+  // they run concurrently (bounded, so a very long soap doesn't burst-fire at
+  // TMDB). A request that fails counts as its seasons failing to load.
+  const fetched = await mapLimit(chunks(listed, MAX_APPENDED_SEASONS), 6, (chunk) =>
+    getSeasons(tvTmdbId, chunk, opts).catch(() => []),
+  );
+  const seasons = fetched.flat();
+  return { seasons, allOk: seasons.length === listed.length };
 }
 
 /**

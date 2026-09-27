@@ -8,14 +8,14 @@ process.env.TMDB_ACCESS_TOKEN ??= "test-tmdb-token";
 
 type Row = Record<string, unknown>;
 type TmdbStub = {
-  calls: Array<{ kind: string; options: unknown }>;
+  calls: Array<{ kind: string; options: unknown; count?: number }>;
   tvId: number;
   episodes: Array<{ id: number; episode_number: number; name: string; air_date: string }>;
   /** Fields merged over the stubbed TV detail. */
   tv?: Row;
   /** When set, getMovie returns these fields instead of throwing. */
   movie?: Row;
-  /** Season numbers whose fetch rejects. */
+  /** Season numbers whose request rejects, taking its whole chunk with it. */
   failSeasons?: number[];
 };
 
@@ -55,7 +55,8 @@ export async function resolve(specifier, context, nextResolve) {
       "const state = globalThis.__CELLULOID_C1_TMDB__;" +
       "export async function getMovie(id, options) { state.calls.push({kind:'movie', options}); if (!state.movie) throw new Error('unused movie'); return {id,...state.movie}; }" +
       "export async function getTv(id, options) { state.calls.push({kind:'tv', options}); return {id,name:'Series',original_name:'',overview:'',first_air_date:'2012-01-01',poster_path:null,backdrop_path:null,original_language:'en',vote_average:8,episode_run_time:[45],genres:[],number_of_seasons:1,seasons:[{season_number:1}],...state.tv}; }" +
-      "export async function getSeason(_id, n, options) { state.calls.push({kind:'season', options}); if (state.failSeasons?.includes(n)) throw new Error('season unavailable'); return {id:500+n,season_number:n,name:'Season 1',overview:'',air_date:'2012-01-01',poster_path:null,episodes:state.episodes.map(e=>({...e,id:e.id+(n-1)*1000,season_number:n,overview:'',runtime:45,still_path:null,vote_average:0}))}; }"
+      "export const MAX_APPENDED_SEASONS = 20;" +
+      "export async function getSeasons(_id, seasons, options) { state.calls.push({kind:'seasons', options, count: seasons.length}); if (seasons.some(s=>state.failSeasons?.includes(s.season_number))) throw new Error('seasons unavailable'); return seasons.map(({season_number:n})=>({n,sd:{id:500+n,season_number:n,name:'Season '+n,overview:'',air_date:'2012-01-01',poster_path:null,episodes:state.episodes.map(e=>({...e,id:e.id+(n-1)*1000,season_number:n,overview:'',runtime:45,still_path:null,vote_average:0}))}})); }"
     );
   }
   return nextResolve(specifier, context);
@@ -586,6 +587,7 @@ describe("rematchTitle sync fields", { concurrency: false }, () => {
 describe("addFromTmdb sync fields", { concurrency: false }, () => {
   function createAddDb() {
     const created: Row = {};
+    let seasonsWritten = 0;
     const db = {
       title: { findUnique: async () => null },
       $transaction: async (callback: (tx: unknown) => Promise<unknown>) =>
@@ -600,11 +602,13 @@ describe("addFromTmdb sync fields", { concurrency: false }, () => {
             update: async ({ data }: { data: Row }) => Object.assign(created, data),
           },
           season: {
-            createManyAndReturn: async ({ data }: { data: Row[] }) =>
-              data.map((row) => ({
+            createManyAndReturn: async ({ data }: { data: Row[] }) => {
+              seasonsWritten += data.length;
+              return data.map((row) => ({
                 id: `season-${String(row.seasonNumber)}`,
                 seasonNumber: row.seasonNumber,
-              })),
+              }));
+            },
           },
           episode: {
             createMany: async () => undefined,
@@ -612,7 +616,7 @@ describe("addFromTmdb sync fields", { concurrency: false }, () => {
           },
         }),
     };
-    return { db, created };
+    return { db, created, seasonsWritten: () => seasonsWritten };
   }
 
   const TWO_SEASONS: Row = {
@@ -653,6 +657,28 @@ describe("addFromTmdb sync fields", { concurrency: false }, () => {
     assert.equal(state.created.tmdbStatus, "Returning Series");
     assert.equal("metadataSyncedAt" in state.created, false);
     assert.equal("metadataSyncState" in state.created, false);
+  });
+
+  it("loads a long show 20 seasons per request and keeps the requests that loaded", async () => {
+    const state = createAddDb();
+    const tmdb = globalThis.__CELLULOID_C1_TMDB__;
+    tmdb.calls.length = 0;
+    tmdb.tv = {
+      number_of_seasons: 25,
+      seasons: Array.from({ length: 25 }, (_, i) => ({ id: 900 + i, season_number: i + 1 })),
+    };
+    tmdb.episodes = [];
+    tmdb.failSeasons = [23];
+    Object.assign(globalThis.__CELLULOID_C1_DB__, state.db);
+
+    const result = await addFromTmdb(200, "tv");
+    assert.ok(result.warning);
+    assert.deepEqual(
+      tmdb.calls.filter((call) => call.kind === "seasons").map((call) => call.count),
+      [20, 5],
+    );
+    assert.equal(state.seasonsWritten(), 20);
+    assert.equal(state.created.totalSeasons, 20);
   });
 });
 

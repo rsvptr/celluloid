@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { afterEach, describe, it } from "node:test";
-import { getMovie, getSeason, getTv } from "../src/lib/tmdb";
+import {
+  appendedSeasons,
+  getMovie,
+  getSeasons,
+  getTv,
+  MAX_APPENDED_SEASONS,
+} from "../src/lib/tmdb";
 
 process.env.TMDB_ACCESS_TOKEN ??= "test-tmdb-token";
 
@@ -21,7 +27,7 @@ describe("fresh TMDB detail reads", { concurrency: false }, () => {
 
     await getMovie(1, { fresh: true });
     await getTv(2, { fresh: true });
-    await getSeason(2, 1, { fresh: true });
+    await getSeasons(2, [{ id: 21, season_number: 1 }], { fresh: true });
 
     assert.equal(calls.length, 3);
     for (const call of calls) {
@@ -55,5 +61,56 @@ describe("fresh TMDB detail reads", { concurrency: false }, () => {
       actionsSource,
       /fetchSeasonData\(tmdbId, tv, \{ fresh: true \}\)/,
     );
+  });
+});
+
+describe("appended season requests", { concurrency: false }, () => {
+  const season = (n: number) => ({
+    season_number: n,
+    name: `Season ${n}`,
+    overview: "",
+    air_date: null,
+    poster_path: null,
+    episodes: [],
+  });
+
+  it("takes season ids from the show's list and leaves out seasons TMDB omitted", () => {
+    assert.deepEqual(
+      appendedSeasons({ id: 9, name: "Show", "season/1": season(1), "season/3": season(3) }, [
+        { id: 101, season_number: 1 },
+        { id: 102, season_number: 2 },
+        { id: 103, season_number: 3 },
+      ]),
+      [
+        { n: 1, sd: { ...season(1), id: 101 } },
+        { n: 3, sd: { ...season(3), id: 103 } },
+      ],
+    );
+  });
+
+  it("asks for a chunk of seasons on one show request", async () => {
+    const calls: URL[] = [];
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      calls.push(new URL(String(input)));
+      return Response.json({ id: 2, "season/1": season(1), "season/2": season(2) });
+    }) as typeof fetch;
+
+    const seasons = await getSeasons(2, [
+      { id: 21, season_number: 1 },
+      { id: 22, season_number: 2 },
+    ]);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].pathname, "/3/tv/2");
+    assert.equal(calls[0].searchParams.get("append_to_response"), "season/1,season/2");
+    assert.equal(calls[0].searchParams.get("language"), "en-US");
+    assert.deepEqual(
+      seasons.map(({ n, sd }) => [n, sd.id]),
+      [
+        [1, 21],
+        [2, 22],
+      ],
+    );
+    // TMDB answers 400 (code 27) past 20 appends.
+    assert.equal(MAX_APPENDED_SEASONS, 20);
   });
 });

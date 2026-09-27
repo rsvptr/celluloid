@@ -7,6 +7,8 @@ import {
   type Prisma,
 } from "@/generated/prisma/client";
 import {
+  appendedSeasons,
+  MAX_APPENDED_SEASONS,
   TmdbError,
   tmdbErrorCode,
   type TmdbEpisode,
@@ -18,6 +20,7 @@ import { mapLimit } from "@/lib/async";
 import { env } from "@/lib/env";
 import {
   ACTIVE_EPISODE_FILTER,
+  chunks,
   deriveNextEpisodeAirDate,
   discoveredAtForNewEpisode,
   WITHDRAWN_EPISODE_NUMBER_OFFSET,
@@ -51,7 +54,7 @@ export { deriveNextEpisodeAirDate, discoveredAtForNewEpisode } from "@/lib/remat
 // --- TMDB access ------------------------------------------------------------
 //
 // This module does its own fetching rather than calling lib/tmdb's getTv /
-// getSeason. Those wrappers cache responses for 24h, which is right for the
+// getSeasons. Those wrappers cache responses for 24h, which is right for the
 // interactive paths but wrong here: on a daily cadence a still-warm entry means
 // the sync reads yesterday's answer to "did anything air?" — the one question
 // it exists to ask. lib/tmdb's fetcher is module-private and its caching is
@@ -108,6 +111,8 @@ interface TmdbTvSyncDetail extends TmdbTitleSyncDetail {
 
 /** The compact season rows included in TMDB's TV-detail response. */
 export interface TmdbSeasonSummary {
+  /** The season's TMDB id, which appended season details omit. */
+  id: number;
   season_number: number;
   episode_count?: number | null;
   air_date?: string | null;
@@ -222,16 +227,21 @@ function fetchTvDetail(tmdbId: number, deadline: number): Promise<TmdbTvSyncDeta
   );
 }
 
-function fetchSeason(
+/** Up to MAX_APPENDED_SEASONS seasons in one request, ids from the show's season list. */
+async function fetchSeasons(
   tmdbId: number,
-  seasonNumber: number,
+  seasons: TmdbSeasonSummary[],
   deadline: number,
-): Promise<TmdbSeasonDetails> {
-  return tmdbGet<TmdbSeasonDetails>(
-    `/tv/${tmdbId}/season/${seasonNumber}`,
-    { language: "en-US" },
+): Promise<TmdbSeasonDetails[]> {
+  const response = await tmdbGet<Record<string, unknown>>(
+    `/tv/${tmdbId}`,
+    {
+      language: "en-US",
+      append_to_response: seasons.map((s) => `season/${s.season_number}`).join(","),
+    },
     deadline,
   );
+  return appendedSeasons(response, seasons).map(({ sd }) => sd);
 }
 
 /**
@@ -551,7 +561,7 @@ export interface StoredSeasonSummary {
  * compact counters.
  */
 export function seasonNumbersToRefresh(
-  remote: ReadonlyArray<TmdbSeasonSummary>,
+  remote: ReadonlyArray<Omit<TmdbSeasonSummary, "id">>,
   stored: ReadonlyArray<StoredSeasonSummary>,
   newestCount = 2,
 ): number[] {
@@ -827,18 +837,30 @@ async function syncOneTitle(
     candidate.seasons,
   );
 
-  const fetched = await mapLimit(seasonNumbers, SEASON_CONCURRENCY, (n) =>
-    fetchSeason(candidate.tmdbId, n, deadline).catch((err: unknown) => {
-      // Running out of budget is not a season that failed to load. Treating it
-      // as one would write PARTIAL and stamp metadataSyncedAt, sending a title
-      // to the back of the queue with half its seasons read; abandoning the
-      // whole title leaves it where it is, first in line tomorrow. A rejected
-      // token is the whole run's failure, not this season's.
-      if (err instanceof SyncBudgetExhaustedError || isAuthFailure(err)) throw err;
-      return null;
-    }),
+  // Up to 20 seasons per request; the ids appended seasons lack come from the
+  // show's own season list. A request that fails counts as its seasons
+  // failing to load.
+  const summaries = new Map(
+    (detail.seasons ?? []).map((season) => [season.season_number, season]),
   );
-  const seasons = fetched.filter((s): s is TmdbSeasonDetails => s !== null);
+  const fetched = await mapLimit(
+    chunks(
+      seasonNumbers.map((n) => summaries.get(n)!),
+      MAX_APPENDED_SEASONS,
+    ),
+    SEASON_CONCURRENCY,
+    (chunk) =>
+      fetchSeasons(candidate.tmdbId, chunk, deadline).catch((err: unknown) => {
+        // Running out of budget is not a season that failed to load. Treating it
+        // as one would write PARTIAL and stamp metadataSyncedAt, sending a title
+        // to the back of the queue with half its seasons read; abandoning the
+        // whole title leaves it where it is, first in line tomorrow. A rejected
+        // token is the whole run's failure, not this season's.
+        if (err instanceof SyncBudgetExhaustedError || isAuthFailure(err)) throw err;
+        return [];
+      }),
+  );
+  const seasons = fetched.flat();
   const allOk = seasons.length === seasonNumbers.length;
 
   const nextEpisodeAirDate = deriveNextEpisodeAirDate(

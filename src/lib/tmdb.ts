@@ -416,16 +416,44 @@ export function getTv(id: number, opts: DetailOptions = {}): Promise<TmdbTvDetai
   );
 }
 
-export function getSeason(
+/** TMDB serves at most 20 `append_to_response` items per request (code 27 past that). */
+export const MAX_APPENDED_SEASONS = 20;
+
+/**
+ * The seasons a `/tv/{id}?append_to_response=season/N,...` response carried,
+ * shaped like the standalone season endpoint. Appended seasons omit their
+ * `id`, so it is taken from the show's own season list. A season missing from
+ * the response is left out, and callers count it as not loaded.
+ */
+export function appendedSeasons(
+  response: Record<string, unknown>,
+  seasons: ReadonlyArray<Pick<TmdbSeasonSummary, "id" | "season_number">>,
+): { n: number; sd: TmdbSeasonDetails }[] {
+  return seasons.flatMap(({ id, season_number: n }) => {
+    const sd = response[`season/${n}`] as Omit<TmdbSeasonDetails, "id"> | undefined;
+    return sd ? [{ n, sd: { ...sd, id } }] : [];
+  });
+}
+
+/**
+ * Full details for up to MAX_APPENDED_SEASONS seasons of one show in a single
+ * request, rather than one request per season. `seasons` are entries from the
+ * show's season list, which supply the ids the appended seasons lack.
+ */
+export async function getSeasons(
   tvId: number,
-  seasonNumber: number,
+  seasons: ReadonlyArray<Pick<TmdbSeasonSummary, "id" | "season_number">>,
   opts: DetailOptions = {},
-): Promise<TmdbSeasonDetails> {
-  return tmdb<TmdbSeasonDetails>(
-    `/tv/${tvId}/season/${seasonNumber}`,
-    { language: "en-US" },
+): Promise<{ n: number; sd: TmdbSeasonDetails }[]> {
+  const response = await tmdb<Record<string, unknown>>(
+    `/tv/${tvId}`,
+    {
+      language: "en-US",
+      append_to_response: seasons.map((s) => `season/${s.season_number}`).join(","),
+    },
     { revalidate: 60 * 60 * 24, ...opts },
   );
+  return appendedSeasons(response, seasons);
 }
 
 // --- Title extras: watch providers, related titles, videos ------------------
