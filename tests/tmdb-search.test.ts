@@ -56,14 +56,15 @@ describe("external id lookups (TM-12)", { concurrency: false }, () => {
     return urls;
   }
 
-  it("returns an IMDb episode id's series id alongside any titles", async () => {
-    // Live shape of /find/tt0583459 (Friends S1E1).
+  it("finds no title for an IMDb episode id, rather than its series", async () => {
+    // Live shape of /find/tt2301451 (Breaking Bad S5E14): an episode's status
+    // and rating describe that episode, so it must not come back as the show.
     serveFind({
       movie_results: [],
       tv_results: [],
-      tv_episode_results: [{ id: 85987, show_id: 1668, season_number: 1, episode_number: 1 }],
+      tv_episode_results: [{ id: 62161, show_id: 1396, season_number: 5, episode_number: 14 }],
     });
-    assert.deepEqual(await findByImdbId("tt0583459"), { titles: [], episodeShowIds: [1668] });
+    assert.deepEqual(await findByImdbId("tt2301451"), []);
   });
 
   it("looks a TVDB id up as tvdb_id and keeps only the series match", async () => {
@@ -85,7 +86,7 @@ describe("external id lookups (TM-12)", { concurrency: false }, () => {
 
   it("makes no request for a malformed id", async () => {
     const urls = serveFind({});
-    assert.deepEqual(await findByImdbId("not-an-id"), { titles: [], episodeShowIds: [] });
+    assert.deepEqual(await findByImdbId("not-an-id"), []);
     assert.deepEqual(await findTvByTvdbId(0), []);
     assert.equal(urls.length, 0);
   });

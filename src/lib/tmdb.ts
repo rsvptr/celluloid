@@ -375,60 +375,47 @@ export async function searchByType(
 
 /**
  * Shape of `/find/{external_id}`. TMDB returns one array per object kind; only
- * the ones we can import from are declared, and `media_type` is stamped by the
- * caller below rather than trusted (it is documented on movie results but not
- * on the TV ones).
+ * the two we can import are declared, and `media_type` is stamped by the caller
+ * below rather than trusted (it is documented on movie results but not on the
+ * TV ones). An episode id comes back only under `tv_episode_results`, which is
+ * deliberately not read: an episode row's status and rating describe one
+ * episode, not its show, so it must not import as the show.
  */
 interface TmdbFindResponse {
   movie_results?: TmdbSearchItem[];
   tv_results?: TmdbSearchItem[];
-  /** An episode id resolves to the episode, which names its series. */
-  tv_episode_results?: { show_id?: number }[];
 }
 
-/** What `/find` matched for one external id. */
-export interface ExternalIdMatch {
-  /** Movies first, then TV. */
-  titles: TmdbSearchItem[];
-  /** The series of any episodes the id named. */
-  episodeShowIds: number[];
-}
-
+/** Movies first, then TV. */
 async function findByExternalId(
   id: string,
   source: "imdb_id" | "tvdb_id",
   signal?: AbortSignal,
-): Promise<ExternalIdMatch> {
+): Promise<TmdbSearchItem[]> {
   const data = await tmdb<TmdbFindResponse>(
     `/find/${encodeURIComponent(id)}`,
     { external_source: source, language: "en-US" },
     { revalidate: 60 * 60 * 24, signal },
   );
-  return {
-    titles: [
-      ...(data.movie_results ?? []).map((r) => ({ ...r, media_type: "movie" as const })),
-      ...(data.tv_results ?? []).map((r) => ({ ...r, media_type: "tv" as const })),
-    ],
-    episodeShowIds: (data.tv_episode_results ?? []).flatMap((episode) =>
-      Number.isSafeInteger(episode.show_id) ? [episode.show_id as number] : [],
-    ),
-  };
+  return [
+    ...(data.movie_results ?? []).map((r) => ({ ...r, media_type: "movie" as const })),
+    ...(data.tv_results ?? []).map((r) => ({ ...r, media_type: "tv" as const })),
+  ];
 }
 
 /**
  * Resolve an IMDb id ("tt0110912") to its TMDB entries. An external id is an
  * exact identity, so a spreadsheet that carries one never has to go through the
  * fuzzy name search — which is where a large import loses most of its accuracy.
- * IMDb numbers episodes in the same space as titles, so an episode's id comes
- * back as its series' id. An unknown or malformed id yields no matches rather
- * than an error, since a bad cell is the caller's normal case.
+ * Returns movies first, then TV; an unknown or malformed id yields an empty
+ * list rather than an error, since a bad cell is the caller's normal case.
  */
 export async function findByImdbId(
   imdbId: string,
   opts: { signal?: AbortSignal } = {},
-): Promise<ExternalIdMatch> {
+): Promise<TmdbSearchItem[]> {
   const id = imdbId.trim();
-  if (!/^tt\d{5,12}$/i.test(id)) return { titles: [], episodeShowIds: [] };
+  if (!/^tt\d{5,12}$/i.test(id)) return [];
   return findByExternalId(id, "imdb_id", opts.signal);
 }
 
@@ -443,7 +430,7 @@ export async function findTvByTvdbId(
   opts: { signal?: AbortSignal } = {},
 ): Promise<TmdbSearchItem[]> {
   if (!Number.isSafeInteger(tvdbId) || tvdbId <= 0) return [];
-  const { titles } = await findByExternalId(String(tvdbId), "tvdb_id", opts.signal);
+  const titles = await findByExternalId(String(tvdbId), "tvdb_id", opts.signal);
   return titles.filter((title) => title.media_type === "tv");
 }
 
