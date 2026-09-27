@@ -213,4 +213,26 @@ describe("auth rate limits", { concurrency: false }, () => {
       assert.equal(await statusFrom(ip, path), 429, `${path} attempt ${max + 1}`);
     }
   });
+
+  it("keeps /get-session out of the limiter entirely (BA-01)", async () => {
+    const ip = "198.51.100.7";
+    // One past the global 100-per-minute budget.
+    for (let request = 1; request <= 101; request++) {
+      const response = await auth.handler(
+        new Request(`${origin}/api/auth/get-session`, {
+          headers: { origin, "x-forwarded-for": ip },
+        }),
+      );
+      await response.body?.cancel();
+      assert.equal(response.status, 200, `request ${request}`);
+    }
+    // No counter row either: the rule skips the limiter's database writes, not
+    // just its verdict.
+    const { adapter } = await auth.$context;
+    const rows = await adapter.findMany({
+      model: "rateLimit",
+      where: [{ field: "key", value: `${ip}|/get-session` }],
+    });
+    assert.deepEqual(rows, []);
+  });
 });

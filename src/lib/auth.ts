@@ -97,6 +97,11 @@ export const auth = betterAuth({
       "/two-factor/generate-backup-codes": { window: 60, max: 5 },
       "/two-factor/get-totp-uri": { window: 60, max: 5 },
       "/two-factor/verify-otp": { window: 60, max: 5 },
+      // `false` skips the limiter entirely. The endpoint takes no guessable
+      // input (the token sits in an HMAC-signed cookie) and returns early
+      // without one, so a limiter write (several Postgres round trips) costs
+      // more than the request it would guard.
+      "/get-session": false,
     },
   },
 
