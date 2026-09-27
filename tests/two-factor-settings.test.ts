@@ -40,3 +40,40 @@ describe("turning 2FA on signs out other devices (BA-07)", () => {
     );
   });
 });
+
+// Used or lost codes meant turning 2FA off and on again, re-scanning the QR
+// code, just to get new ones (BA-09).
+describe("regenerating backup codes (BA-09)", () => {
+  it("is a password-gated POST form with a soft-disabled, guarded submit", async () => {
+    const settings = await source(settingsPath);
+    const marker = ": null} Regenerate backup codes";
+    const at = settings.indexOf(marker);
+    assert.notEqual(at, -1);
+    const form = settings.slice(settings.lastIndexOf("<form", at), settings.indexOf("</form>", at));
+    assert.match(form, /^<form\s+method="post"/);
+    assert.match(form, /type="password"[\s\S]*?autoComplete="current-password"/);
+    const button = form.slice(form.lastIndexOf("<Button", form.indexOf(marker)));
+    assert.match(button, /type="submit"/);
+    assert.match(button, /softDisabledClass/);
+    assert.doesNotMatch(button, /\sdisabled=\{/);
+    const condition = button.match(/aria-disabled=\{([^}]*)\}/)?.[1];
+    assert.equal(condition, "codesBusy || !codesPassword");
+    // Enter, or a password manager's requestSubmit, must respect the same state.
+    assert.ok(form.includes(`if (${condition}) return;`));
+  });
+
+  it("sends the password to generateBackupCodes and shows the codes once, with copy and download", async () => {
+    const settings = await source(settingsPath);
+    const handler = between(settings, "async function regenerateBackupCodes()", "async function beginEnable()");
+    assert.match(handler, /authClient\.twoFactor\.generateBackupCodes\(\{\s*password: codesPassword,?\s*\}\)/);
+    assert.match(handler, /setCodesPassword\(""\)/);
+
+    const panel = between(settings, 'id="settings-new-backup-codes"', "Done\n");
+    assert.match(panel, /won&apos;t be shown again/);
+    assert.match(panel, /copyText\(newCodes\.join\("\\n"\), "Backup codes copied"\)/);
+    assert.match(panel, /saveBlob\(/);
+    assert.match(panel, /"celluloid-backup-codes\.txt"/);
+    // Turning 2FA off clears codes still on screen.
+    assert.match(between(settings, "function reset()", "async function"), /setNewCodes\(null\)/);
+  });
+});

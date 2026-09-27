@@ -284,9 +284,10 @@ function totpCode(uri: string): string {
 describe("two-factor account changes", { concurrency: false }, () => {
   const password = "synthetic-password-67890";
   const email = "two-factor-sessions@example.test";
+  const laptop = device("192.0.2.10");
+  let setupCodes: string[] = [];
 
   it("turning 2FA on and then revoking other sessions keeps only this device (BA-07)", async () => {
-    const laptop = device("192.0.2.10");
     const stolen = device("192.0.2.66");
     assert.equal(
       (await laptop("/sign-up/email", { inviteCode: "test-invite", name: "Owner", email, password }))
@@ -298,7 +299,8 @@ describe("two-factor account changes", { concurrency: false }, () => {
     // The Settings flow: enable with the password, verify a code, then revoke.
     const enabled = await laptop("/two-factor/enable", { password });
     assert.equal(enabled.status, 200);
-    const { totpURI } = enabled.json as { totpURI: string };
+    const { totpURI, backupCodes } = enabled.json as { totpURI: string; backupCodes: string[] };
+    setupCodes = backupCodes;
     assert.equal((await laptop("/two-factor/verify-totp", { code: totpCode(totpURI) })).status, 200);
     assert.equal((await laptop("/revoke-other-sessions", {})).status, 200);
 
@@ -317,5 +319,24 @@ describe("two-factor account changes", { concurrency: false }, () => {
     );
     const other = await stolen("/get-session?disableCookieCache=true", undefined, "GET");
     assert.equal(other.json, null);
+  });
+
+  it("regenerating backup codes needs the password and retires the old codes (BA-09)", async () => {
+    assert.equal(setupCodes.length, 10);
+    const wrong = await laptop("/two-factor/generate-backup-codes", { password: "not-my-password" });
+    assert.equal(wrong.status, 400);
+
+    // The shape Settings reads: { backupCodes } in Better Auth's xxxxx-xxxxx form.
+    const fresh = await laptop("/two-factor/generate-backup-codes", { password });
+    assert.equal(fresh.status, 200);
+    const { backupCodes } = fresh.json as { backupCodes: string[] };
+    assert.equal(backupCodes.length, 10);
+    for (const code of backupCodes) assert.match(code, /^[A-Za-z0-9]{5}-[A-Za-z0-9]{5}$/);
+
+    // Settings tells the owner the old codes stop working; hold it to that.
+    const old = await laptop("/two-factor/verify-backup-code", { code: setupCodes[0] });
+    assert.equal(old.status, 401);
+    const current = await laptop("/two-factor/verify-backup-code", { code: backupCodes[0] });
+    assert.equal(current.status, 200);
   });
 });
