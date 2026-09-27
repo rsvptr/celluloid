@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { register } from "node:module";
 import { describe, it } from "node:test";
 import { createElement } from "react";
@@ -64,6 +65,22 @@ describe("Poster placeholder (JK-29)", () => {
     const html = poster({ path: null });
     assert.doesNotMatch(html, /<img/);
     assert.match(html, /class="hidden [^"]*@min-\[80px\]:line-clamp-3">The Long, Hot Summer</);
+  });
+});
+
+// renderToStaticMarkup can't fire an image's onError, so this pins the shape:
+// a failed URL swaps in the placeholder and unmounts <Image> (no retry loop),
+// and the state is keyed by URL so a new path gets a fresh attempt.
+describe("Poster load failure (JK-14)", () => {
+  it("falls back to the placeholder for the URL that failed", async () => {
+    const src = await readFile(new URL("../src/components/poster.tsx", import.meta.url), "utf8");
+    assert.match(src, /const \[failedUrl, setFailedUrl\] = useState<string \| null>\(null\);/);
+    const at = src.indexOf("{url && failedUrl !== url ? (");
+    assert.notEqual(at, -1);
+    const branch = src.slice(at);
+    const image = branch.slice(branch.indexOf("<Image"), branch.indexOf("/>"));
+    assert.match(image, /onError=\{\(\) => setFailedUrl\(url\)\}/);
+    assert.match(branch, /^[^]*?\/>\s*\) : \(\s*<PlaceholderPoster name=\{name\} mediaType=\{mediaType\} \/>/);
   });
 });
 
