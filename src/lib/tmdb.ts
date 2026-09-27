@@ -220,6 +220,9 @@ export interface TmdbTvDetails {
   number_of_episodes: number;
   genres: TmdbGenre[];
   seasons: TmdbSeasonSummary[];
+  /** TMDB's lifecycle string: "Returning Series", "Ended", "Canceled", ... */
+  status?: string | null;
+  next_episode_to_air?: { air_date?: string | null } | null;
 }
 
 export interface TmdbEpisode {

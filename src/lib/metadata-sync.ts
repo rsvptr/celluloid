@@ -12,10 +12,11 @@ import { mapLimit } from "@/lib/async";
 import { env } from "@/lib/env";
 import {
   ACTIVE_EPISODE_FILTER,
+  deriveNextEpisodeAirDate,
   discoveredAtForNewEpisode,
   WITHDRAWN_EPISODE_NUMBER_OFFSET,
 } from "@/lib/rematch-history";
-export { discoveredAtForNewEpisode } from "@/lib/rematch-history";
+export { deriveNextEpisodeAirDate, discoveredAtForNewEpisode } from "@/lib/rematch-history";
 
 /**
  * Scheduled TMDB metadata refresh.
@@ -532,42 +533,6 @@ export function seasonNumbersToRefresh(
   }
 
   return [...selected].sort((a, b) => a - b);
-}
-
-/**
- * When the next episode airs, or null once nothing is scheduled.
- *
- * TMDB's own `next_episode_to_air` is authoritative but frequently absent for
- * smaller and regional shows, so the earliest future air date across the
- * seasons we just read stands in for it. Returning null when neither knows is
- * deliberate: it clears a date that has since passed, so the airing-soon view
- * never advertises an episode that already aired.
- */
-export function deriveNextEpisodeAirDate(
-  tmdbNextAirDate: string | null | undefined,
-  seasons: TmdbSeasonDetails[],
-  now: Date,
-): Date | null {
-  const today = startOfUtcDay(now).getTime();
-  const stated = toDate(tmdbNextAirDate);
-  if (stated && stated.getTime() >= today) return stated;
-
-  let earliest: Date | null = null;
-  for (const season of seasons) {
-    for (const ep of season.episodes ?? []) {
-      const airs = toDate(ep.air_date);
-      if (!airs || airs.getTime() < today) continue;
-      if (earliest === null || airs.getTime() < earliest.getTime()) earliest = airs;
-    }
-  }
-  return earliest;
-}
-
-/** Air dates are calendar dates, so "future" is measured from midnight, not now. */
-function startOfUtcDay(now: Date): Date {
-  return new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
-  );
 }
 
 /**

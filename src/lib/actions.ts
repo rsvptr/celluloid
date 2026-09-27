@@ -8,6 +8,7 @@ import { prisma } from "@/lib/prisma";
 // unique-constraint race. Its namespace also provides the types used below.
 import {
   MediaType,
+  MetadataSyncState,
   WatchStatus,
   WatchEventKind,
   WatchEventSource,
@@ -20,6 +21,7 @@ import { isTagColor } from "@/lib/tag-colors";
 import { tagNameFilter } from "@/lib/tag-name";
 import {
   ACTIVE_EPISODE_FILTER,
+  deriveNextEpisodeAirDate,
   discoveredAtForNewEpisode,
   planEpisodeEventRelinks,
   preservesEpisodeHistory,
@@ -1506,6 +1508,18 @@ export async function addFromTmdb(
             // partial load, fall back to the number of seasons actually stored so
             // totalSeasons never overstates what was tracked.
             totalSeasons: allOk ? (tv.number_of_seasons ?? null) : seasons.length,
+            tmdbStatus: tv.status ?? null,
+            nextEpisodeAirDate: deriveNextEpisodeAirDate(
+              tv.next_episode_to_air?.air_date,
+              seasons.map((s) => s.sd),
+              now,
+            ),
+            // Only a complete load counts as synced. A partial one stays
+            // never-synced, so the scheduled sync takes it first and fills in
+            // the missing seasons instead of sending it to the back of the queue.
+            ...(allOk
+              ? { metadataSyncedAt: now, metadataSyncState: MetadataSyncState.OK }
+              : {}),
             status: WatchStatus.WATCHLIST,
             source: "tmdb",
           },
@@ -1571,6 +1585,17 @@ export async function addFromTmdb(
 // --- Re-match / refresh a title's TMDB link --------------------------------
 
 /**
+ * Provider ids are cached per TMDB entry, so after a re-match to a different
+ * entry they describe the old one. Clearing them also puts the title at the
+ * head of the scheduled sync's provider queue.
+ */
+const CLEARED_PROVIDER_CACHE = {
+  streamProviderIds: [] as number[],
+  providersRegion: null,
+  providersSyncedAt: null,
+};
+
+/**
  * Re-links a title to a (possibly different) TMDB entry and refreshes its
  * metadata, preserving title-level personal tracking. A refresh of the same TV
  * series also preserves episode progress and event links by season/episode
@@ -1619,11 +1644,16 @@ export async function rematchTitle(
         // cascades onto Episode (onDelete: Cascade), so running it before the
         // Title lock would lock Episode rows first and invert the order against a
         // concurrent recompute / bulkSetStatus, risking a deadlock.
-        const rows = await tx.$queryRaw<{ id: string }[]>`
-          SELECT id FROM "Title"
+        const rows = await tx.$queryRaw<
+          { id: string; tmdbId: number | null; mediaType: MediaType }[]
+        >`
+          SELECT id, "tmdbId", "mediaType" FROM "Title"
           WHERE id = ${titleId} AND "userId" = ${userId}
           FOR UPDATE`;
-        if (!rows[0]) return false; // title removed concurrently
+        const locked = rows[0];
+        if (!locked) return false; // title removed concurrently
+        const sameEntry =
+          locked.mediaType === MediaType.MOVIE && locked.tmdbId === tmdbId;
         await tx.season.deleteMany({ where: { titleId } }); // in case it was a TV match
         await tx.title.update({
           where: { id: titleId },
@@ -1643,6 +1673,15 @@ export async function rematchTitle(
             totalSeasons: null,
             totalEpisodes: null,
             watchedEpisodes: 0,
+            // TV lifecycle and TV sync state from an earlier TV match mean
+            // nothing for a movie. Left behind, the Airing page would list it
+            // on the old show's date and Settings would list it as failed.
+            tmdbStatus: null,
+            nextEpisodeAirDate: null,
+            metadataSyncedAt: null,
+            metadataSyncState: null,
+            metadataLastError: null,
+            ...(sameEntry ? {} : CLEARED_PROVIDER_CACHE),
             source: "tmdb",
           },
         });
@@ -1779,6 +1818,20 @@ export async function rematchTitle(
               runtime: tv.episode_run_time?.[0] ?? null,
               genres: tv.genres?.map((g) => g.name) ?? [],
               totalSeasons: tv.number_of_seasons ?? null,
+              // Every season was just loaded (a partial load aborted above), so
+              // this is a complete sync of the entry the title now points at.
+              // The lifecycle must be the new entry's: an old "Ended" would
+              // otherwise keep a watched show out of the sync for good.
+              tmdbStatus: tv.status ?? null,
+              nextEpisodeAirDate: deriveNextEpisodeAirDate(
+                tv.next_episode_to_air?.air_date,
+                seasons.map((s) => s.sd),
+                now,
+              ),
+              metadataSyncedAt: now,
+              metadataSyncState: MetadataSyncState.OK,
+              metadataLastError: null,
+              ...(preserveEpisodes ? {} : CLEARED_PROVIDER_CACHE),
               source: "tmdb",
             },
           });
