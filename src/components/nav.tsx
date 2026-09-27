@@ -70,9 +70,11 @@ export function Nav({ userName }: { userName?: string | null }) {
   // The desktop active pill is one persistent element that moves to the active
   // link's offset and width. A layoutId pill measured its box against page
   // scroll, which Next resets on navigation, so it flew in from the old scroll
-  // position. Until the first measurement (and for good if Motion's features
-  // failed to load, since the pill could not move) the active link draws a
-  // static pill instead, so the SSR nav already shows one.
+  // position. Until the first measurement the active link draws a static pill
+  // instead, so the SSR nav already shows one. If Motion's features fail to
+  // load, the moving pill can't follow a route change, so CSS keyed on the
+  // <html> flag (motion.tsx) swaps back to the static pill, which is always on
+  // the current link.
   const deskNavRef = useRef<HTMLElement>(null);
   const [pill, setPill] = useState<{ x: number; width: number } | null>(null);
   useLayoutEffect(() => {
@@ -81,8 +83,7 @@ export function Nav({ userName }: { userName?: string | null }) {
     const measure = () => {
       if (!nav.offsetWidth) return; // hidden below lg
       const link = nav.querySelector<HTMLElement>('[aria-current="page"]');
-      const failed = "motionFailed" in document.documentElement.dataset;
-      setPill(link && !failed ? { x: link.offsetLeft, width: link.offsetWidth } : null);
+      setPill(link ? { x: link.offsetLeft, width: link.offsetWidth } : null);
     };
     // Measure before paint, so the pill starts moving in the same frame as the
     // link's color, then again whenever late fonts or a resize change the row.
@@ -173,7 +174,7 @@ export function Nav({ userName }: { userName?: string | null }) {
                 {pill && (
                   <motion.span
                     aria-hidden
-                    className="absolute inset-y-0 left-0 -z-10 rounded-lg bg-surface-2"
+                    className="absolute inset-y-0 left-0 -z-10 rounded-lg bg-surface-2 [[data-motion-failed]_&]:hidden"
                     initial={false}
                     animate={pill}
                     transition={{ type: "spring", stiffness: 400, damping: 40 }}
@@ -199,8 +200,13 @@ export function Nav({ userName }: { userName?: string | null }) {
                           : "text-muted hover:bg-surface-2/60 hover:text-foreground",
                       )}
                     >
-                      {active && !pill && (
-                        <span className="absolute inset-0 -z-10 rounded-lg bg-surface-2" />
+                      {active && (
+                        <span
+                          className={cn(
+                            "absolute inset-0 -z-10 rounded-lg bg-surface-2",
+                            pill && "hidden [[data-motion-failed]_&]:block",
+                          )}
+                        />
                       )}
                       <Icon size={16} />
                       <span className="hidden lg:inline">{l.label}</span>
