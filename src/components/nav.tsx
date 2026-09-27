@@ -17,7 +17,6 @@ import {
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
-import { authClient } from "@/lib/auth-client";
 import {
   AnimatePresence,
   EASE_OUT,
@@ -102,6 +101,10 @@ export function Nav({ userName }: { userName?: string | null }) {
     if (signingOutRef.current) return;
     signingOutRef.current = true;
     try {
+      // Loaded on demand: the auth client is only needed here, and a static
+      // import put it in the shell of every signed-in page (VE-11). A failed
+      // chunk load lands in the catch below like a failed request.
+      const { authClient } = await import("@/lib/auth-client");
       await authClient.signOut();
       router.push("/login");
       router.refresh();
