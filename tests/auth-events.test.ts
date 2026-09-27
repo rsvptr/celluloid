@@ -45,16 +45,15 @@ const prisma = new PrismaClient({
   }),
 });
 
-// The app sees this client, with a switch that makes every audit write fail.
+// The app sees this client, with a switch that makes every audit table call fail.
 let failAuditWrites = false;
 const appPrisma = new Proxy(prisma, {
   get(target, property) {
     if (property === "authEvent" && failAuditWrites) {
-      return {
-        create: async () => {
-          throw new Error("audit table unavailable");
-        },
+      const fail = async () => {
+        throw new Error("audit table unavailable");
       };
+      return { create: fail, deleteMany: fail, findMany: fail };
     }
     const value = Reflect.get(target, property, target);
     return typeof value === "function" ? value.bind(target) : value;
@@ -96,7 +95,29 @@ export async function resolve(specifier, context, nextResolve) {
 register(`data:text/javascript,${encodeURIComponent(loader)}`, import.meta.url);
 
 const { auth } = await import("../src/lib/auth");
-const { USER_AGENT_MAX_LENGTH } = await import("../src/lib/auth-events");
+const {
+  AUTH_EVENT_RETENTION_DAYS,
+  RECENT_AUTH_EVENT_LIMIT,
+  USER_AGENT_MAX_LENGTH,
+  authEventRetentionCutoff,
+  getRecentAuthEvents,
+  pruneAuthEvents,
+} = await import("../src/lib/auth-events");
+
+/** Runs `fn` with console.error captured, and returns the logged lines. */
+async function captureErrors(fn: () => Promise<void>): Promise<string[]> {
+  const logged: unknown[][] = [];
+  const realError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args);
+  };
+  try {
+    await fn();
+  } finally {
+    console.error = realError;
+  }
+  return logged.map((args) => args.map(String).join(" "));
+}
 
 /** A browser: its cookie jar, IP and user agent, calling the auth HTTP handler. */
 function device(ip: string, userAgent: string) {
@@ -379,6 +400,110 @@ describe("auth audit trail against Postgres (BA-15)", { concurrency: false }, ()
   it("goes when the user does", async () => {
     await prisma.user.delete({ where: { id: userId } });
     assert.equal(await prisma.authEvent.count({ where: { userId } }), 0);
+  });
+});
+
+describe("auth events retention and the Settings list (BA-15)", { concurrency: false }, () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const now = new Date("2026-09-27T12:00:00.000Z");
+  const cutoff = authEventRetentionCutoff(now).getTime();
+
+  before(async () => {
+    await prisma.user.createMany({
+      data: ["keep-a", "keep-b"].map((id) => ({ id, name: id, email: `${id}@example.test` })),
+    });
+  });
+
+  it("cuts off exactly 90 days before now", () => {
+    assert.equal(AUTH_EVENT_RETENTION_DAYS, 90);
+    assert.equal(new Date(cutoff).toISOString(), "2026-06-29T12:00:00.000Z");
+    assert.equal(now.getTime() - cutoff, 90 * DAY_MS);
+  });
+
+  it("prunes every user's events older than the cutoff and keeps the rest", async () => {
+    const kept = [cutoff, cutoff + 1, now.getTime() - DAY_MS];
+    const pruned = [cutoff - 1, cutoff - DAY_MS];
+    await prisma.authEvent.createMany({
+      data: ["keep-a", "keep-b"].flatMap((userId) =>
+        [...kept, ...pruned].map((at) => ({ userId, type: "sign_in", createdAt: new Date(at) })),
+      ),
+    });
+
+    await pruneAuthEvents(now);
+
+    for (const userId of ["keep-a", "keep-b"]) {
+      const left = await prisma.authEvent.findMany({ where: { userId }, orderBy: { createdAt: "asc" } });
+      assert.deepEqual(
+        left.map((row) => row.createdAt.getTime()),
+        kept,
+      );
+    }
+  });
+
+  it("never throws when the prune fails", async () => {
+    failAuditWrites = true;
+    const lines = await captureErrors(() => pruneAuthEvents(now)).finally(() => {
+      failAuditWrites = false;
+    });
+    assert.deepEqual(lines, ["Could not prune old auth events: audit table unavailable"]);
+  });
+
+  it("lists the user's latest 20 events, newest first, and nobody else's", async () => {
+    await prisma.authEvent.createMany({
+      data: Array.from({ length: 25 }, (_, i) => ({
+        userId: "keep-a",
+        type: "sign_out",
+        ipAddress: `192.0.2.${i}`,
+        userAgent: "Mozilla/5.0 (X11; Linux x86_64) Firefox/140.0",
+        createdAt: new Date(now.getTime() + i * 1000),
+      })),
+    });
+
+    const events = await getRecentAuthEvents("keep-a");
+    assert.ok(events);
+    assert.equal(RECENT_AUTH_EVENT_LIMIT, 20);
+    assert.equal(events.length, 20);
+    assert.deepEqual(
+      events.map((event) => event.createdAt),
+      Array.from({ length: 20 }, (_, i) => new Date(now.getTime() + (24 - i) * 1000).toISOString()),
+    );
+    assert.deepEqual(Object.keys(events[0]).sort(), ["createdAt", "id", "ipAddress", "type", "userAgent"]);
+    assert.deepEqual(events[0], {
+      id: events[0].id,
+      type: "sign_out",
+      ipAddress: "192.0.2.24",
+      userAgent: "Mozilla/5.0 (X11; Linux x86_64) Firefox/140.0",
+      createdAt: new Date(now.getTime() + 24_000).toISOString(),
+    });
+
+    const other = await getRecentAuthEvents("keep-b");
+    assert.ok(other);
+    assert.deepEqual(
+      other.map((event) => event.createdAt),
+      [now.getTime() - DAY_MS, cutoff + 1, cutoff].map((at) => new Date(at).toISOString()),
+    );
+  });
+
+  it("returns null instead of throwing when the list can't be read", async () => {
+    failAuditWrites = true;
+    let events: Awaited<ReturnType<typeof getRecentAuthEvents>> | undefined;
+    const lines = await captureErrors(async () => {
+      events = await getRecentAuthEvents("keep-a");
+    }).finally(() => {
+      failAuditWrites = false;
+    });
+    assert.equal(events, null);
+    assert.deepEqual(lines, ["Could not load auth events for user keep-a: audit table unavailable"]);
+  });
+});
+
+describe("nightly prune wiring", () => {
+  it("prunes from the cron route after the secret check, inside the run's budget", () => {
+    const cron = readFileSync(new URL("../src/app/api/cron/sync/route.ts", import.meta.url), "utf8");
+    assert.match(
+      cron,
+      /if \(!isAuthorizedCron\(request\)\) \{[\s\S]*?\n {2}\}\n\n {2}const runStartedAt = new Date\(\);[\s\S]*?await pruneAuthEvents\(\);[\s\S]*?runScheduledSync\(\{ deadline: runStartedAt\.getTime\(\) \+ RUN_BUDGET_MS \}\)/,
+    );
   });
 });
 
