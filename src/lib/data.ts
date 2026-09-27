@@ -164,7 +164,6 @@ export interface TitleIndexEntry {
   name: string;
   year: number | null;
   mediaType: MediaType;
-  posterPath: string | null;
 }
 
 /** Lightweight list for the command palette. */
@@ -177,7 +176,6 @@ export async function getTitleIndex(userId: string): Promise<TitleIndexEntry[]> 
       name: true,
       releaseDate: true,
       mediaType: true,
-      posterPath: true,
     },
   });
   return rows.map((t) => ({
@@ -185,7 +183,6 @@ export async function getTitleIndex(userId: string): Promise<TitleIndexEntry[]> 
     name: t.name,
     year: t.releaseDate ? t.releaseDate.getUTCFullYear() : null,
     mediaType: t.mediaType,
-    posterPath: t.posterPath,
   }));
 }
 
@@ -989,13 +986,15 @@ export async function getActivityDays(userId: string): Promise<ActivityDay[]> {
 }
 
 export async function getStats(userId: string): Promise<LibraryStats> {
-  // Resolved first (and deduped with getActivityDays via getUserPrefs' cache()
-  // when both run in the same request) because the day-bucketing query below
-  // needs a Postgres-safe zone name before it can run — see resolveTimeZone.
-  // Everything else here is independent of it, so it joins the same batch
-  // instead of waiting behind it.
-  const prefs = await getUserPrefs(userId);
-  const timeZone = resolveTimeZone(prefs?.timeZone || "UTC");
+  // Only the day-bucketing query below needs the account's zone, as a
+  // Postgres-safe name (see resolveTimeZone), so only it waits for
+  // getUserPrefs (deduped with getActivityDays via cache() when both run in
+  // the same request); the other queries start alongside that read (VE-13).
+  // It all sits in one Promise.all because a Prisma query doesn't start until
+  // something awaits it.
+  const timeZoneReady = getUserPrefs(userId).then((prefs) =>
+    resolveTimeZone(prefs?.timeZone || "UTC"),
+  );
 
   const [titles, watchedEpisodeRuntime, mostRewatched, totalRewatches, activity] =
     await Promise.all([
@@ -1047,7 +1046,8 @@ export async function getStats(userId: string): Promise<LibraryStats> {
       // Day bucketing happens in Postgres — the alternative streamed every watch
       // event the owner has ever recorded (tens of thousands of rows once
       // episodes are tracked individually) just to count them by day.
-      prisma.$queryRaw<{ date: string; count: number }[]>`
+      timeZoneReady.then(
+        (timeZone) => prisma.$queryRaw<{ date: string; count: number }[]>`
         SELECT to_char(
                  ((e."occurredAt" AT TIME ZONE 'UTC') AT TIME ZONE ${timeZone}::text)::date,
                  'YYYY-MM-DD'
@@ -1058,7 +1058,9 @@ export async function getStats(userId: string): Promise<LibraryStats> {
         WHERE e."userId" = ${userId} AND t."deletedAt" IS NULL
         GROUP BY 1
         ORDER BY 1`,
+      ),
     ]);
+  const timeZone = await timeZoneReady;
 
   const byStatus = {
     WATCHLIST: 0,
