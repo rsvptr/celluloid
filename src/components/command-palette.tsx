@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Command } from "cmdk";
 import { Title as DialogTitle } from "@radix-ui/react-dialog";
@@ -23,6 +23,7 @@ import {
 import type { TitleIndexEntry } from "@/lib/data";
 import type { WatchStatus } from "@/generated/prisma/client";
 import { logWatch, undoWatchedTransition, updateTitle } from "@/lib/actions";
+import { paletteTitles, paletteTitleValue } from "@/lib/palette-titles";
 import { undoToast } from "@/lib/undo-toast";
 
 const NAV = [
@@ -141,23 +142,33 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
     };
   }, [close, open]);
 
+  // The ETag of the index `titles` holds. Set only when that index is applied,
+  // so a 304 always means "still the list on screen".
+  const titlesEtag = useRef<string | null>(null);
+
   // Fetch the index each time the palette opens: lazily on the first open (the
-  // layout no longer ships it with every page) and refreshed on later opens so
-  // newly added/removed titles appear without a full reload.
+  // layout no longer ships it with every page) and revalidated on later opens
+  // so newly added/removed titles appear without a full reload. A reopen with
+  // nothing changed gets an empty 304 and keeps the list (VE-14).
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    fetch("/api/titles")
-      .then((r) => {
+    const etag = titlesEtag.current;
+    fetch("/api/titles", etag ? { headers: { "If-None-Match": etag } } : undefined)
+      .then(async (r) => {
+        if (r.status === 304) return null;
         if (!r.ok) throw new Error("title-index-request-failed");
-        return r.json();
+        return { etag: r.headers.get("ETag"), data: await r.json() };
       })
-      .then((d) => {
-        if (!cancelled && d?.titles) {
-          setTitles(d.titles as TitleIndexEntry[]);
-          setLoaded(true);
-          setLoadError(null);
+      .then((res) => {
+        if (cancelled) return;
+        if (res) {
+          if (!res.data?.titles) return;
+          setTitles(res.data.titles as TitleIndexEntry[]);
+          titlesEtag.current = res.etag;
         }
+        setLoaded(true);
+        setLoadError(null);
       })
       .catch(() => {
         if (!cancelled) setLoadError("Couldn't load your titles.");
@@ -225,7 +236,6 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
         }
       }
       close();
-      router.refresh();
     } catch {
       toast.error("Couldn't update that title. Try again.");
     } finally {
@@ -234,6 +244,8 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
   }
 
   const activeAction = ACTIONS.find((a) => a.kind === action) ?? null;
+  // A capped set of cmdk's own matches, not every title in the library.
+  const shownTitles = useMemo(() => paletteTitles(titles, search), [titles, search]);
 
   return (
     <Command.Dialog
@@ -304,12 +316,12 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
 
         {activeAction ? (
           <Command.Group heading={activeAction.prompt} className={groupClass}>
-            {titles.map((t) => {
+            {shownTitles.map((t) => {
               const Icon = t.mediaType === "TV" ? Tv : Film;
               return (
                 <Command.Item
                   key={t.id}
-                  value={`${t.name} ${t.year ?? ""}`}
+                  value={paletteTitleValue(t)}
                   disabled={running}
                   onSelect={() => runAction(activeAction.kind, t)}
                   className={itemClass}
@@ -362,12 +374,12 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
 
             {titles.length > 0 && (
               <Command.Group heading="Open a title" className={groupClass}>
-                {titles.map((t) => {
+                {shownTitles.map((t) => {
                   const Icon = t.mediaType === "TV" ? Tv : Film;
                   return (
                     <Command.Item
                       key={t.id}
-                      value={`${t.name} ${t.year ?? ""}`}
+                      value={paletteTitleValue(t)}
                       onSelect={() => go(`/title/${t.id}`)}
                       className={itemClass}
                     >

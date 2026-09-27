@@ -8,32 +8,13 @@ import { requireUserId } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { encryptSecret } from "@/lib/crypto";
 import { isRecModel } from "@/lib/models";
+import { isIanaTimeZone } from "@/lib/data";
 import { setWatchRegion } from "@/lib/region-actions";
 import { isWatchRegion } from "@/lib/tmdb-extras";
 
 export interface ActionResult {
   ok?: boolean;
   error?: string;
-}
-
-/** True when `tz` is a real IANA time zone identifier. */
-function isSupportedTimeZone(tz: string): boolean {
-  // Intl.supportedValuesOf is the canonical source of truth, but guard its
-  // availability — some runtimes/polyfills omit the enumeration API even
-  // when Intl.DateTimeFormat itself works.
-  if (typeof Intl.supportedValuesOf === "function") {
-    try {
-      return Intl.supportedValuesOf("timeZone").includes(tz);
-    } catch {
-      return false;
-    }
-  }
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: tz });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 // Server actions are public HTTP endpoints callable with arbitrary arguments,
@@ -52,7 +33,7 @@ const preferencesSchema = z.object({
     .string()
     .min(1)
     .max(100)
-    .refine(isSupportedTimeZone, "That doesn't look like a valid time zone."),
+    .refine(isIanaTimeZone, "That doesn't look like a valid time zone."),
   watchRegion: z
     .string()
     .refine(isWatchRegion, "That doesn't look like a valid region."),

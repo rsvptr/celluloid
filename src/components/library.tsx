@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  memo,
   useCallback,
   useDeferredValue,
   useEffect,
@@ -42,6 +43,7 @@ import type { LibraryItem, TrashedTitle } from "@/lib/data";
 import type { WatchStatus } from "@/generated/prisma/client";
 import { Badge, Button, Card, Input, Select } from "./ui";
 import { TitleCard } from "./title-card";
+import { IntentLink } from "./intent-link";
 import { Poster } from "./poster";
 import { ShareDialog } from "./share-dialog";
 import { useConfirm } from "./confirm-dialog";
@@ -57,6 +59,7 @@ import {
   bulkAddTag,
   bulkRemoveTag,
   bulkRemoveTitles,
+  bulkRestoreTitles,
   bulkSetFavorite,
   bulkSetStatus,
   emptyTrash,
@@ -149,7 +152,7 @@ export function libraryFilterKey(filters: LibraryFilters): string {
 }
 
 const addTitleButtonClass =
-  "inline-flex min-h-11 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg brand-gradient px-4 text-sm font-semibold text-[#04121c] shadow-sm shadow-brand/20 transition-colors hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 sm:min-h-10";
+  "inline-flex min-h-11 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg brand-gradient px-4 text-sm font-semibold text-[#04121c] shadow-sm shadow-brand/20 press hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 sm:min-h-10";
 
 // Chrome moves focus to <body> the instant a focused control becomes
 // `disabled`, so every bulk and Trash action left the keyboard back at the skip
@@ -222,11 +225,11 @@ export function Library({
   // Adopt the server's filters when they actually change, adjusted during
   // render (React's "adjusting state when a prop changes" pattern, the same one
   // the Trash count uses below). <Library> used to be keyed on these filters
-  // instead: once any filter had been changed, the router.refresh() that ends
-  // every bulk and Trash action re-rendered the page from the params this
+  // instead: once any filter had been changed, the re-render that ends every
+  // bulk and Trash action re-rendered the page from the params this
   // component had itself mirrored with replaceState, the key changed, and the
   // remount threw away select mode, the selection, the open filters panel and
-  // Trash mode. That refresh now lands here with a key the last prop already
+  // Trash mode. That re-render now lands here with a key the last prop already
   // carried, or with the mirrored one whose setters are all no-ops, while
   // back/forward navigation still re-applies its URL.
   const incomingFilterKey = libraryFilterKey(initialFilters);
@@ -692,7 +695,7 @@ export function Library({
                 onClick={() => setType(opt.value)}
                 aria-pressed={type === opt.value}
                 className={cn(
-                  "focus-ring flex min-h-11 items-center justify-center rounded-md px-3 text-sm transition-colors sm:min-h-8",
+                  "focus-ring flex min-h-11 items-center justify-center rounded-md px-3 text-sm press sm:min-h-8",
                   type === opt.value
                     ? "bg-surface text-foreground shadow-sm"
                     : "text-muted hover:text-foreground",
@@ -712,7 +715,7 @@ export function Library({
                 : "Choose your services in Settings"
             }
             className={cn(
-              "focus-ring flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-sm ring-1 transition-colors sm:min-h-8",
+              "focus-ring flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-sm ring-1 press sm:min-h-8",
               onlyOnServices
                 ? "bg-brand/15 text-brand ring-brand/40"
                 : "text-muted ring-line hover:text-foreground",
@@ -729,7 +732,7 @@ export function Library({
             aria-controls="library-advanced-filters"
             aria-label={advancedCount > 0 ? `Filters, ${advancedCount} active` : "Filters"}
             className={cn(
-              "focus-ring ml-auto flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-sm ring-1 transition-colors sm:min-h-8",
+              "focus-ring ml-auto flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-sm ring-1 press sm:min-h-8",
               showFilters || advancedCount > 0
                 ? "bg-surface-2 text-foreground ring-line-strong"
                 : "text-muted ring-line hover:text-foreground",
@@ -758,7 +761,7 @@ export function Library({
                 type="button"
                 onClick={chip.clear}
                 aria-label={`Remove ${chip.label} filter`}
-                className="focus-ring flex min-h-11 min-w-0 items-center gap-1.5 rounded-full bg-surface-2 px-3 text-xs text-foreground ring-1 ring-line transition-colors hover:text-foreground sm:min-h-0 sm:py-1"
+                className="focus-ring flex min-h-11 min-w-0 items-center gap-1.5 rounded-full bg-surface-2 px-3 text-xs text-foreground ring-1 ring-line press hover:text-foreground sm:min-h-0 sm:py-1"
               >
                 <span className="break-words">{chip.label}</span>
                 <X size={13} aria-hidden className="text-muted" />
@@ -935,7 +938,7 @@ export function Library({
             aria-pressed={selectMode}
             title="Select titles"
             className={cn(
-              "focus-ring flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm ring-1 transition-colors sm:min-h-8 sm:min-w-0 sm:justify-start",
+              "focus-ring flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm ring-1 press sm:min-h-8 sm:min-w-0 sm:justify-start",
               selectMode
                 ? "bg-brand/15 text-brand ring-brand/40"
                 : "text-muted ring-line hover:text-foreground",
@@ -950,7 +953,7 @@ export function Library({
                 onClick={surprise}
                 title="Pick something random to watch (prefers your watchlist)"
                 aria-label="Surprise me"
-                className="focus-ring flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground sm:min-h-8 sm:min-w-0 sm:justify-start"
+                className="focus-ring flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line press hover:text-foreground sm:min-h-8 sm:min-w-0 sm:justify-start"
               >
                 <Dices size={15} />
                 <span className="hidden sm:inline">Surprise</span>
@@ -959,7 +962,7 @@ export function Library({
                 onClick={() => openShare([])}
                 title="Share your library"
                 aria-label="Share your library"
-                className="focus-ring flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground sm:min-h-8 sm:min-w-0 sm:justify-start"
+                className="focus-ring flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line press hover:text-foreground sm:min-h-8 sm:min-w-0 sm:justify-start"
               >
                 <Share2 size={15} />
                 <span className="hidden sm:inline">Share</span>
@@ -1031,8 +1034,9 @@ export function Library({
               selectable={selectMode}
               selected={selected.has(it.id)}
               onToggle={toggle}
-              // LCP: only the first few above-the-fold cards get eager/priority loading.
-              priority={i < 4}
+              // LCP: preload the first two cards (the whole first row on a
+              // phone), and load the rest of the widest (7-column) row eagerly.
+              lcp={i < 2 ? "preload" : i < 7 ? "eager" : undefined}
             />
           ))}
         </div>
@@ -1145,18 +1149,19 @@ function BulkBar({
     verb: string,
   ) {
     start(async () => {
+      // A successful action already returns the re-rendered page. A failed or
+      // thrown one returns none, and may follow a partial write, so re-sync.
       try {
         const res = await fn();
         if (res.error) {
           toast.error(res.error);
+          router.refresh();
           return;
         }
         const changed = res.count ?? 0;
         toast.success(`${verb} ${changed} ${changed === 1 ? "title" : "titles"}`);
       } catch {
         toast.error("Couldn't update those titles. Try again.");
-      } finally {
-        // Always re-sync to the server so a partial failure can't leave stale UI.
         router.refresh();
       }
     });
@@ -1171,31 +1176,21 @@ function BulkBar({
         const res = await bulkRemoveTitles(removedIds);
         if (res.error) {
           toast.error(res.error);
+          router.refresh();
           return;
         }
         const removedCount = res.count ?? 0;
         onDone();
         undoToast(`Removed ${removedCount} ${removedCount === 1 ? "title" : "titles"}`, {
-          undo: async () => {
-            // Bound the server-action fan-out for a large selection. Each
-            // restore is ownership-scoped and safely no-ops if a row was
-            // already restored through Trash in another tab.
-            for (let index = 0; index < removedIds.length; index += 6) {
-              const results = await Promise.all(
-                removedIds.slice(index, index + 6).map((id) => restoreTitle(id)),
-              );
-              const error = results.find((result) => result.error)?.error;
-              if (error) return { error };
-            }
-            return {};
-          },
+          // One ownership-scoped call for the whole selection; it skips a row
+          // already restored through Trash in another tab.
+          undo: () => bulkRestoreTitles(removedIds),
           success: `Restored ${removedCount} ${removedCount === 1 ? "title" : "titles"}`,
           failure: "Couldn't restore every title. Check Trash and retry.",
           onError: () => router.refresh(),
         });
       } catch {
         toast.error("Couldn't remove those titles. Try again.");
-      } finally {
         router.refresh();
       }
     });
@@ -1271,7 +1266,7 @@ function BulkBar({
               onClick={() => setShowMore((v) => !v)}
               aria-expanded={showMore}
               aria-controls="bulk-more-actions"
-              className="focus-ring flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground sm:hidden"
+              className="focus-ring flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-sm text-muted ring-1 ring-line press hover:text-foreground sm:hidden"
             >
               More
               <ChevronDown
@@ -1451,7 +1446,7 @@ function ViewToggle({
       title={label}
       aria-pressed={active}
       className={cn(
-        "focus-ring flex h-11 w-11 items-center justify-center rounded-md transition-colors sm:h-7 sm:w-7",
+        "focus-ring flex h-11 w-11 items-center justify-center rounded-md press sm:h-7 sm:w-7",
         active ? "bg-surface text-foreground" : "text-muted hover:text-foreground",
       )}
     >
@@ -1463,7 +1458,13 @@ function ViewToggle({
 /** Tags shown inline on a row before the rest collapse into a "+n" count. */
 const ROW_TAG_LIMIT = 3;
 
-function ListRow({
+/**
+ * Memoized, like TitleCard, so a keystroke's re-render of Library doesn't
+ * reconcile every row (VE-04). Its props hold across those renders: item refs
+ * come from `items`, tagColors is a server prop, onToggle is the useCallback'd
+ * toggle and the rest are booleans.
+ */
+const ListRow = memo(function ListRow({
   item,
   tagColors,
   selectMode,
@@ -1550,7 +1551,7 @@ function ListRow({
         onClick={() => onToggle(item.id)}
         aria-pressed={selected}
         className={cn(
-          "cv-auto focus-ring flex items-center gap-3 px-3 py-2.5 text-left transition-colors",
+          "cv-auto focus-ring flex items-center gap-3 px-3 py-2.5 text-left transition-colors active:bg-surface-2/60 active:transition-none",
           selected ? "bg-brand/10" : "bg-surface hover:bg-surface-2/50",
         )}
       >
@@ -1568,14 +1569,14 @@ function ListRow({
   }
 
   return (
-    <Link
+    <IntentLink
       href={`/title/${item.id}`}
-      className="cv-auto focus-ring flex items-center gap-3 bg-surface px-3 py-2.5 transition-colors hover:bg-surface-2/50"
+      className="cv-auto focus-ring flex items-center gap-3 bg-surface px-3 py-2.5 transition-colors hover:bg-surface-2/50 active:bg-surface-2/60 active:transition-none"
     >
       {inner}
-    </Link>
+    </IntentLink>
   );
-}
+});
 
 function EmptyState({
   hasItems,
@@ -1698,18 +1699,19 @@ function TrashView({
   function restore(item: TrashedTitle) {
     const neighbour = neighbourRowId(item.id);
     start(async () => {
+      // A successful action returns the re-rendered page; re-sync from the
+      // server only when it failed, so a failed action can't leave a stale row.
       try {
         const res = await restoreTitle(item.id);
         if (res.error) {
           toast.error(res.error);
+          router.refresh();
           return;
         }
         focusAfterRemovalId.current = neighbour;
         toast.success(`Restored ${item.name}`);
       } catch {
         toast.error("Couldn't restore that title. Try again.");
-      } finally {
-        // Re-sync from the server so a failed action can't leave a stale row.
         router.refresh();
       }
     });
@@ -1731,13 +1733,13 @@ function TrashView({
         const res = await purgeTitle(item.id);
         if (res.error) {
           toast.error(res.error);
+          router.refresh();
           return;
         }
         focusAfterRemovalId.current = neighbour;
         toast.success(`Deleted ${item.name}`);
       } catch {
         toast.error("Couldn't delete that title. Try again.");
-      } finally {
         router.refresh();
       }
     });
@@ -1759,6 +1761,7 @@ function TrashView({
         const res = await emptyTrash();
         if (res.error) {
           toast.error(res.error);
+          router.refresh();
           return;
         }
         const deletedCount = res.count ?? 0;
@@ -1767,7 +1770,6 @@ function TrashView({
         );
       } catch {
         toast.error("Couldn't empty Trash. Try again.");
-      } finally {
         router.refresh();
       }
     });

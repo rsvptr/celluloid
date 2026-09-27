@@ -1,11 +1,24 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { FileSpreadsheet, RotateCcw, Upload, UploadCloud, X } from "lucide-react";
 import { Button, Card, Spinner } from "@/components/ui";
-import { ImportReview } from "@/components/import-review";
 import type { StagedImportJobView } from "@/lib/import-staging-views";
 import { cn } from "@/lib/utils";
+
+// Loaded only once there is a job to review, so /add doesn't ship the review
+// UI (and its dialog) to every visit (VE-12).
+const ImportReview = dynamic(
+  () => import("@/components/import-review").then((mod) => mod.ImportReview),
+  {
+    loading: () => (
+      <p role="status" className="flex items-center gap-2 text-sm text-muted">
+        <Spinner /> Loading the review…
+      </p>
+    ),
+  },
+);
 
 const MAX_BYTES = 2 * 1024 * 1024;
 const ACCEPT_RE = /\.(xlsx|csv)$/i;

@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { Check, Pencil, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
-import { useRouter } from "next/navigation";
 import { Button, Card, Input } from "@/components/ui";
 import { useConfirm } from "@/components/confirm-dialog";
 import { deleteWatchEvent, updateWatchEvent } from "@/lib/actions";
@@ -63,7 +62,6 @@ export function WatchHistoryList({
    *  these dates in and stats bucket them in. */
   timeZone?: string;
 }) {
-  const router = useRouter();
   const [pending, start] = useTransition();
   const { confirm, dialog } = useConfirm();
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -138,7 +136,6 @@ export function WatchHistoryList({
       }
       closeEdit(event);
       toast.success("Watch updated");
-      router.refresh();
     });
   }
 
@@ -165,7 +162,6 @@ export function WatchHistoryList({
       }
       focusAfterRemoveId.current = neighbour;
       toast.success("Watch removed");
-      router.refresh();
     });
   }
 
@@ -258,7 +254,7 @@ export function WatchHistoryList({
                       // the keyboard is sitting on.
                       aria-disabled={pending}
                       aria-label={`Edit the watch on ${fullDateInZone(event.occurredAt, timeZone)}`}
-                      className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-md text-faint transition-colors hover:text-foreground aria-disabled:cursor-not-allowed aria-disabled:opacity-50 sm:min-h-8 sm:min-w-8"
+                      className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-md text-faint press hover:text-foreground aria-disabled:cursor-not-allowed aria-disabled:opacity-50 sm:min-h-8 sm:min-w-8"
                     >
                       <Pencil size={14} />
                     </button>
@@ -270,7 +266,7 @@ export function WatchHistoryList({
                       }}
                       aria-disabled={pending}
                       aria-label={`Remove the watch on ${fullDateInZone(event.occurredAt, timeZone)}`}
-                      className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-md text-faint transition-colors hover:text-rose-300 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 sm:min-h-8 sm:min-w-8"
+                      className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-md text-faint press hover:text-rose-300 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 sm:min-h-8 sm:min-w-8"
                     >
                       <Trash2 size={14} />
                     </button>

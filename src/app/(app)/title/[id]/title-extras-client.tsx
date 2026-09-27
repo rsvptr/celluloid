@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { Check, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Spinner } from "@/components/ui";
@@ -79,7 +78,6 @@ export function QuickAdd({
 
 /** Streaming-region picker; persists to a cookie and re-renders the page. */
 export function RegionSelect({ region }: { region: string }) {
-  const router = useRouter();
   const [pending, start] = useTransition();
   return (
     <select
@@ -88,9 +86,10 @@ export function RegionSelect({ region }: { region: string }) {
       aria-label="Streaming region"
       onChange={(e) => {
         const v = e.target.value;
+        // The cookie write makes Next re-render the page into the action's
+        // response, so there is nothing left to refresh.
         start(async () => {
           await setWatchRegion(v);
-          router.refresh();
         });
         // Fire-and-forget: syncs the profile default without making the
         // region switch wait on it. The cookie above is the fast path.

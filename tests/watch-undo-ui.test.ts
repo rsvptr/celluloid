@@ -100,7 +100,16 @@ describe("watched interaction safeguards", () => {
     assert.match(close, /setSearch\(""\)/);
     assert.match(close, /opener\.current\?\.focus\(\)/);
     assert.match(palette, /function go[\s\S]*?close\(\);[\s\S]*?router\.push/);
-    assert.match(palette, /async function runAction[\s\S]*?close\(\);[\s\S]*?router\.refresh/);
+    // VE-02: runAction closes through the same path but doesn't refresh after
+    // it; the successful action's response already carries the re-rendered
+    // page. Only a failed undo re-syncs.
+    const runAction = palette.slice(
+      palette.indexOf("async function runAction"),
+      palette.indexOf("const activeAction"),
+    );
+    assert.match(runAction, /close\(\);/);
+    assert.doesNotMatch(runAction.slice(runAction.indexOf("close();")), /router\.refresh/);
+    assert.match(runAction, /onError: \(\) => router\.refresh\(\)/);
     assert.match(palette, /onOpenChange=\{\(o\) => \{[\s\S]*?else close\(\)/);
   });
 });

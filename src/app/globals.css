@@ -212,6 +212,22 @@ label {
   outline-offset: 2px;
 }
 
+/* Press feedback (emil-design-eng): scale on pointer-down. It replaces
+   transition-colors on a control, so it keeps that property list and adds
+   opacity and scale. An @utility (not a bare class) stays in Tailwind's
+   utilities layer, where it can't silently override other transition
+   utilities. Disabled controls and reduced motion don't scale. */
+@utility press {
+  transition-property: color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to, opacity, scale;
+  transition-duration: 160ms;
+  transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
+  @media (prefers-reduced-motion: no-preference) {
+    &:active:not(:disabled, [aria-disabled="true"]) {
+      scale: 0.97;
+    }
+  }
+}
+
 /* Radix dialog entrance (close is instant — Radix unmounts immediately) */
 @keyframes dialog-overlay-in {
   from {
@@ -296,12 +312,5 @@ label {
   *::after {
     animation-duration: 0.001ms !important;
     transition-duration: 0.001ms !important;
-  }
-  /* Neutralizing the duration still lets the hover lift jump. Tailwind v4 moves
-     the card via the `translate` property fed by --tw-translate-y, so zero that
-     out (a plain `translate: none` gets stripped by the CSS minifier). */
-  .hover\:-translate-y-1:hover {
-    --tw-translate-y: 0 !important;
-    transform: none !important;
   }
 }
