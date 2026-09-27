@@ -1579,7 +1579,12 @@ export async function addFromTmdb(
             backdropPath: tv.backdrop_path,
             language: tv.original_language || null,
             tmdbRating: tv.vote_average ?? null,
-            runtime: tv.episode_run_time?.[0] ?? null,
+            // Same source as refresh and re-match (TM-11): episode_run_time is
+            // empty for most current shows, so the loaded episodes' median.
+            runtime: tvRuntime(
+              tv.episode_run_time,
+              seasons.map((s) => s.sd),
+            ),
             genres: tv.genres?.map((g) => g.name) ?? [],
             // On a complete load, keep TMDB's authoritative season count; on a
             // partial load, fall back to the number of seasons actually stored so
