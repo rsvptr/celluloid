@@ -484,7 +484,7 @@ The legacy workbook importer bypasses the review step entirely (it is meant for 
 | `npm test` | Run the test suite on Node's built in runner (Node 22 or newer) |
 | `npm run db:deploy` | Apply migrations to the database |
 | `npm run db:dump -- --target dev\|prod` | Create a confirmed, fail-closed full database snapshot under `backups/` before a migration |
-| `npm run db:deploy:prod` | Apply pending migrations to the production database named by `PROD_DATABASE_URL`, after showing the target host and asking for typed confirmation |
+| `npm run db:deploy:prod` | Apply pending migrations to the production database named by `PROD_DATABASE_URL`, over its direct endpoint, after showing the Neon endpoint, database and pending migrations and asking for typed confirmation |
 | `npm run db:check` | Run the read-only data-hygiene checks against `DATABASE_URL` before adding database constraints |
 | `npm run db:backfill:discovered-at` | Repair legacy advance-published episode dates after showing the database target and requiring `backfill` confirmation |
 | `npm run db:migrate` | Create and apply a new migration in development |
@@ -515,7 +515,7 @@ A short checklist for a clean first deploy:
 - [ ] Set `CRON_SECRET` if you want the nightly metadata sync. `vercel.json` registers the schedule; without the variable the endpoint refuses to run. A run where every account fails returns a non-200 status, so a broken night shows up red in Vercel's cron dashboard instead of passing silently.
 - [ ] Scope the Preview environment's `DATABASE_URL` to its own Neon branch. Preview builds do not run migrations, so a Preview deployment pointed at the production database can run new code against an unmigrated schema.
 
-**Migrating production from your own machine.** During development, `DATABASE_URL` can point at a scratch Neon branch while the real database lives in `PROD_DATABASE_URL`. Two scripts respect that split so a migration can never land on the wrong side by accident: `npm run db:dump -- --target prod` takes the fail-closed pre-migration snapshot described under Backups, and `npm run db:deploy:prod` applies pending migrations to production only, printing the target host and asking you to type `deploy` before touching anything. Like every operator script, both load `.env.local` before falling back to `.env`, refuse a non-interactive shell, and never print credentials.
+**Migrating production from your own machine.** During development, `DATABASE_URL` can point at a scratch Neon branch while the real database lives in `PROD_DATABASE_URL`. Two scripts respect that split so a migration can never land on the wrong side by accident: `npm run db:dump -- --target prod` takes the fail-closed pre-migration snapshot described under Backups, and `npm run db:deploy:prod` applies pending migrations to production only. Before it applies anything, it prints the Neon endpoint and database, lists the migration folders `prisma migrate status` reports as pending, warns if `prisma/migrations` has uncommitted changes (it applies whatever folders your working copy has), and asks you to type `deploy`. Both connect to production's direct endpoint even if `PROD_DATABASE_URL` is the pooled string. Like every operator script, both load `.env.local` before falling back to `.env`, refuse a non-interactive shell, and never print credentials.
 
 ## Project structure
 
