@@ -258,7 +258,7 @@ export function WatchHistoryList({
                       // the keyboard is sitting on.
                       aria-disabled={pending}
                       aria-label={`Edit the watch on ${fullDateInZone(event.occurredAt, timeZone)}`}
-                      className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-md text-faint transition-colors hover:text-foreground aria-disabled:cursor-not-allowed aria-disabled:opacity-50 sm:min-h-8 sm:min-w-8"
+                      className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-md text-faint press hover:text-foreground aria-disabled:cursor-not-allowed aria-disabled:opacity-50 sm:min-h-8 sm:min-w-8"
                     >
                       <Pencil size={14} />
                     </button>
@@ -270,7 +270,7 @@ export function WatchHistoryList({
                       }}
                       aria-disabled={pending}
                       aria-label={`Remove the watch on ${fullDateInZone(event.occurredAt, timeZone)}`}
-                      className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-md text-faint transition-colors hover:text-rose-300 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 sm:min-h-8 sm:min-w-8"
+                      className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-md text-faint press hover:text-rose-300 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 sm:min-h-8 sm:min-w-8"
                     >
                       <Trash2 size={14} />
                     </button>
