@@ -40,7 +40,7 @@ function assertSubmits(file: string, label: string) {
 // managers saw no form (JK-11).
 describe("panels submit as forms (JK-11)", () => {
   it("settings: profile, API key, password, 2FA and delete account", async () => {
-    const settings = await settingsSource("profile-section", "api-key-section", "settings-client");
+    const settings = await settingsSource("profile-section", "api-key-section", "password-section", "two-factor-section", "danger-section");
     for (const label of [
       // Profile's Save (the first at this indent; Preferences' Save follows).
       "Save\n        </Button>",

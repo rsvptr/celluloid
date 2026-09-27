@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { describe, it } from "node:test";
 
 async function source(path: string) {
@@ -20,7 +20,10 @@ describe("terminology and button labels (JK-32)", () => {
   });
 
   it("turns 2FA off with the words its confirm uses", async () => {
-    const settings = await source("../src/app/(app)/settings/settings-client.tsx");
+    // Every file of the settings route, so the wording rule covers all of it.
+    const dir = new URL("../src/app/(app)/settings/", import.meta.url);
+    const files = await Promise.all((await readdir(dir)).map((name) => readFile(new URL(name, dir), "utf8")));
+    const settings = files.join("\n");
     assert.match(settings, /title: "Turn off two-factor authentication\?",[\s\S]{0,120}confirmLabel: "Turn off 2FA",/);
     assert.doesNotMatch(settings, /(?:en|dis)able 2FA/i);
   });

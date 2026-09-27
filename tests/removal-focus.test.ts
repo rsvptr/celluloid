@@ -32,7 +32,7 @@ function elementWithId(file: string, id: string): string {
 // issue 7). Each now moves focus somewhere sensible that exists afterwards.
 describe("focus after an action removes its own control", () => {
   it("deleted rows hand focus to their section's heading", async () => {
-    const settings = await settingsSource("settings-ui", "shared-links-section", "tags-section", "settings-client");
+    const settings = await settingsSource("settings-ui", "shared-links-section", "tags-section", "devices-section");
     const heading = between(settings, "function Section(", "function Notice(");
     assert.match(heading, /id=\{headingId\}\s+tabIndex=\{headingId \? -1 : undefined\}/);
 
@@ -53,7 +53,7 @@ describe("focus after an action removes its own control", () => {
   });
 
   it("the 2FA panel swaps move focus into the panel that replaces them", async () => {
-    const settings = await source("../src/app/(app)/settings/settings-client.tsx");
+    const settings = await source("../src/app/(app)/settings/two-factor-section.tsx");
     for (const [handler, end, state, id] of [
       ["async function beginEnable()", "async function confirmEnable()", 'setPhase("setup");', "settings-two-factor-setup-start"],
       ["async function confirmEnable()", "async function disable()", "setOn(true);", "settings-two-factor-on"],
