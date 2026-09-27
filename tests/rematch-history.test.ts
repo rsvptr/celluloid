@@ -1,8 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  chunks,
   planEpisodeEventRelinks,
   preservesEpisodeHistory,
+  RELINK_BATCH_SIZE,
+  tvRuntime,
 } from "../src/lib/rematch-history";
 
 const events = [
@@ -79,5 +82,60 @@ describe("rematch episode-history policy", () => {
       ),
       [{ eventId: "legacy", episodeId: "fresh" }],
     );
+  });
+});
+
+describe("relink batching", () => {
+  it("splits into ordered slices with a short tail", () => {
+    assert.deepEqual(chunks([1, 2, 3, 4, 5], 2), [[1, 2], [3, 4], [5]]);
+    assert.deepEqual(chunks([1, 2, 3, 4], 2), [[1, 2], [3, 4]]);
+    assert.deepEqual(chunks([], 2), []);
+  });
+
+  it("keeps a relink statement inside Postgres' bind limit", () => {
+    // Two binds per relink, plus one for the titleId predicate.
+    assert.ok(RELINK_BATCH_SIZE * 2 + 1 <= 65_535);
+    const relinks = Array.from({ length: RELINK_BATCH_SIZE + 1 }, (_, index) => index);
+    assert.deepEqual(
+      chunks(relinks, RELINK_BATCH_SIZE).map((batch) => batch.length),
+      [RELINK_BATCH_SIZE, 1],
+    );
+  });
+});
+
+describe("tvRuntime", () => {
+  const season = (...runtimes: Array<number | null>) => ({
+    id: 1,
+    season_number: 1,
+    name: "Season 1",
+    overview: "",
+    air_date: null,
+    poster_path: null,
+    episodes: runtimes.map((runtime, index) => ({
+      id: 100 + index,
+      episode_number: index + 1,
+      season_number: 1,
+      name: `Episode ${index + 1}`,
+      overview: "",
+      air_date: null,
+      runtime,
+      still_path: null,
+      vote_average: 0,
+    })),
+  });
+
+  it("prefers the runtime TMDB states", () => {
+    assert.equal(tvRuntime([42, 50], [season(60)]), 42);
+  });
+
+  it("falls back to the median episode runtime, ignoring zero and missing ones", () => {
+    assert.equal(tvRuntime([], [season(58, 90, null), season(60, 0)]), 60);
+    assert.equal(tvRuntime([0], [season(58, 61)]), 60);
+    assert.equal(tvRuntime(undefined, [season(58, 90, 60, 62)]), 61);
+  });
+
+  it("returns null when neither TMDB nor the episodes state one", () => {
+    assert.equal(tvRuntime([], [season(null, 0)]), null);
+    assert.equal(tvRuntime(null, []), null);
   });
 });

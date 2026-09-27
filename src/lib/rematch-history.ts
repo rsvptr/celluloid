@@ -1,3 +1,5 @@
+import type { TmdbSeasonDetails } from "@/lib/tmdb";
+
 export interface RematchIdentity {
   tmdbId: number | null;
   mediaType: "MOVIE" | "TV";
@@ -20,6 +22,22 @@ export interface FreshEpisodeCoordinate {
 export interface EpisodeEventRelink {
   eventId: string;
   episodeId: string;
+}
+
+/**
+ * Relinks per UPDATE statement. Each binds two values, which keeps a statement
+ * well inside Postgres' 65,535-parameter limit. Prisma splits its own bulk
+ * inserts at that limit, but not a raw statement.
+ */
+export const RELINK_BATCH_SIZE = 10_000;
+
+/** Consecutive slices of at most `size` items, in order. */
+export function chunks<T>(values: readonly T[], size: number): T[][] {
+  const result: T[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    result.push(values.slice(index, index + size));
+  }
+  return result;
 }
 
 /**
@@ -67,6 +85,74 @@ export function discoveredAtForNewEpisode(
   return airDate.getTime() >= now.getTime() - RECENT_AIR_WINDOW_MS
     ? now
     : titleCreatedAt;
+}
+
+/** TMDB calendar dates are UTC midnight. */
+function toDate(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const d = new Date(value.length <= 10 ? `${value}T00:00:00.000Z` : value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * When the next episode airs, or null once nothing is scheduled.
+ *
+ * TMDB's own `next_episode_to_air` is authoritative but frequently absent for
+ * smaller and regional shows, so the earliest future air date across the
+ * seasons we just read stands in for it. Returning null when neither knows is
+ * deliberate: it clears a date that has since passed, so the airing-soon view
+ * never advertises an episode that already aired.
+ */
+export function deriveNextEpisodeAirDate(
+  tmdbNextAirDate: string | null | undefined,
+  seasons: TmdbSeasonDetails[],
+  now: Date,
+): Date | null {
+  const today = startOfUtcDay(now).getTime();
+  const stated = toDate(tmdbNextAirDate);
+  if (stated && stated.getTime() >= today) return stated;
+
+  let earliest: Date | null = null;
+  for (const season of seasons) {
+    for (const ep of season.episodes ?? []) {
+      const airs = toDate(ep.air_date);
+      if (!airs || airs.getTime() < today) continue;
+      if (earliest === null || airs.getTime() < earliest.getTime()) earliest = airs;
+    }
+  }
+  return earliest;
+}
+
+/** Air dates are calendar dates, so "future" is measured from midnight, not now. */
+function startOfUtcDay(now: Date): Date {
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+  );
+}
+
+/**
+ * A TV show's typical episode length in minutes, or null when nothing says.
+ *
+ * TMDB's `episode_run_time` is empty for most current shows, so the median of
+ * the loaded episodes' own runtimes stands in for it: the median rather than
+ * the mean, so a double-length finale or a short special doesn't skew it.
+ * Zero and missing runtimes are TMDB not knowing, never a length.
+ */
+export function tvRuntime(
+  episodeRunTime: readonly number[] | null | undefined,
+  seasons: readonly TmdbSeasonDetails[],
+): number | null {
+  const stated = episodeRunTime?.[0];
+  if (stated && stated > 0) return stated;
+  const runtimes = seasons
+    .flatMap((season) => (season.episodes ?? []).map((ep) => ep.runtime))
+    .filter((runtime): runtime is number => typeof runtime === "number" && runtime > 0)
+    .sort((a, b) => a - b);
+  if (runtimes.length === 0) return null;
+  const middle = Math.floor(runtimes.length / 2);
+  return runtimes.length % 2 === 1
+    ? runtimes[middle]
+    : Math.round((runtimes[middle - 1] + runtimes[middle]) / 2);
 }
 
 /**

@@ -89,7 +89,8 @@ const mockModules = new Map<string, string>([
   [
     "@/lib/tmdb",
     "export async function getMovie() { throw new Error('unused'); }\n" +
-      "export async function getSeason() { throw new Error('unused'); }\n" +
+      "export async function getSeasons() { throw new Error('unused'); }\n" +
+      "export const MAX_APPENDED_SEASONS = 20;\n" +
       "export async function getTv() { throw new Error('unused'); }",
   ],
 ]);

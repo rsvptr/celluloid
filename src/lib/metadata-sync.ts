@@ -6,16 +6,26 @@ import {
   WatchStatus,
   type Prisma,
 } from "@/generated/prisma/client";
-import type { TmdbEpisode, TmdbRegionProviders, TmdbSeasonDetails } from "@/lib/tmdb";
+import {
+  appendedSeasons,
+  MAX_APPENDED_SEASONS,
+  TmdbError,
+  tmdbErrorCode,
+  type TmdbEpisode,
+  type TmdbRegionProviders,
+  type TmdbSeasonDetails,
+} from "@/lib/tmdb";
 import { DEFAULT_WATCH_REGION, isWatchRegion } from "@/lib/tmdb-extras";
 import { mapLimit } from "@/lib/async";
 import { env } from "@/lib/env";
 import {
   ACTIVE_EPISODE_FILTER,
+  chunks,
+  deriveNextEpisodeAirDate,
   discoveredAtForNewEpisode,
   WITHDRAWN_EPISODE_NUMBER_OFFSET,
 } from "@/lib/rematch-history";
-export { discoveredAtForNewEpisode } from "@/lib/rematch-history";
+export { deriveNextEpisodeAirDate, discoveredAtForNewEpisode } from "@/lib/rematch-history";
 
 /**
  * Scheduled TMDB metadata refresh.
@@ -44,7 +54,7 @@ export { discoveredAtForNewEpisode } from "@/lib/rematch-history";
 // --- TMDB access ------------------------------------------------------------
 //
 // This module does its own fetching rather than calling lib/tmdb's getTv /
-// getSeason. Those wrappers cache responses for 24h, which is right for the
+// getSeasons. Those wrappers cache responses for 24h, which is right for the
 // interactive paths but wrong here: on a daily cadence a still-warm entry means
 // the sync reads yesterday's answer to "did anything air?" — the one question
 // it exists to ask. lib/tmdb's fetcher is module-private and its caching is
@@ -72,20 +82,37 @@ class SyncBudgetExhaustedError extends Error {
   }
 }
 
-/** The fields the sync reads off /tv/{id}; a superset of TmdbTvDetails. */
-interface TmdbTvSyncDetail {
+/** The title-level fields the sync reads off /movie/{id} or /tv/{id}. */
+interface TmdbTitleSyncDetail {
   id: number;
-  name?: string;
-  number_of_seasons?: number | null;
+  overview?: string | null;
+  poster_path?: string | null;
+  backdrop_path?: string | null;
+  vote_average?: number | null;
+  genres?: { name: string }[] | null;
+  /** Movies. */
+  release_date?: string | null;
+  runtime?: number | null;
+  /** TV. `episode_run_time` is empty for most current shows. */
+  first_air_date?: string | null;
+  episode_run_time?: number[] | null;
   /** TMDB's lifecycle string: "Returning Series", "Ended", "Canceled", ... */
   status?: string | null;
+  "watch/providers"?: { results?: Record<string, TmdbRegionProviders> };
+}
+
+/** The fields the sync reads off /tv/{id}; a superset of TmdbTvDetails. */
+interface TmdbTvSyncDetail extends TmdbTitleSyncDetail {
+  name?: string;
+  number_of_seasons?: number | null;
   next_episode_to_air?: { air_date?: string | null } | null;
   seasons?: TmdbSeasonSummary[];
-  "watch/providers"?: { results?: Record<string, TmdbRegionProviders> };
 }
 
 /** The compact season rows included in TMDB's TV-detail response. */
 export interface TmdbSeasonSummary {
+  /** The season's TMDB id, which appended season details omit. */
+  id: number;
   season_number: number;
   episode_count?: number | null;
   air_date?: string | null;
@@ -147,7 +174,7 @@ async function tmdbGet<T>(
       }
       throw err;
     }
-    if ((res.status === 429 || res.status >= 500) && attempt < 1) {
+    if (isTransientStatus(res.status) && attempt < 1) {
       const retryAfter = Number(res.headers.get("retry-after"));
       const wait = Math.min(retryAfter > 0 ? retryAfter * 1000 : 800, 3000);
       // Only sleep on a retry the budget can actually pay for; otherwise fall
@@ -157,9 +184,31 @@ async function tmdbGet<T>(
         continue;
       }
     }
-    throw new Error(`TMDB ${res.status} on ${path}`);
+    const code = tmdbErrorCode(await res.text().catch(() => ""));
+    throw new TmdbError(
+      res.status,
+      code,
+      `TMDB ${res.status}${code === null ? "" : ` (code ${code})`} on ${path}`,
+    );
   }
 }
+
+/** Rate limiting and server errors: TMDB having a bad moment, not a bad title. */
+function isTransientStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+/**
+ * TMDB rejected the token itself (401: code 7 invalid key, code 10 suspended).
+ * Every request in the run fails the same way, so it is a run-level failure.
+ */
+function isAuthFailure(err: unknown): boolean {
+  return err instanceof TmdbError && err.status === 401;
+}
+
+/** Recorded for a title TMDB answers 404 for (code 34): removed or merged. */
+const REMOVED_FROM_TMDB_MESSAGE =
+  "TMDB no longer lists this title. Use Change match to pick its current entry.";
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -178,32 +227,38 @@ function fetchTvDetail(tmdbId: number, deadline: number): Promise<TmdbTvSyncDeta
   );
 }
 
-function fetchSeason(
+/** Up to MAX_APPENDED_SEASONS seasons in one request, ids from the show's season list. */
+async function fetchSeasons(
   tmdbId: number,
-  seasonNumber: number,
+  seasons: TmdbSeasonSummary[],
   deadline: number,
-): Promise<TmdbSeasonDetails> {
-  return tmdbGet<TmdbSeasonDetails>(
-    `/tv/${tmdbId}/season/${seasonNumber}`,
-    { language: "en-US" },
+): Promise<TmdbSeasonDetails[]> {
+  const response = await tmdbGet<Record<string, unknown>>(
+    `/tv/${tmdbId}`,
+    {
+      language: "en-US",
+      append_to_response: seasons.map((s) => `season/${s.season_number}`).join(","),
+    },
     deadline,
   );
+  return appendedSeasons(response, seasons).map(({ sd }) => sd);
 }
 
-interface TmdbWatchProvidersResponse {
-  results?: Record<string, TmdbRegionProviders>;
-}
-
-/** One cheap provider-only request for a title that needs no other metadata. */
-function fetchWatchProviders(
+/**
+ * One request for a title that needs no season data: its details, with
+ * providers riding along. It costs the same single request as the bare
+ * /watch/providers call it replaced, and it is the only refresh movies get, so
+ * a moved release date, a new poster or a settled rating reaches them too.
+ */
+function fetchDetailWithProviders(
   mediaType: MediaType,
   tmdbId: number,
   deadline: number,
-): Promise<TmdbWatchProvidersResponse> {
+): Promise<TmdbTitleSyncDetail> {
   const kind = mediaType === MediaType.TV ? "tv" : "movie";
-  return tmdbGet<TmdbWatchProvidersResponse>(
-    `/${kind}/${tmdbId}/watch/providers`,
-    {},
+  return tmdbGet<TmdbTitleSyncDetail>(
+    `/${kind}/${tmdbId}`,
+    { language: "en-US", append_to_response: "watch/providers" },
     deadline,
   );
 }
@@ -249,6 +304,8 @@ interface SyncCandidate {
   seasons: StoredSeasonSummary[];
   /** Region attached to provider ids before a provider-only refresh. */
   providersRegion?: string | null;
+  /** The last recorded metadata outcome; decides whether a transient failure keeps its place. */
+  metadataSyncState?: MetadataSyncState | null;
 }
 
 /** Everything the candidate query needs beyond the sync-state split below. */
@@ -281,6 +338,7 @@ const METADATA_CANDIDATE_SELECT = {
   createdAt: true,
   mediaType: true,
   metadataSyncedAt: true,
+  metadataSyncState: true,
   seasons: {
     where: { seasonNumber: { gte: 1 } },
     orderBy: { seasonNumber: "asc" },
@@ -352,6 +410,7 @@ async function selectMetadataCandidates(
             kind: "TV_METADATA" as const,
             dueAt: r.metadataSyncedAt?.getTime() ?? 0,
             seasons: r.seasons,
+            metadataSyncState: r.metadataSyncState,
           },
         ],
   );
@@ -502,7 +561,7 @@ export interface StoredSeasonSummary {
  * compact counters.
  */
 export function seasonNumbersToRefresh(
-  remote: ReadonlyArray<TmdbSeasonSummary>,
+  remote: ReadonlyArray<Omit<TmdbSeasonSummary, "id">>,
   stored: ReadonlyArray<StoredSeasonSummary>,
   newestCount = 2,
 ): number[] {
@@ -535,39 +594,33 @@ export function seasonNumbersToRefresh(
 }
 
 /**
- * When the next episode airs, or null once nothing is scheduled.
+ * Title-level metadata to refresh from a TMDB detail response.
  *
- * TMDB's own `next_episode_to_air` is authoritative but frequently absent for
- * smaller and regional shows, so the earliest future air date across the
- * seasons we just read stands in for it. Returning null when neither knows is
- * deliberate: it clears a date that has since passed, so the airing-soon view
- * never advertises an episode that already aired.
+ * A refresh only ever replaces a stored value with a real one. An empty
+ * overview (a missing en-US translation), an empty genre list, a missing image
+ * or date, a 0 rating (no votes yet) and a 0 runtime all mean TMDB doesn't
+ * know, and blanking what the title page already shows would be a regression.
+ * TV runtime comes from `episode_run_time`, which is empty for most current
+ * shows, so it is written only when TMDB actually states one. The name is left
+ * alone: legacy import rows may carry the owner's own spelling.
  */
-export function deriveNextEpisodeAirDate(
-  tmdbNextAirDate: string | null | undefined,
-  seasons: TmdbSeasonDetails[],
-  now: Date,
-): Date | null {
-  const today = startOfUtcDay(now).getTime();
-  const stated = toDate(tmdbNextAirDate);
-  if (stated && stated.getTime() >= today) return stated;
-
-  let earliest: Date | null = null;
-  for (const season of seasons) {
-    for (const ep of season.episodes ?? []) {
-      const airs = toDate(ep.air_date);
-      if (!airs || airs.getTime() < today) continue;
-      if (earliest === null || airs.getTime() < earliest.getTime()) earliest = airs;
-    }
-  }
-  return earliest;
-}
-
-/** Air dates are calendar dates, so "future" is measured from midnight, not now. */
-function startOfUtcDay(now: Date): Date {
-  return new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
-  );
+export function titleMetadataFromDetail(
+  detail: TmdbTitleSyncDetail,
+  mediaType: MediaType,
+): Prisma.TitleUpdateManyMutationInput {
+  const isTv = mediaType === MediaType.TV;
+  const releaseDate = toDate(isTv ? detail.first_air_date : detail.release_date);
+  const runtime = isTv ? detail.episode_run_time?.[0] : detail.runtime;
+  const genres = (detail.genres ?? []).map((g) => g.name);
+  return {
+    ...(detail.poster_path ? { posterPath: detail.poster_path } : {}),
+    ...(detail.backdrop_path ? { backdropPath: detail.backdrop_path } : {}),
+    ...(detail.overview ? { overview: detail.overview } : {}),
+    ...(detail.vote_average ? { tmdbRating: detail.vote_average } : {}),
+    ...(genres.length > 0 ? { genres } : {}),
+    ...(releaseDate ? { releaseDate } : {}),
+    ...(runtime ? { runtime } : {}),
+  };
 }
 
 /**
@@ -701,6 +754,7 @@ async function recordFailure(
   candidate: SyncCandidate,
   message: string,
   now: Date,
+  keepPlace = false,
 ): Promise<boolean> {
   // A failed old request must not mark a newly rematched title FAILED. The same
   // identity boundary guards both successful writes and their failure stamps.
@@ -716,8 +770,10 @@ async function recordFailure(
       // Stamped even on failure: the queue is ordered by this column, so
       // leaving it untouched would park a permanently broken title at the head
       // of every future run and starve everything behind it. The FAILED state
-      // and the message below are what make the failure visible instead.
-      metadataSyncedAt: now,
+      // and the message below are what make the failure visible instead. The
+      // one exception is `keepPlace`: a first transient failure, which the
+      // next run should retry first rather than days later.
+      ...(keepPlace ? {} : { metadataSyncedAt: now }),
       metadataSyncState: MetadataSyncState.FAILED,
       metadataLastError: message,
     },
@@ -739,6 +795,7 @@ async function recordProviderFailure(
   region: string,
   candidate: SyncCandidate,
   now: Date,
+  removed: boolean,
 ): Promise<boolean> {
   const updated = await prisma.title.updateMany({
     where: {
@@ -748,7 +805,18 @@ async function recordProviderFailure(
       tmdbId: candidate.tmdbId,
       mediaType: candidate.mediaType,
     },
-    data: providerFailureUpdate(region, candidate.providersRegion, now),
+    data: {
+      ...providerFailureUpdate(region, candidate.providersRegion, now),
+      // This path is the only refresh movies get, so a title TMDB has removed
+      // is recorded where Settings lists failures; otherwise nothing would
+      // ever tell the owner it needs a new match.
+      ...(removed
+        ? {
+            metadataSyncState: MetadataSyncState.FAILED,
+            metadataLastError: REMOVED_FROM_TMDB_MESSAGE,
+          }
+        : {}),
+    },
   });
   return updated.count > 0;
 }
@@ -769,17 +837,30 @@ async function syncOneTitle(
     candidate.seasons,
   );
 
-  const fetched = await mapLimit(seasonNumbers, SEASON_CONCURRENCY, (n) =>
-    fetchSeason(candidate.tmdbId, n, deadline).catch((err: unknown) => {
-      // Running out of budget is not a season that failed to load. Treating it
-      // as one would write PARTIAL and stamp metadataSyncedAt, sending a title
-      // to the back of the queue with half its seasons read; abandoning the
-      // whole title leaves it where it is, first in line tomorrow.
-      if (err instanceof SyncBudgetExhaustedError) throw err;
-      return null;
-    }),
+  // Up to 20 seasons per request; the ids appended seasons lack come from the
+  // show's own season list. A request that fails counts as its seasons
+  // failing to load.
+  const summaries = new Map(
+    (detail.seasons ?? []).map((season) => [season.season_number, season]),
   );
-  const seasons = fetched.filter((s): s is TmdbSeasonDetails => s !== null);
+  const fetched = await mapLimit(
+    chunks(
+      seasonNumbers.map((n) => summaries.get(n)!),
+      MAX_APPENDED_SEASONS,
+    ),
+    SEASON_CONCURRENCY,
+    (chunk) =>
+      fetchSeasons(candidate.tmdbId, chunk, deadline).catch((err: unknown) => {
+        // Running out of budget is not a season that failed to load. Treating it
+        // as one would write PARTIAL and stamp metadataSyncedAt, sending a title
+        // to the back of the queue with half its seasons read; abandoning the
+        // whole title leaves it where it is, first in line tomorrow. A rejected
+        // token is the whole run's failure, not this season's.
+        if (err instanceof SyncBudgetExhaustedError || isAuthFailure(err)) throw err;
+        return [];
+      }),
+  );
+  const seasons = fetched.flat();
   const allOk = seasons.length === seasonNumbers.length;
 
   const nextEpisodeAirDate = deriveNextEpisodeAirDate(
@@ -828,6 +909,7 @@ async function syncOneTitle(
       await tx.title.update({
         where: { id: candidate.id },
         data: {
+          ...titleMetadataFromDetail(detail, MediaType.TV),
           tmdbStatus: detail.status ?? null,
           nextEpisodeAirDate,
           // Only written when TMDB actually stated it: a response that omits
@@ -876,7 +958,10 @@ async function syncOneTitle(
   };
 }
 
-/** Refresh only the included/free/ad-supported provider ids for one title. */
+/**
+ * Refresh the included/free/ad-supported provider ids for one title, plus the
+ * title-level metadata that rides along on the same request.
+ */
 async function syncProviderOnly(
   userId: string,
   region: string,
@@ -884,15 +969,16 @@ async function syncProviderOnly(
   now: Date,
   deadline: number,
 ): Promise<TitleSyncOutcome> {
-  const providers = await fetchWatchProviders(
+  const detail = await fetchDetailWithProviders(
     candidate.mediaType,
     candidate.tmdbId,
     deadline,
   );
+  const providers = detail["watch/providers"];
   // A valid empty regional result is represented by a populated results map
   // without the requested region. A missing map means the response itself was
   // incomplete, so preserve the last known cache and retry on a later run.
-  if (!providers.results) throw new Error("TMDB provider response omitted results.");
+  if (!providers?.results) throw new Error("TMDB provider response omitted results.");
   const updated = await prisma.title.updateMany({
     where: {
       id: candidate.id,
@@ -902,9 +988,23 @@ async function syncProviderOnly(
       mediaType: candidate.mediaType,
     },
     data: {
+      ...titleMetadataFromDetail(detail, candidate.mediaType),
+      // Finished, watched shows only ever come through here, so this is where
+      // a revival ("Ended" back to "Returning Series") is noticed: the new
+      // status puts the show back in the metadata queue. The next air date is
+      // left alone, because without season data this path could only clear a
+      // date the metadata path derived.
+      ...(candidate.mediaType === MediaType.TV && detail.status
+        ? { tmdbStatus: detail.status }
+        : {}),
       streamProviderIds: streamProviderIdsForRegion(providers.results, region),
       providersRegion: region,
       providersSyncedAt: now,
+      // No other sync path writes a movie's sync state, so a success here
+      // clears a removal recorded above once TMDB lists the title again.
+      ...(candidate.mediaType === MediaType.MOVIE
+        ? { metadataSyncState: null, metadataLastError: null }
+        : {}),
     },
   });
 
@@ -1188,12 +1288,13 @@ export async function syncUserMetadata(
 
   const candidates = await selectCandidates(userId, region, limit);
   const now = new Date();
+  let authFailure: unknown = null;
 
   const outcomes = await mapLimit<SyncCandidate, TitleSyncOutcome | null>(
     candidates,
     concurrency,
     async (candidate) => {
-      if (Date.now() >= deadline) return null;
+      if (authFailure !== null || Date.now() >= deadline) return null;
       try {
         return candidate.kind === "TV_METADATA"
           ? await syncOneTitle(userId, region, candidate, now, deadline)
@@ -1204,13 +1305,31 @@ export async function syncUserMetadata(
         // metadataSyncedAt — losing its place at the head of the queue — and
         // report a problem the owner cannot act on.
         if (err instanceof SyncBudgetExhaustedError) return null;
-        const message = errorMessage(err);
+        // A rejected token fails every title the same way. Stamping each one
+        // FAILED would bury the single real cause under a list of identical
+        // rows and send the whole batch to the back of the queue, so the run
+        // stops starting titles and reports it once, below.
+        if (isAuthFailure(err)) {
+          authFailure ??= err;
+          return null;
+        }
+        const removed = err instanceof TmdbError && err.status === 404;
+        const message = removed ? REMOVED_FROM_TMDB_MESSAGE : errorMessage(err);
         console.error(
           `metadata sync failed (titleId=${candidate.id}, tmdbId=${candidate.tmdbId}, kind=${candidate.kind}):`,
           err,
         );
         let identityStillCurrent = true;
         if (candidate.kind === "TV_METADATA") {
+          // A 429 or 5xx that outlasted its retry is TMDB having a bad moment,
+          // so the first one keeps the title's place and the next run tries it
+          // first, with the failure still recorded where Settings shows it. A
+          // title that had already failed is stamped as usual, so a title TMDB
+          // keeps rejecting can't hold the head of the queue night after night.
+          const keepPlace =
+            err instanceof TmdbError &&
+            isTransientStatus(err.status) &&
+            candidate.metadataSyncState !== MetadataSyncState.FAILED;
           // Recording the failure must not itself abort the run — if the database
           // is the thing that is unwell, the next title will report it too.
           identityStillCurrent = await recordFailure(
@@ -1218,6 +1337,7 @@ export async function syncUserMetadata(
             candidate,
             message,
             new Date(),
+            keepPlace,
           ).catch((writeErr) => {
             console.error(
               `metadata sync could not record failure (titleId=${candidate.id}):`,
@@ -1226,14 +1346,18 @@ export async function syncUserMetadata(
             return true;
           });
         } else {
-          // Provider failures do not make the title metadata itself FAILED,
-          // but they still need an attempt stamp or one broken lookup pins the
-          // provider queue forever and starves every title behind it.
+          // Provider failures still need an attempt stamp or one broken lookup
+          // pins the provider queue forever and starves every title behind it.
+          // Unlike the metadata path, a transient failure is stamped too: this
+          // path has no failure state to show a waiting title by, so keeping
+          // its place would hide it at the head of the queue. Only a removal
+          // is recorded.
           identityStillCurrent = await recordProviderFailure(
             userId,
             region,
             candidate,
             new Date(),
+            removed,
           ).catch((writeErr) => {
             console.error(
               `metadata sync could not record provider failure (titleId=${candidate.id}):`,
@@ -1260,6 +1384,11 @@ export async function syncUserMetadata(
       }
     },
   );
+
+  // Rethrown only once the titles already in flight have settled, so nothing
+  // is still writing when runScheduledSync records it as this account's
+  // runError.
+  if (authFailure !== null) throw authFailure;
 
   return tallySyncOutcomes(userId, candidates.length, outcomes);
 }

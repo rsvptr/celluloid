@@ -76,6 +76,8 @@ async function runSyncScenario(options: {
   mutateIdentityBeforeLock?: boolean;
   failAfterIdentityChange?: boolean;
   enforceEpisodeConstraints?: boolean;
+  /** Extra fields on TMDB's show-detail response. */
+  detail?: Record<string, unknown>;
 }) {
   const title = {
     id: "title-a",
@@ -227,9 +229,13 @@ async function runSyncScenario(options: {
       },
     })) as never;
 
+  const requests: URL[] = [];
   globalThis.fetch = (async (input: string | URL | Request) => {
-    const path = new URL(String(input)).pathname;
-    if (path === "/3/tv/100") {
+    const url = new URL(String(input));
+    requests.push(url);
+    const path = url.pathname;
+    const append = url.searchParams.get("append_to_response");
+    if (path === "/3/tv/100" && append === "watch/providers") {
       if (options.failAfterIdentityChange) {
         Object.assign(title, { tmdbId: 200, mediaType: "MOVIE", name: "New movie" });
         throw new Error("old request failed after rematch");
@@ -241,37 +247,43 @@ async function runSyncScenario(options: {
         next_episode_to_air: null,
         seasons: [
           {
+            id: 500,
             season_number: 1,
             episode_count: options.remoteEpisodes.length,
             air_date: "2026-01-01",
           },
         ],
+        ...options.detail,
       });
     }
-    if (path === "/3/tv/100/season/1") {
+    if (path === "/3/tv/100" && append === "season/1") {
       if (options.mutateIdentityBeforeLock) {
         Object.assign(title, { tmdbId: 200, mediaType: "MOVIE", name: "New movie" });
       }
+      // An appended season carries no id of its own; the sync takes it from
+      // the show's season list above.
       return Response.json({
-        id: 500,
-        season_number: 1,
-        name: "Season 1",
-        overview: null,
-        air_date: "2026-01-01",
-        poster_path: null,
-        episodes: options.remoteEpisodes.map((episode) => ({
-          ...episode,
+        id: 100,
+        "season/1": {
+          season_number: 1,
+          name: "Season 1",
           overview: null,
-          runtime: 45,
-          still_path: null,
-        })),
+          air_date: "2026-01-01",
+          poster_path: null,
+          episodes: options.remoteEpisodes.map((episode) => ({
+            ...episode,
+            overview: null,
+            runtime: 45,
+            still_path: null,
+          })),
+        },
       });
     }
-    throw new Error(`Unexpected synthetic fetch ${path}`);
+    throw new Error(`Unexpected synthetic fetch ${url.pathname}${url.search}`);
   }) as typeof fetch;
 
   const result = await syncUserMetadata("owner-a", { limit: 1 });
-  return { result, title, season, writes, titleWrite };
+  return { result, title, season, writes, titleWrite, requests };
 }
 
 describe("TMDB episode identity sync", { concurrency: false }, () => {
@@ -402,6 +414,47 @@ describe("TMDB episode identity sync", { concurrency: false }, () => {
     assert.equal(scenario.title.tmdbId, 200);
     assert.equal(scenario.title.mediaType, "MOVIE");
     assert.equal("metadataSyncState" in scenario.title, false);
+  });
+
+  it("refreshes title-level fields without blanking the stored runtime", async () => {
+    const scenario = await runSyncScenario({
+      localEpisodes: [],
+      remoteEpisodes: [],
+      detail: {
+        poster_path: "/fresh.jpg",
+        overview: "",
+        vote_average: 8.4,
+        genres: [{ name: "Drama" }],
+        episode_run_time: [],
+      },
+    });
+
+    const titleWrite = scenario.titleWrite as Record<string, unknown> | null;
+    assert.ok(titleWrite);
+    assert.equal(titleWrite.posterPath, "/fresh.jpg");
+    assert.equal(titleWrite.tmdbRating, 8.4);
+    assert.deepEqual(titleWrite.genres, ["Drama"]);
+    assert.equal("overview" in titleWrite, false);
+    assert.equal("runtime" in titleWrite, false);
+    assert.equal("name" in titleWrite, false);
+  });
+
+  it("loads seasons through one appended request and keeps their TMDB ids", async () => {
+    const scenario = await runSyncScenario({
+      localEpisodes: [localEpisode(1, 1001, "Pilot")],
+      remoteEpisodes: [
+        { id: 1001, episode_number: 1, name: "Pilot", air_date: "2026-08-01" },
+      ],
+    });
+
+    assert.deepEqual(
+      scenario.requests.map((url) => url.searchParams.get("append_to_response")),
+      ["watch/providers", "season/1"],
+    );
+    assert.equal(scenario.result.synced, 1);
+    assert.equal(scenario.season.tmdbId, 500);
+    // With the id backfilled the stored season matches, so nothing is rewritten.
+    assert.equal(scenario.writes.includes("season.update"), false);
   });
 
   it("uses the active-episode marker in badge and Upcoming SQL", async () => {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { searchMulti } from "../src/lib/tmdb";
+import { getMovie, searchMulti, TmdbError, tmdbErrorCode } from "../src/lib/tmdb";
 
 const originalFetch = globalThis.fetch;
 const originalDateNow = Date.now;
@@ -79,5 +79,32 @@ describe("TMDB request budget", { concurrency: false }, () => {
 
     await assert.rejects(request, /cancelled/i);
     assert.equal(timerCleared, true);
+  });
+});
+
+describe("TMDB error responses", { concurrency: false }, () => {
+  it("reads TMDB's status_code from an error body", () => {
+    assert.equal(tmdbErrorCode('{"success":false,"status_code":34,"status_message":"x"}'), 34);
+    assert.equal(tmdbErrorCode('{"status_message":"no code"}'), null);
+    assert.equal(tmdbErrorCode("<html>Bad gateway</html>"), null);
+    assert.equal(tmdbErrorCode(""), null);
+  });
+
+  it("throws a typed error carrying the HTTP status and TMDB code", async () => {
+    process.env.TMDB_ACCESS_TOKEN = "inert-test-token";
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return Response.json({ success: false, status_code: 34 }, { status: 404 });
+    }) as typeof fetch;
+
+    await assert.rejects(getMovie(1), (err: unknown) => {
+      assert.ok(err instanceof TmdbError);
+      assert.equal(err.status, 404);
+      assert.equal(err.code, 34);
+      assert.match(err.message, /^TMDB 404 on \/movie\/1: /);
+      return true;
+    });
+    assert.equal(calls, 1, "a 404 is not retried");
   });
 });
