@@ -22,7 +22,7 @@ describe("terminology and button labels (JK-32)", () => {
   it("turns 2FA off with the words its confirm uses", async () => {
     const settings = await source("../src/app/(app)/settings/settings-client.tsx");
     assert.match(settings, /title: "Turn off two-factor authentication\?",[\s\S]{0,120}confirmLabel: "Turn off 2FA",/);
-    assert.doesNotMatch(settings, /Disable 2FA/);
+    assert.doesNotMatch(settings, /(?:en|dis)able 2FA/i);
   });
 
   it("gives Cancel import a distinct way to stay", async () => {

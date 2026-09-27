@@ -41,7 +41,7 @@ describe("panels submit as forms (JK-11)", () => {
       '{saved ? "Replace key" : "Save key"}',
       '{pending ? "Updating…" : "Change password"}',
       ": null} Turn off 2FA",
-      "<ShieldCheck size={16} />} Enable 2FA",
+      "<ShieldCheck size={16} />} Turn on 2FA",
       ": null} Verify & turn on",
       "<Trash2 size={16} /> Delete my account",
     ]) {

@@ -642,10 +642,10 @@ function MyServicesSection({
             </p>
           ) : null}
 
-          {/* Concentric corners, 8px apart at each level: logo rounded-lg (8px),
-              tile rounded-2xl (8 + p-2 = 16px), list rounded-3xl (16 + p-2 =
-              24px). All three were rounded-lg (JK-34). */}
-          <div className="max-h-80 overflow-y-auto rounded-3xl bg-surface-2/50 p-2 ring-1 ring-line">
+          {/* Concentric corners, capped at the card: list at the card radius
+              (14.4px), tile rounded-lg (about 14.4 - p-2), logo rounded (4px).
+              All three were rounded-lg (JK-34). */}
+          <div className="max-h-80 overflow-y-auto rounded-[var(--radius-card)] bg-surface-2/50 p-2 ring-1 ring-line">
             {visibleProviders.length > 0 ? (
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
                 {visibleProviders.map((provider) => {
@@ -660,13 +660,13 @@ function MyServicesSection({
                       onClick={() => toggleProvider(provider.id)}
                       title={atLimit ? "You can choose up to 100 services" : provider.name}
                       className={cn(
-                        "focus-ring flex min-h-14 min-w-0 items-center gap-2 rounded-2xl p-2 text-left text-xs ring-1 transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+                        "focus-ring flex min-h-14 min-w-0 items-center gap-2 rounded-lg p-2 text-left text-xs ring-1 transition-colors disabled:cursor-not-allowed disabled:opacity-40",
                         isSelected
                           ? "bg-brand/15 text-foreground ring-brand/40"
                           : "bg-surface text-muted ring-line hover:text-foreground hover:ring-line-strong",
                       )}
                     >
-                      <span className="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-surface-2 ring-1 ring-line">
+                      <span className="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded bg-surface-2 ring-1 ring-line">
                         {provider.logoPath ? (
                           <Image
                             src={`${TMDB_IMAGE_BASE}w92${provider.logoPath}`}
@@ -1931,7 +1931,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
       const QRCode = uri ? (await import("qrcode")).default : null;
       const qrDataUrl =
         uri && QRCode ? await QRCode.toDataURL(uri, { margin: 1, width: 200 }) : null;
-      // The password form, and the Enable 2FA button that had focus, give way
+      // The password form, and the Turn on 2FA button that had focus, give way
       // to the setup steps. Start at step 1 so the QR code, setup key and
       // backup codes come before the code field.
       flushSync(() => {
@@ -2002,7 +2002,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
     try {
       const { error } = await authClient.twoFactor.disable({ password });
       if (error) {
-        setError(error.message ?? "Couldn't disable 2FA. Try again.");
+        setError(error.message ?? "Couldn't turn off 2FA. Try again.");
         return;
       }
       // The panel, and the Turn off 2FA button that had focus, give way to the
@@ -2014,7 +2014,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
       document.getElementById("settings-enable-two-factor-password")?.focus();
       router.refresh();
     } catch {
-      setError("Celluloid couldn't disable 2FA. Check your connection and retry.");
+      setError("Celluloid couldn't turn off 2FA. Check your connection and retry.");
     } finally {
       setBusy(false);
     }
@@ -2137,7 +2137,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
           >
             <label className="flex flex-col gap-1.5">
               <span className="text-xs font-medium text-muted">
-                Current password to disable 2FA
+                Current password to turn off 2FA
               </span>
               <Input
                 name="disable-two-factor-password"
@@ -2171,7 +2171,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
         >
           <label className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-muted">
-              Current password to enable 2FA
+              Current password to turn on 2FA
             </span>
             <Input
               id="settings-enable-two-factor-password"
@@ -2190,7 +2190,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
             className="self-start"
             disabled={busy || !password}
           >
-            {busy ? <Spinner /> : <ShieldCheck size={16} />} Enable 2FA
+            {busy ? <Spinner /> : <ShieldCheck size={16} />} Turn on 2FA
           </Button>
         </form>
       ) : (

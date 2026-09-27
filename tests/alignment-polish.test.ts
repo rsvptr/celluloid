@@ -23,10 +23,10 @@ describe("alignment polish (JK-36)", () => {
     assert.match(rec, /className="w-20 text-center tabular-nums sm:h-8"/);
   });
 
-  it("seven KPIs get seven columns at lg", async () => {
+  it("seven KPIs lay out 4 + 3 from sm and in one row from xl", async () => {
     const stats = await source("../src/app/(app)/stats/stats-client.tsx");
-    assert.match(stats, /grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7/);
-    const kpis = stats.slice(stats.indexOf("lg:grid-cols-7"), stats.indexOf("</div>", stats.indexOf("lg:grid-cols-7")));
+    assert.match(stats, /grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-7/);
+    const kpis = stats.slice(stats.indexOf("xl:grid-cols-7"), stats.indexOf("</div>", stats.indexOf("xl:grid-cols-7")));
     assert.equal(kpis.match(/<Kpi\b/g)?.length, 7);
   });
 });

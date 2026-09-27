@@ -65,9 +65,10 @@ export function StatsClient({
         </Card>
       ) : (
         <>
-          {/* Seven KPIs: seven columns at lg, so Rewatches isn't orphaned
-              on a second row (JK-36). */}
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
+          {/* Seven KPIs: 4 + 3 from sm, so Rewatches isn't orphaned on a
+              row of its own, and one row from xl; at lg, seven columns
+              squeezed the labels and values onto two lines (JK-36). */}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-7">
             <Kpi label="Titles" value={stats.total} />
             <Kpi label="Movies" value={stats.movies} />
             <Kpi label="TV shows" value={stats.tv} />
