@@ -83,8 +83,10 @@ export function TitleControls({
   const logDateId = useId();
   const logNoteId = useId();
   const logContentRef = useRef<HTMLDivElement>(null);
+  const logTriggerRef = useRef<HTMLButtonElement | null>(null);
 
-  function openLog() {
+  function openLog(e: React.MouseEvent<HTMLButtonElement>) {
+    logTriggerRef.current = e.currentTarget;
     setLogDate(todayLocalDate());
     setLogNote("");
     setLogOpen(true);
@@ -431,10 +433,17 @@ export function TitleControls({
               }
               document.getElementById(logDateId)?.focus();
             }}
+            onCloseAutoFocus={(e) => {
+              // Radix returns focus only to a Dialog.Trigger inside this Root,
+              // and the Log watch button lives in the Card below, so focus fell
+              // to <body> on close (JK-03). Hand it back by hand.
+              e.preventDefault();
+              logTriggerRef.current?.focus();
+            }}
             className="fixed left-1/2 top-1/2 z-50 max-h-[85dvh] w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[var(--radius-card)] bg-surface p-5 ring-1 ring-line focus:outline-none data-[state=open]:animate-[dialog-content-in_0.2s_cubic-bezier(0.16,1,0.3,1)]"
           >
             <Dialog.Close
-              className="absolute right-3 top-3 -m-3 flex min-h-11 min-w-11 items-center justify-center rounded text-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/60 sm:m-0 sm:min-h-0 sm:min-w-0"
+              className="absolute right-3 top-3 -m-3 flex min-h-11 min-w-11 items-center justify-center rounded text-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 sm:m-0 sm:min-h-0 sm:min-w-0"
               aria-label="Close"
             >
               <X size={18} />
@@ -457,7 +466,7 @@ export function TitleControls({
                   type="date"
                   value={logDate}
                   onChange={(e) => setLogDate(e.target.value)}
-                  className="h-11 w-full rounded-lg bg-surface-2 px-3 text-base text-foreground ring-1 ring-line-strong focus:outline-none focus:ring-2 focus:ring-brand/60 sm:h-10 sm:text-sm [color-scheme:dark]"
+                  className="h-11 w-full rounded-lg bg-surface-2 px-3 text-base text-foreground ring-1 ring-line-strong focus:outline-hidden focus:ring-2 focus:ring-brand/60 forced-colors:border sm:h-10 sm:text-sm [color-scheme:dark]"
                 />
               </div>
               <div className="flex flex-col gap-1.5">
@@ -569,7 +578,7 @@ export function TitleControls({
             latestImmediateRef.current.watchedAt = v;
             commitImmediate();
           }}
-          className="h-11 w-full rounded-lg bg-surface-2 px-3 text-base text-foreground ring-1 ring-line-strong focus:outline-none focus:ring-2 focus:ring-brand/60 sm:h-10 sm:text-sm [color-scheme:dark]"
+          className="h-11 w-full rounded-lg bg-surface-2 px-3 text-base text-foreground ring-1 ring-line-strong focus:outline-hidden focus:ring-2 focus:ring-brand/60 forced-colors:border sm:h-10 sm:text-sm [color-scheme:dark]"
         />
       </Field>
 

@@ -18,7 +18,7 @@ describe("watched interaction safeguards", () => {
       library.lastIndexOf("<Select", bulkMarker),
       library.indexOf("</Select>", bulkMarker),
     );
-    assert.match(bulkSelect, /onChange=\{\(e\) => setBulkStatus/);
+    assert.match(bulkSelect, /onChange=\{\(e\) => \{[^}]*setBulkStatus/);
     assert.doesNotMatch(bulkSelect, /bulkSetStatus/);
     assert.match(library, /onClick=\{applyBulkStatus\}/);
 

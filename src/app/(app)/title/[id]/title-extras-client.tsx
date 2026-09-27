@@ -96,7 +96,7 @@ export function RegionSelect({ region }: { region: string }) {
         // region switch wait on it. The cookie above is the fast path.
         saveWatchRegionPreference(v).catch(() => {});
       }}
-      className="has-chevron h-7 min-h-11 cursor-pointer appearance-none rounded-md bg-surface-2 pl-2 pr-7 text-xs text-muted ring-1 ring-line focus:outline-none focus:ring-2 focus:ring-brand/60 disabled:opacity-60 sm:min-h-0"
+      className="has-chevron h-7 min-h-11 cursor-pointer appearance-none rounded-md bg-surface-2 pl-2 pr-7 text-xs text-muted ring-1 ring-line focus:outline-hidden focus:ring-2 focus:ring-brand/60 forced-colors:border disabled:opacity-60 sm:min-h-0"
     >
       {WATCH_REGIONS.map((r) => (
         <option key={r} value={r}>

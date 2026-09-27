@@ -7,7 +7,7 @@ type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 type ButtonSize = "sm" | "md";
 
 const buttonBase =
-  "inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/60 disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap";
+  "inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap";
 
 const buttonVariants: Record<ButtonVariant, string> = {
   primary:
@@ -50,8 +50,12 @@ export function Button({
 
 // --- Inputs ----------------------------------------------------------------
 
+// outline-hidden (not `outline: none`) and forced-colors:border: the ring focus
+// indicator and ring-1 edge are box-shadows, which forced colors removes. The
+// transparent outline and the border are repainted there, and change nothing
+// in normal mode.
 const fieldBase =
-  "rounded-lg bg-surface-2 px-3 text-base sm:text-sm text-foreground placeholder:text-faint ring-1 ring-line-strong focus:outline-none focus:ring-2 focus:ring-brand/60 transition";
+  "rounded-lg bg-surface-2 px-3 text-base sm:text-sm text-foreground placeholder:text-faint ring-1 ring-line-strong focus:outline-hidden focus:ring-2 focus:ring-brand/60 forced-colors:border transition";
 
 // ComponentProps<"input"> (not InputHTMLAttributes<HTMLInputElement>): the
 // latter is attributes-only and has no `ref` field, so callers couldn't get a

@@ -147,7 +147,7 @@ export function libraryFilterKey(filters: LibraryFilters): string {
 }
 
 const addTitleButtonClass =
-  "inline-flex min-h-11 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg brand-gradient px-4 text-sm font-semibold text-[#04121c] shadow-sm shadow-brand/20 transition-colors hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/60 sm:min-h-10";
+  "inline-flex min-h-11 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg brand-gradient px-4 text-sm font-semibold text-[#04121c] shadow-sm shadow-brand/20 transition-colors hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 sm:min-h-10";
 
 // Chrome moves focus to <body> the instant a focused control becomes
 // `disabled`, so every bulk and Trash action left the keyboard back at the skip
@@ -1214,7 +1214,7 @@ function BulkBar({
   }
 
   function applyBulkStatus() {
-    if (!bulkStatus) return;
+    if (disabled || !bulkStatus) return;
     const status = bulkStatus;
     run(async () => {
       const result = await bulkSetStatus(ids, status);
@@ -1249,10 +1249,15 @@ function BulkBar({
 
             <Select
               value={bulkStatus}
-              disabled={disabled}
-              onChange={(e) => setBulkStatus(e.target.value as WatchStatus | "")}
+              aria-disabled={disabled}
+              onChange={(e) => {
+                // aria-disabled doesn't stop a native select from changing, so
+                // guard here (the controlled value then snaps back).
+                if (disabled) return;
+                setBulkStatus(e.target.value as WatchStatus | "");
+              }}
               aria-label="Set status for selected titles"
-              className="w-auto min-h-11 shrink-0"
+              className={cn("w-auto min-h-11 shrink-0", softDisabledClass)}
             >
               <option value="">Set status…</option>
               {STATUS_ORDER.map((s) => (
@@ -1265,9 +1270,9 @@ function BulkBar({
               type="button"
               size="sm"
               variant="secondary"
-              disabled={disabled || !bulkStatus}
+              aria-disabled={disabled || !bulkStatus}
               onClick={applyBulkStatus}
-              className="min-h-11 shrink-0"
+              className={cn("min-h-11 shrink-0", softDisabledClass)}
             >
               Apply
             </Button>
