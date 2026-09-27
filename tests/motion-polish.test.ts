@@ -65,4 +65,11 @@ describe("motion polish", () => {
     assert.match(name, reveal);
     assert.match(name, /motion-safe:animate-\[collapse-in_220ms_var\(--ease-out\)\]/);
   });
+
+  it("shows the share page's skip link without sliding it in (EM-15)", async () => {
+    const page = await source("app/s/[slug]/page.tsx");
+    const link = page.match(/<a\s+href="#share-content"\s+className="([^"]*)"/)?.[1] ?? "";
+    assert.match(link, /(^| )focus:translate-y-0( |$)/);
+    assert.doesNotMatch(link, /(^| )(transition|duration|ease)[\w-[\]]*( |$)/);
+  });
 });

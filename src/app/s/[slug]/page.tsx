@@ -104,9 +104,10 @@ export default async function SharePage({
         <div className="absolute inset-x-0 top-0 h-[34rem] opacity-[0.025] [background-image:linear-gradient(to_right,white_1px,transparent_1px),linear-gradient(to_bottom,white_1px,transparent_1px)] [background-size:56px_56px]" />
       </div>
 
+      {/* Appears instantly on Tab: a keyboard action never animates (EM-15). */}
       <a
         href="#share-content"
-        className="focus-ring fixed left-4 top-3 z-50 -translate-y-20 rounded-lg bg-foreground px-4 py-2 text-sm font-semibold text-background transition-transform focus:translate-y-0"
+        className="focus-ring fixed left-4 top-3 z-50 -translate-y-20 rounded-lg bg-foreground px-4 py-2 text-sm font-semibold text-background focus:translate-y-0"
       >
         Skip to shared list
       </a>
