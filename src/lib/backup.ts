@@ -1,5 +1,5 @@
 import "server-only";
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, hkdfSync, randomBytes, timingSafeEqual } from "node:crypto";
 import type { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
@@ -1373,6 +1373,21 @@ export async function restoreBackup(
 }
 
 const CONFIRMATION_TTL_MS = 15 * 60 * 1_000;
+
+/**
+ * The restore-token HMAC key, derived from BETTER_AUTH_SECRET rather than the
+ * secret itself. Better Auth signs its session cookie cache with that exact
+ * key (HMAC-SHA256, base64url), so an app HMAC under it could one day sign
+ * something Better Auth trusts. The label keeps the two apart without a new
+ * env var. Tokens signed with the raw secret, i.e. issued before this key
+ * existed, now fail verification, and the route asks for a fresh preview.
+ */
+function restoreConfirmationKey(): Buffer {
+  return Buffer.from(
+    hkdfSync("sha256", env.BETTER_AUTH_SECRET, "", "celluloid-restore-confirmation-v1", 32),
+  );
+}
+
 const RESTORE_COUNT_KEYS = [
   "create",
   "update",
@@ -1431,7 +1446,7 @@ export function createRestoreConfirmation(
     counts,
     stateDigest,
   );
-  const signature = createHmac("sha256", env.BETTER_AUTH_SECRET)
+  const signature = createHmac("sha256", restoreConfirmationKey())
     .update(payload)
     .digest("base64url");
   return [issuedAt, ...restoreCountValues(counts), signature].join(".");
@@ -1473,7 +1488,7 @@ export function verifyRestoreConfirmation(
     tokenCounts,
     stateDigest,
   );
-  const expected = createHmac("sha256", env.BETTER_AUTH_SECRET)
+  const expected = createHmac("sha256", restoreConfirmationKey())
     .update(payload)
     .digest();
   let supplied: Buffer;

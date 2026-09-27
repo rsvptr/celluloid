@@ -3,7 +3,7 @@ import { betterAuth } from "better-auth";
 import { APIError, createAuthMiddleware } from "better-auth/api";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { nextCookies } from "better-auth/next-js";
-import { twoFactor } from "better-auth/plugins";
+import { twoFactor } from "better-auth/plugins/two-factor";
 import { env } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 import { consumeSignupInvite } from "@/lib/signup-invite";
@@ -36,6 +36,18 @@ const enforceAuthRequestPolicy = createAuthMiddleware(async (context) => {
       message: "That invite code wasn't accepted. Ask the person who invited you for a new one.",
     });
   }
+
+  // Sign-up is the other way a name reaches the user row, so hold it to
+  // updateProfile's rules (a string of at most 2,000 characters, trimmed and
+  // cut to 80, not empty), and drop `image`, which Celluloid never sets.
+  // Better Auth validates and reads this same body object after the hook.
+  if (!body || typeof body.name !== "string" || body.name.length > 2000) {
+    throw new APIError("BAD_REQUEST", { message: "Invalid request. Refresh and try again." });
+  }
+  const name = body.name.trim().slice(0, 80);
+  if (!name) throw new APIError("BAD_REQUEST", { message: "Name can't be empty." });
+  body.name = name;
+  delete body.image;
 });
 
 export const auth = betterAuth({
@@ -77,6 +89,13 @@ export const auth = betterAuth({
     modelName: "rateLimit",
     window: 60,
     max: 100,
+    // Every endpoint that checks a password or a 2FA code gets a tight per-IP
+    // budget, including ones the UI never calls (/verify-password,
+    // /two-factor/get-totp-uri): a stolen session could otherwise guess the
+    // password there at the global 100/min, or 18/min on the plugin's 3-per-10s
+    // /two-factor/* default. Keep windows at 60 s: Better Auth prunes rows idle
+    // longer than its own longest window (60 s) and ignores these rules when it
+    // does, so a longer window would reset early.
     customRules: {
       "/sign-in/email": { window: 60, max: 10 },
       "/sign-up/email": { window: 60, max: 5 },
@@ -84,6 +103,17 @@ export const auth = betterAuth({
       "/two-factor/verify-totp": { window: 60, max: 10 },
       "/two-factor/verify-backup-code": { window: 60, max: 5 },
       "/delete-user": { window: 60, max: 5 },
+      "/verify-password": { window: 60, max: 5 },
+      "/two-factor/enable": { window: 60, max: 5 },
+      "/two-factor/disable": { window: 60, max: 5 },
+      "/two-factor/generate-backup-codes": { window: 60, max: 5 },
+      "/two-factor/get-totp-uri": { window: 60, max: 5 },
+      "/two-factor/verify-otp": { window: 60, max: 5 },
+      // `false` skips the limiter entirely. The endpoint takes no guessable
+      // input (the token sits in an HMAC-signed cookie) and returns early
+      // without one, so a limiter write (several Postgres round trips) costs
+      // more than the request it would guard.
+      "/get-session": false,
     },
   },
 

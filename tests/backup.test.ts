@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { createHash, createHmac } from "node:crypto";
+import { createHash, createHmac, hkdfSync } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { register } from "node:module";
 import {
   backupEnvelopeSchema,
@@ -815,6 +816,11 @@ const { createRestoreConfirmation, verifyRestoreConfirmation } = await import(
   "../src/lib/backup"
 );
 
+/** restoreConfirmationKey() in backup.ts: HKDF of the secret under a fixed label. */
+const RESTORE_TEST_KEY = Buffer.from(
+  hkdfSync("sha256", RESTORE_TEST_SECRET, "", "celluloid-restore-confirmation-v1", 32),
+);
+
 /**
  * Mirrors confirmationPayload() plus the signing half of
  * createRestoreConfirmation() (backup.ts, just above verifyRestoreConfirmation)
@@ -829,6 +835,7 @@ function signRestoreToken(
   counts: RestorePreviewCounts,
   stateDigest: string,
   issuedAt: number,
+  key: string | Buffer = RESTORE_TEST_KEY,
 ): string {
   const digest = createHash("sha256").update(bytes).digest("base64url");
   const countValues = [
@@ -854,7 +861,7 @@ function signRestoreToken(
     issuedAt,
     ...countValues,
   ].join(":");
-  const signature = createHmac("sha256", RESTORE_TEST_SECRET)
+  const signature = createHmac("sha256", key)
     .update(payload)
     .digest("base64url");
   return [issuedAt, ...countValues, signature].join(".");
@@ -1023,6 +1030,39 @@ describe("restore confirmation", () => {
     assert.equal(
       verifyRestoreConfirmation(token, userId, mode, bytes, counts, stateDigest),
       false,
+    );
+  });
+
+  it("signs with a key derived from BETTER_AUTH_SECRET, not the secret itself (BA-13)", () => {
+    // What createRestoreConfirmation mints is exactly the derived-key token.
+    const token = createRestoreConfirmation(userId, mode, bytes, counts, stateDigest);
+    const issuedAt = Number(token.split(".")[0]);
+    assert.equal(token, signRestoreToken(userId, mode, bytes, counts, stateDigest, issuedAt));
+    // A preview token from before the deploy, signed with the raw secret and
+    // still inside its 15 minutes, is refused like an expired one.
+    const preDeploy = signRestoreToken(
+      userId,
+      mode,
+      bytes,
+      counts,
+      stateDigest,
+      issuedAt,
+      RESTORE_TEST_SECRET,
+    );
+    assert.equal(
+      verifyRestoreConfirmation(preDeploy, userId, mode, bytes, counts, stateDigest),
+      false,
+    );
+  });
+
+  it("answers a refused token with a request for a fresh preview", async () => {
+    const route = await readFile(
+      new URL("../src/app/api/backup/restore/route.ts", import.meta.url),
+      "utf8",
+    );
+    assert.match(
+      route,
+      /!verifyRestoreConfirmation\([\s\S]*?\)\s*\)\s*\{\s*return json\(\s*\{ error: "The restore preview expired or the library changed\. Preview the backup again\." \},\s*409,/,
     );
   });
 });

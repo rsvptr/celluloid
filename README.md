@@ -276,13 +276,31 @@ This is your data on your infrastructure.
 - Every query is scoped to the signed in user, so one account can never read another's titles, tags, shares, or settings.
 - Your Anthropic key is encrypted at rest with AES 256 GCM. It is never stored or logged in plaintext.
 - Accounts use email and password through Better Auth, with optional time based two factor (an authenticator app, with backup codes and a manual setup key). Sessions are stored in the database, and deleting your account requires your password, not just a live session. Settings lists every active session with its device, IP address, and last-active time, so you can sign out one device or every device but this one.
-- Sign in, sign up, password change, and two factor verification are rate limited against brute force, and the AI, search, import, and export routes are rate limited per user to keep a runaway loop from draining your API budget.
+- Sign in, sign up, and every endpoint that checks a password or a two factor code are rate limited per IP against brute force, and the AI, search, import, and export routes are rate limited per user to keep a runaway loop from draining your API budget.
 - New accounts require the shared `SIGNUP_INVITE_CODE`, checked server-side before Better Auth creates the user. Leave it unset when you are not inviting anyone; existing users can still sign in.
 - The one unauthenticated endpoint, the scheduled sync, is gated on a bearer token compared in constant time, and refuses to run at all when that secret is not configured rather than falling back to open access.
 - Security headers are set for every response: frame denial, no sniff, a strict referrer policy, a content security policy covering framing, plugins, base tags, and form targets, a permissions policy that turns off browser capabilities the app never uses, and HSTS on the production domain.
 - Remembered filters are plain cookies on your own device. They hold filter values and nothing else, never search text, and the Settings toggle that governs them deletes them when switched off.
 - A recommendation run scoped to part of your library sends Anthropic that part's details only. Every other title appears in the prompt as a bare name and year on an exclusion list, so notes and ratings outside the chosen scope stay home.
 - Server side input validation bounds every free text field. The runtime dependency tree has no known advisories; the `prisma` CLI carries transitive advisories (`deepmerge-ts`, `mysql2`) that do not reach application code.
+
+### Rotating `BETTER_AUTH_SECRET`
+
+`BETTER_AUTH_SECRET` does more than sign sessions. Better Auth encrypts every two factor secret and backup code with it, Celluloid derives its restore-preview key from it, and wherever `ENCRYPTION_KEY` is unset (local and preview deployments; production requires it) it also encrypts stored Anthropic keys. Replacing the value outright:
+
+- Signs everyone out, which is expected.
+- Locks out every account with two factor on. Its secret and backup codes no longer decrypt, so sign-in can't finish, and turning two factor off needs a session. The only way back is editing the database by hand.
+- Makes stored Anthropic keys unreadable wherever `ENCRYPTION_KEY` is unset. Recommendations fall back to the server key until each person saves theirs again. Changing `ENCRYPTION_KEY` itself does the same.
+- Voids restore previews and two factor sign-in challenges in flight. Both expire within 15 minutes anyway.
+
+To rotate safely, keep the old value and add the new one as a versioned secret:
+
+1. Generate a new secret with `npx auth@latest secret` (at least 32 characters).
+2. Leave `BETTER_AUTH_SECRET` unchanged and add `BETTER_AUTH_SECRETS=2:<new secret>` (in the Vercel project settings for production), then redeploy.
+3. Better Auth now signs sessions and encrypts new two factor data with the new secret, and still decrypts existing two factor data with `BETTER_AUTH_SECRET`. Everyone signs in once more. Two factor, Anthropic keys and restore previews keep working, because `BETTER_AUTH_SECRET` itself did not change.
+4. Next time, put the newest secret first and keep the earlier ones: `BETTER_AUTH_SECRETS=3:<newest>,2:<new secret>`. Remove a version only when no `twoFactor` row's `secret` or `backupCodes` still starts with `$ba$<version>$`.
+
+Keep `BETTER_AUTH_SECRET` at its original value after that: it remains the only key for two factor data created before the first rotation. Turning two factor off and on again re-encrypts an account's data under the current secret.
 
 ## Architecture
 
