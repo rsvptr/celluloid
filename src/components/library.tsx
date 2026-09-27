@@ -274,6 +274,9 @@ export function Library({
   // the live result count derived from it — catches up a beat behind typing.
   const deferredQuery = useDeferredValue(query);
 
+  // Keyed on the narrowing fields rather than the whole state, which also
+  // changes with every keystroke and view switch (see libraryResultsKey); the
+  // criteria are read back out of the key.
   const resultsKey = libraryResultsKey(filters);
   const { filtered, uncheckedServiceCount } = useMemo(() => {
     const { type, status, language, tag, genre, rating, sort, onlyUnmatched, onlyOnServices } =
