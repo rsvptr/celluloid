@@ -296,6 +296,19 @@ label {
   animation: dialog-content-out var(--duration-dialog-out) var(--ease-out);
 }
 
+/* The toaster rides above the library's bulk bar (EM-07). While open, the bar
+   publishes --toast-bottom, its height plus a gap. The toaster keeps its
+   resting offset and is lifted by the difference on `translate`, so when the
+   bar closes its toasts ease down with the bar (same curve, the bar's 200 ms
+   exit) rather than snapping: `bottom` wasn't transitioned, and animating it
+   would lay out every frame. --toast-desktop-bottom is the resting offset at
+   every width, since below Sonner's 600px mobile layout it equals the mobile
+   one. Sonner's own toaster transition (transform) is restated. */
+[data-sonner-toaster].toast-lift {
+  translate: 0 calc(var(--toast-desktop-bottom, 24px) - var(--toast-bottom, var(--toast-desktop-bottom, 24px)));
+  transition: transform 400ms ease, translate 200ms var(--ease-drawer);
+}
+
 /* Entrances that run from the first paint, with no JS. Sites apply them with
    motion-safe:animate-[…], so the resting (and reduced-motion) state is
    visible and still, and nothing waits on Motion's lazily loaded features.

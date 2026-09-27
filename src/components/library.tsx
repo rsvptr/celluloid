@@ -47,7 +47,7 @@ import { IntentLink } from "./intent-link";
 import { Poster } from "./poster";
 import { ShareDialog } from "./share-dialog";
 import { useConfirm } from "./confirm-dialog";
-import { AnimatePresence, EASE_OUT, InertOnExit, motion } from "./motion";
+import { AnimatePresence, EASE_DRAWER, EASE_OUT, InertOnExit, motion } from "./motion";
 import { STATUS_META, STATUS_ORDER, fullDate, languageName, progressPct } from "@/lib/format";
 import {
   bulkAddTag,
@@ -1212,10 +1212,11 @@ function BulkBar({
           // dialog opened from here still renders on top.
           className="fixed inset-x-0 bottom-0 z-[45] px-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
           data-motion-enter
-          initial={{ y: 80, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          exit={{ y: 80, opacity: 0 }}
-          transition={{ duration: 0.25, ease: EASE_OUT }}
+          // EM-11: rise its full height (80px left a 132px phone bar half on
+          // screen) on the drawer curve, and leave faster than it came.
+          initial={{ y: "100%", opacity: 0 }}
+          animate={{ y: 0, opacity: 1, transition: { duration: 0.25, ease: EASE_DRAWER } }}
+          exit={{ y: "100%", opacity: 0, transition: { duration: 0.2, ease: EASE_DRAWER } }}
         >
           {/* max-w-5xl (was 4xl): the full control set measures ~930px, so the
               wider cap is what lets a desktop still show it on a single row. */}
