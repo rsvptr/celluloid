@@ -52,12 +52,12 @@ function tvLabel(count: number) {
 }
 
 /**
- * Whether a note can overflow its four-line clamp. A card column holds about
- * 22 characters of text-xs per line, so 80 characters or 4 line breaks can;
- * erring long only shows a toggle that changes nothing.
+ * Whether a note can overflow its four-line clamp. At 320px a card column
+ * holds about 18 characters of text-xs per line, so 60 characters or 3 line
+ * breaks can; erring long only shows a toggle that changes nothing.
  */
 function noteMayClamp(notes: string) {
-  return notes.length > 80 || notes.split("\n").length > 4;
+  return notes.length > 60 || notes.split("\n").length > 3;
 }
 
 export async function generateMetadata({

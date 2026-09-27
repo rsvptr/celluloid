@@ -22,7 +22,7 @@ import { Library } from "@/components/library";
 // "Library · Celluloid", like every other page (JK-23).
 export const metadata: Metadata = { title: "Library" };
 
-const PROVIDER_FRESHNESS_MS =7 * 24 * 60 * 60 * 1000;
+const PROVIDER_FRESHNESS_MS = 7 * 24 * 60 * 60 * 1000;
 
 function providerStaleCutoffIso(): string {
   return new Date(new Date().getTime() - PROVIDER_FRESHNESS_MS).toISOString();

@@ -5,7 +5,7 @@
  * colour survived a backup round trip without ever reaching a pixel. Rather
  * than open it to arbitrary hex, the owner chooses from a fixed palette.
  *
- * The palette's hues belong to tags alone (JK-17): none is within 15° of a
+ * The palette's hues belong to tags alone (JK-17): each is at least 22° from a
  * status hue (sky, amber, emerald, slate and rose; see the color roles in
  * globals.css), so a tag chip never reads as a status badge beside it. Text on
  * each chip measures 7.5:1 or more on surface and surface-2.

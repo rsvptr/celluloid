@@ -26,10 +26,10 @@ async function statusFamilies() {
 }
 
 /** oklch hue of a Tailwind palette step, from Tailwind's own theme. */
-async function hue(family: string) {
+async function hue(family: string, step = 300) {
   const theme = await source("../node_modules/tailwindcss/theme.css");
-  const m = theme.match(new RegExp(`--color-${family}-300: oklch\\([\\d.]+% [\\d.]+ ([\\d.]+)\\)`));
-  assert.ok(m, `no ${family}-300 in the Tailwind theme`);
+  const m = theme.match(new RegExp(`--color-${family}-${step}: oklch\\([\\d.]+% [\\d.]+ ([\\d.]+)\\)`));
+  assert.ok(m, `no ${family}-${step} in the Tailwind theme`);
   return Number(m[1]);
 }
 
@@ -73,13 +73,15 @@ describe("status color tokens (JK-16)", () => {
 });
 
 describe("tag palette (JK-17)", () => {
-  it("keeps every tag hue at least 15° from every status hue", async () => {
+  it("keeps every tag hue at least 22° from every status hue", async () => {
     const { families } = await statusFamilies();
     for (const tag of TAG_COLORS) {
       assert.match(TAG_COLOR_META[tag].chip, new RegExp(`text-${tag}-300`));
       for (const status of families.values()) {
-        const d = hueDistance(await hue(tag), await hue(status));
-        assert.ok(d >= 15, `${tag} is ${d.toFixed(1)}° from ${status}`);
+        for (const step of [300, 500]) {
+          const d = hueDistance(await hue(tag, step), await hue(status, step));
+          assert.ok(d >= 22, `${tag} is ${d.toFixed(1)}° from ${status} at ${step}`);
+        }
       }
     }
   });
