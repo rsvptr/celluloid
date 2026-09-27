@@ -4,6 +4,7 @@ import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { addFromTmdb, rematchTitle } from "@/lib/actions";
 import { mapLimit } from "@/lib/async";
+import { ACTIVE_EPISODE_FILTER } from "@/lib/rematch-history";
 import {
   findByImdbId,
   findTvByTvdbId,
@@ -675,9 +676,13 @@ async function applyStagedStatus(
     // covers the whole run: with unaired episodes left alone the total is no
     // longer the watched count, and a denormalized cache that disagrees with the
     // rows is corrected — visibly, under the owner — by the next recompute.
+    // Withdrawn episodes stay watched but are out of the progress counts, as in
+    // recomputeProgress; counting them could exceed totalEpisodes (PR-11).
     const [total, watched] = await Promise.all([
-      tx.episode.count({ where: { season: { titleId } } }),
-      tx.episode.count({ where: { season: { titleId }, watched: true } }),
+      tx.episode.count({ where: { season: { titleId }, ...ACTIVE_EPISODE_FILTER } }),
+      tx.episode.count({
+        where: { season: { titleId }, watched: true, ...ACTIVE_EPISODE_FILTER },
+      }),
     ]);
     await tx.title.update({
       where: { id: titleId },
@@ -765,9 +770,12 @@ async function mergeExistingStagedFacts(
       },
       data: { watched: true, watchedAt: null },
     });
+    // Active episodes only, as in applyStagedStatus above (PR-11).
     const [total, watched] = await Promise.all([
-      tx.episode.count({ where: { season: { titleId } } }),
-      tx.episode.count({ where: { season: { titleId }, watched: true } }),
+      tx.episode.count({ where: { season: { titleId }, ...ACTIVE_EPISODE_FILTER } }),
+      tx.episode.count({
+        where: { season: { titleId }, watched: true, ...ACTIVE_EPISODE_FILTER },
+      }),
     ]);
     await tx.title.update({
       where: { id: titleId },
