@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import { requireUser } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { getAccountInfo, getUserPrefs, getUserShareLists } from "@/lib/data";
-import { getWatchProviders } from "@/lib/tmdb";
+import { getWatchProviders, getWatchRegions } from "@/lib/tmdb";
 import { DEFAULT_WATCH_REGION } from "@/lib/tmdb-extras";
 import { MetadataSyncState } from "@/generated/prisma/client";
 import {
@@ -93,16 +93,32 @@ export default async function SettingsPage() {
     },
   });
 
-  const [info, shares, tags, prefs, providerCatalogue, cookieStore, metadataFailures] =
-    await Promise.all([
-      getAccountInfo(user.id),
-      getUserShareLists(user.id),
-      getTagSummaries(user.id),
-      preferencesPromise,
-      providerCataloguePromise,
-      cookies(),
-      metadataFailuresPromise,
-    ]);
+  // TMDB's region list for the region picker. Without it the picker still
+  // shows the saved region.
+  const watchRegionsPromise = getWatchRegions().catch((error) => {
+    console.error("Could not load TMDB watch regions:", error);
+    return [] as string[];
+  });
+
+  const [
+    info,
+    shares,
+    tags,
+    prefs,
+    providerCatalogue,
+    cookieStore,
+    metadataFailures,
+    watchRegions,
+  ] = await Promise.all([
+    getAccountInfo(user.id),
+    getUserShareLists(user.id),
+    getTagSummaries(user.id),
+    preferencesPromise,
+    providerCataloguePromise,
+    cookies(),
+    metadataFailuresPromise,
+    watchRegionsPromise,
+  ]);
   return (
     // Full shell width (D-UI-17 amendment): no per-page cap.
     <div>
@@ -113,6 +129,7 @@ export default async function SettingsPage() {
         tags={tags}
         timeZone={prefs?.timeZone ?? "UTC"}
         watchRegion={prefs?.watchRegion ?? DEFAULT_WATCH_REGION}
+        watchRegions={watchRegions}
         myProviders={prefs?.myProviders ?? []}
         providers={providerCatalogue.providers}
         providersUnavailable={providerCatalogue.unavailable}

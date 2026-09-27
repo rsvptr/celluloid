@@ -48,8 +48,10 @@ export function RatingStars({
     return Math.min(max, Math.max(0.5, snapped));
   }
 
+  // Only the primary pointer scrubs (EM-17): a second finger landing mid-drag
+  // would otherwise re-capture the row and jump the preview to where it fell.
   function onPointerDown(e: PointerEvent<HTMLDivElement>) {
-    if (disabled || e.button > 0) return; // primary button / touch / pen only
+    if (disabled || e.button > 0 || !e.isPrimary) return; // primary button / touch / pen only
     draggingRef.current = true;
     // Capture so the scrub keeps tracking even if the pointer leaves the row.
     rowRef.current?.setPointerCapture(e.pointerId);
@@ -57,7 +59,7 @@ export function RatingStars({
   }
 
   function onPointerMove(e: PointerEvent<HTMLDivElement>) {
-    if (disabled) return;
+    if (disabled || !e.isPrimary) return;
     // Scrub while pressed; also preview under a hovering mouse (touch has none).
     if (draggingRef.current || e.pointerType === "mouse") {
       setPreview(valueFromClientX(e.clientX));
@@ -72,7 +74,7 @@ export function RatingStars({
   }
 
   function onPointerUp(e: PointerEvent<HTMLDivElement>) {
-    if (disabled || !draggingRef.current) return;
+    if (disabled || !e.isPrimary || !draggingRef.current) return;
     const next = valueFromClientX(e.clientX);
     releaseCapture(e);
     setPreview(null);
@@ -80,6 +82,7 @@ export function RatingStars({
   }
 
   function onPointerCancel(e: PointerEvent<HTMLDivElement>) {
+    if (!e.isPrimary) return;
     // Interrupted gesture: drop the preview without committing.
     releaseCapture(e);
     setPreview(null);

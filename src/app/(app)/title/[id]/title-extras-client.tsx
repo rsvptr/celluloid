@@ -5,20 +5,23 @@ import Link from "next/link";
 import { Check, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Spinner } from "@/components/ui";
+import { nameWithTypeAndYear } from "@/lib/format";
 import { addFromTmdb } from "@/lib/actions";
 import { saveWatchRegionPreference, setWatchRegion } from "@/lib/region-actions";
-import { regionName, WATCH_REGIONS } from "@/lib/tmdb-extras";
+import { regionName, watchRegionOptions } from "@/lib/tmdb-extras";
 
 /** One-click add for a "More like this" pick; links to the title once owned. */
 export function QuickAdd({
   tmdbId,
   mediaType,
   name,
+  year,
   existingId,
 }: {
   tmdbId: number;
   mediaType: "movie" | "tv";
   name: string;
+  year?: number | null;
   existingId?: string;
 }) {
   const [state, setState] = useState<
@@ -40,7 +43,7 @@ export function QuickAdd({
       <Link
         ref={resultRef}
         href={`/title/${state.id}`}
-        className="focus-ring inline-flex w-fit items-center gap-1 rounded-md bg-emerald-500/15 px-2 py-1 text-[11px] font-medium text-emerald-300 ring-1 ring-emerald-500/30"
+        className="focus-ring inline-flex w-fit items-center gap-1 rounded-md bg-emerald-500/15 px-2 py-1 text-xs font-medium text-emerald-300 ring-1 ring-emerald-500/30"
       >
         <Check size={11} /> In library
       </Link>
@@ -51,7 +54,7 @@ export function QuickAdd({
     <button
       type="button"
       disabled={state.kind === "adding"}
-      aria-label={`Add ${name} to your watchlist`}
+      aria-label={`Add ${nameWithTypeAndYear(name, mediaType, year)} to your watchlist`}
       onClick={() => {
         focusResult.current = true;
         start(async () => {
@@ -68,7 +71,7 @@ export function QuickAdd({
           }
         })
       }}
-      className="focus-ring inline-flex min-h-11 w-fit items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-muted ring-1 ring-line transition-colors hover:text-foreground disabled:opacity-60 sm:min-h-0"
+      className="focus-ring inline-flex min-h-11 w-fit items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-muted ring-1 ring-line transition-colors hover:text-foreground disabled:opacity-60 sm:min-h-0"
     >
       {state.kind === "adding" ? <Spinner className="h-3 w-3" /> : <Plus size={11} />}
       Watchlist
@@ -76,8 +79,12 @@ export function QuickAdd({
   );
 }
 
-/** Streaming-region picker; persists to a cookie and re-renders the page. */
-export function RegionSelect({ region }: { region: string }) {
+/**
+ * Streaming-region picker; persists to a cookie and re-renders the page.
+ * `regions` is TMDB's full list, sorted by name, so typing a country's first
+ * letters in the open picker jumps to it.
+ */
+export function RegionSelect({ region, regions }: { region: string; regions: string[] }) {
   const [pending, start] = useTransition();
   return (
     <select
@@ -97,7 +104,7 @@ export function RegionSelect({ region }: { region: string }) {
       }}
       className="has-chevron h-7 min-h-11 cursor-pointer appearance-none rounded-md bg-surface-2 pl-2 pr-7 text-xs text-muted ring-1 ring-line focus:outline-hidden focus:ring-2 focus:ring-brand/60 forced-colors:border disabled:opacity-60 sm:min-h-0"
     >
-      {WATCH_REGIONS.map((r) => (
+      {watchRegionOptions(regions, region).map((r) => (
         <option key={r} value={r}>
           {regionName(r)}
         </option>

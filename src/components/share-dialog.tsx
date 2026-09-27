@@ -53,12 +53,12 @@ export function ShareDialog({
     setError(null);
   }
 
-  // Radix unmounts the content on close, so resetting here can't clobber a reopen.
+  // Closing only reports up. The form resets in onCloseAutoFocus instead,
+  // which Radix fires once the exit animation has unmounted the content
+  // (EM-03); resetting here snapped a created link back to the empty form
+  // while the dialog was still fading out.
   function handleOpenChange(next: boolean) {
-    if (!next) {
-      onClose();
-      reset();
-    }
+    if (!next) onClose();
   }
 
   function create() {
@@ -95,7 +95,7 @@ export function ShareDialog({
   return (
     <Dialog.Root open={open} onOpenChange={handleOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-[dialog-overlay-in_0.2s_ease-out]" />
+        <Dialog.Overlay className="dialog-overlay fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
         <Dialog.Content
           onOpenAutoFocus={(e) => {
             // No autofocus on mobile: keep Radix's default so the on-screen
@@ -105,23 +105,24 @@ export function ShareDialog({
             titleInputRef.current?.focus();
           }}
           onCloseAutoFocus={(e) => {
+            reset();
             if (opener?.current) {
               e.preventDefault();
               opener.current.focus();
             }
           }}
-          className="fixed left-1/2 top-1/2 z-50 max-h-[85dvh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[var(--radius-card)] bg-surface p-5 ring-1 ring-line focus:outline-none data-[state=open]:animate-[dialog-content-in_0.2s_cubic-bezier(0.16,1,0.3,1)]"
+          className="dialog-content fixed left-1/2 top-1/2 z-50 max-h-[85dvh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[var(--radius-card)] bg-surface p-5 ring-1 ring-line focus:outline-none"
         >
           <Dialog.Close
             className="absolute right-3 top-3 -m-3 flex min-h-11 min-w-11 items-center justify-center rounded text-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 sm:m-0 sm:min-h-0 sm:min-w-0"
             aria-label="Close"
           >
-            <X size={18} />
+            <X size={20} />
           </Dialog.Close>
 
           <div className="mb-4 flex items-center gap-2.5">
             <span className="text-brand">
-              <Link2 size={18} />
+              <Link2 size={20} />
             </span>
             <Dialog.Title className="text-sm font-semibold">
               {wholeLibrary
@@ -147,7 +148,7 @@ export function ShareDialog({
               </Dialog.Description>
               <label className="flex flex-col gap-1.5">
                 <span className="text-xs font-medium text-muted">
-                  Title (optional)
+                  List name (optional)
                 </span>
                 <Input
                   ref={titleInputRef}
@@ -194,7 +195,7 @@ export function ShareDialog({
                   Include my ratings and notes
                 </label>
                 <p className="pl-6 text-xs text-faint">
-                  Your star rating and favorite stay private unless this is checked.
+                  Your ratings, notes and favorites stay private unless this is checked.
                 </p>
               </div>
               {wholeLibrary && (
@@ -265,7 +266,7 @@ export function ShareDialog({
                   rel="noreferrer"
                   className="focus-ring inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-muted hover:text-foreground"
                 >
-                  <ExternalLink size={14} /> Open
+                  <ExternalLink size={16} /> Open
                 </a>
                 <Dialog.Close asChild>
                   <Button variant="primary" size="sm">

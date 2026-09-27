@@ -124,6 +124,7 @@ export async function resolve(specifier, context, nextResolve) {
     return {
       url: "data:text/javascript," + encodeURIComponent(
         "export async function findByImdbId() { throw new Error('unexpected TMDB read'); }" +
+        "export async function findTvByTvdbId() { throw new Error('unexpected TMDB read'); }" +
         "export async function getMovie() { throw new Error('unexpected TMDB read'); }" +
         "export async function getTv() { throw new Error('unexpected TMDB read'); }" +
         "export async function searchByType() { throw new Error('unexpected TMDB read'); }",

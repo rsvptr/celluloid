@@ -3,6 +3,7 @@ import { requireUser } from "@/lib/session";
 import { Nav } from "@/components/nav";
 import { MotionProvider } from "@/components/motion";
 import { LazyCommandPalette } from "@/components/command-palette-lazy";
+import { RouteStatus } from "@/components/route-status";
 
 export default async function AppLayout({
   children,
@@ -33,6 +34,7 @@ export default async function AppLayout({
       >
         {children}
       </main>
+      <RouteStatus />
       <LazyCommandPalette />
       <Toaster
         theme="dark"
@@ -45,15 +47,14 @@ export default async function AppLayout({
         // Desktop reads the same property (EM-07): the right-aligned toast
         // otherwise covers the bar's Share, Remove and Done below ~1,800px
         // wide. 24px is Sonner's own desktop default, so other pages don't move.
-        // The toaster drops back when the bar closes (bottom isn't
-        // transitioned); a static offset would float every toast high instead.
         // Sonner's desktop layout starts at 601px, but the tab bar shows until
         // lg (nav.tsx, lg:hidden), so below lg the fallback clears it too.
-        className="[--toast-desktop-bottom:calc(4.5rem+env(safe-area-inset-bottom))] lg:[--toast-desktop-bottom:24px]"
-        offset={{ bottom: "var(--toast-bottom, var(--toast-desktop-bottom, 24px))" }}
-        mobileOffset={{
-          bottom: "var(--toast-bottom, calc(4.5rem + env(safe-area-inset-bottom)))",
-        }}
+        // The offsets stay at rest; toast-lift (globals.css) raises the toaster
+        // by the difference on `translate`, so it eases back down with the bar
+        // instead of snapping when the bar closes.
+        className="toast-lift [--toast-desktop-bottom:calc(4.5rem+env(safe-area-inset-bottom))] lg:[--toast-desktop-bottom:24px]"
+        offset={{ bottom: "var(--toast-desktop-bottom, 24px)" }}
+        mobileOffset={{ bottom: "calc(4.5rem + env(safe-area-inset-bottom))" }}
         toastOptions={{
           style: {
             background: "var(--color-surface)",

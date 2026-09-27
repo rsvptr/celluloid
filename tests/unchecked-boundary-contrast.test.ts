@@ -41,7 +41,7 @@ describe("unchecked checkbox and switch boundaries (JK-05)", () => {
       source("../src/app/(app)/settings/settings-client.tsx"),
     ]);
     assert.match(tracker, /"brand-gradient ring-transparent"\s*: "bg-surface-2 ring-line-strong"/);
-    assert.match(library, /"bg-brand text-\[#04121c\] ring-brand" : "ring-line-strong"/);
+    assert.match(library, /"bg-brand text-on-accent ring-brand" : "ring-line-strong"/);
     assert.match(settings, /enabled \? "bg-brand ring-brand" : "bg-surface ring-line-strong"/);
   });
 });

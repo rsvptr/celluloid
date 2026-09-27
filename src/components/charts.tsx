@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { formatCount } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 // --- Horizontal bar rows ---------------------------------------------------
@@ -25,14 +26,14 @@ export function BarRow({
       <div className="h-2 flex-1 overflow-hidden rounded-full bg-surface-2">
         <div
           className={cn(
-            "h-full origin-left rounded-full motion-safe:animate-[grow-x_300ms_cubic-bezier(0.23,1,0.32,1)]",
+            "h-full origin-left rounded-full motion-safe:animate-[grow-x_300ms_var(--ease-out)]",
             colorClass ?? "brand-gradient",
           )}
           style={{ width: `${pct}%` }}
         />
       </div>
       <span className="w-8 shrink-0 text-right text-xs tabular-nums text-muted">
-        {value}
+        {formatCount(value)}
       </span>
     </div>
   );
@@ -51,11 +52,12 @@ export function ColumnChart({
   // Bars are sized in PIXELS, not percentages: the column wrappers get their
   // height from content (the row only bottom-aligns them), so a % height has
   // no definite parent to resolve against and silently computes to 0.
-  const barArea = height - 38; // minus the value label, axis label, and gaps
+  // Minus the value and axis labels (two 16px text-xs lines) and two 4px gaps.
+  const barArea = height - 40;
   return (
     <div
       role="img"
-      aria-label={data.map((d) => `${d.label}: ${d.value}`).join(", ")}
+      aria-label={data.map((d) => `${d.label}: ${formatCount(d.value)}`).join(", ")}
       className="flex items-end gap-1.5"
       style={{ height }}
     >
@@ -64,23 +66,25 @@ export function ColumnChart({
         return (
           <div
             key={d.label}
-            className="flex flex-1 flex-col items-center justify-end gap-1"
+            className="flex min-w-0 flex-1 flex-col items-center justify-end gap-1"
           >
             {d.value > 0 && (
-              <span className="text-[10px] tabular-nums text-faint">{d.value}</span>
+              <span className="text-xs tabular-nums text-faint">{formatCount(d.value)}</span>
             )}
             <div
-              title={`${d.label}: ${d.value}`}
-              className="w-full rounded-t-md brand-gradient motion-safe:animate-[grow-y_300ms_cubic-bezier(0.23,1,0.32,1)]"
+              title={`${d.label}: ${formatCount(d.value)}`}
+              className="w-full rounded-t-md brand-gradient motion-safe:animate-[grow-y_300ms_var(--ease-out)]"
               style={{ height: px, transformOrigin: "bottom" }}
             />
-            {/* Past 8 buckets, labels collide at narrow widths; drop every
-                other one but keep its slot (invisible, not unmounted) so bars
-                stay on a common baseline. */}
+            {/* From 7 buckets, 12px labels collide at narrow widths; drop
+                every other one but keep its slot (invisible, not unmounted)
+                so bars stay on a common baseline. min-w-0 above lets columns
+                shrink below their label's width, so the chart never widens
+                its card (320px reflow). */}
             <span
               className={cn(
-                "text-[10px] text-faint",
-                data.length > 8 && i % 2 !== 0 && "invisible",
+                "text-xs text-faint",
+                data.length > 6 && i % 2 !== 0 && "invisible",
               )}
             >
               {d.label}
@@ -147,7 +151,7 @@ export function Sparkline({
         <path
           d={area}
           fill="url(#spark-fill)"
-          className="motion-safe:animate-[fade-in_300ms_cubic-bezier(0.23,1,0.32,1)]"
+          className="motion-safe:animate-[fade-in_300ms_var(--ease-out)]"
         />
         <path
           d={line}
@@ -158,11 +162,11 @@ export function Sparkline({
           strokeLinecap="round"
           vectorEffect="non-scaling-stroke"
           pathLength={1}
-          className="motion-safe:animate-[draw-line_400ms_cubic-bezier(0.23,1,0.32,1)]"
+          className="motion-safe:animate-[draw-line_400ms_var(--ease-out)]"
         />
       </svg>
       {labels && (
-        <div className="mt-1 flex justify-between text-[10px] tabular-nums text-faint">
+        <div className="mt-1 flex justify-between text-xs tabular-nums text-faint">
           <span>{labels[0]}</span>
           <span>{labels[1]}</span>
         </div>

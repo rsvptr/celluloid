@@ -21,13 +21,13 @@ import type { TitleIndexEntry } from "@/lib/data";
 import { Button, Card, Input, Select, Spinner } from "@/components/ui";
 import { Shimmer } from "@/components/skeleton";
 import { Poster } from "@/components/poster";
-import { AnimatePresence, motion } from "@/components/motion";
+import { AnimatePresence, EASE_OUT, motion } from "@/components/motion";
 import { addFromTmdb } from "@/lib/actions";
 import { setRecommendModel } from "@/lib/settings-actions";
 import { suppressSuggestion, unsuppressSuggestion } from "@/lib/suppression-actions";
 import { SuppressionsPanel } from "./suppressions-panel";
 import { REC_ERAS, REC_MODELS, type RecEraId } from "@/lib/models";
-import { languageName } from "@/lib/format";
+import { languageName, nameWithTypeAndYear } from "@/lib/format";
 import { undoToast } from "@/lib/undo-toast";
 import { cn } from "@/lib/utils";
 import {
@@ -37,10 +37,13 @@ import {
   writeRememberedCookie,
 } from "@/lib/remembered-state-client";
 
+// Neutral and graded by emphasis, not hue: emerald, amber and slate are the
+// Watched, Watching and On hold statuses, and a "Medium" pick must not read as
+// Watching (JK-17). The label carries the level.
 const CONFIDENCE = {
-  high: "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30",
-  medium: "bg-amber-500/15 text-amber-300 ring-amber-500/30",
-  low: "bg-slate-500/15 text-slate-300 ring-slate-500/30",
+  high: "bg-surface-2 text-foreground ring-line-strong",
+  medium: "bg-surface-2 text-muted ring-line-strong",
+  low: "bg-surface-2 text-faint ring-line",
 } as const;
 
 const CONFIDENCE_LABELS: Record<Recommendation["confidence"], string> = {
@@ -242,7 +245,7 @@ export function RecommendClient({
   const [warnings, setWarnings] = useState<string[]>([]);
   const [recs, setRecs] = useState<Recommendation[] | null>(null);
   const [receivedAny, setReceivedAny] = useState(false);
-  // Titles shown this session, so "Show different" can ask for fresh ones.
+  // Titles shown this session, so "Show different picks" can ask for fresh ones.
   const seen = useRef<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
   const dismissedRef = useRef<Set<string>>(new Set());
@@ -375,7 +378,7 @@ export function RecommendClient({
   }) {
     const useFocus = over?.focus ?? focus;
     const useType = over?.type ?? type;
-    // A fresh run (button/preset) starts over; "Show different" keeps excluding.
+    // A fresh run (button/preset) starts over; "Show different picks" keeps excluding.
     if (over?.reset) seen.current = new Set();
     abortRef.current?.abort();
     const ac = new AbortController();
@@ -636,9 +639,9 @@ export function RecommendClient({
               <div className="flex flex-wrap gap-1.5">
                 {(
                   [
-                    ["all", "Movies & TV"],
+                    ["all", "All"],
                     ["movie", "Movies"],
-                    ["tv", "TV"],
+                    ["tv", "TV shows"],
                   ] as const
                 ).map(([value, label]) => (
                   <button
@@ -692,7 +695,8 @@ export function RecommendClient({
                     disabled={loading}
                     onChange={(event) => setCountStr(event.target.value)}
                     onBlur={() => setCountStr(String(count))}
-                    className="w-20 text-center tabular-nums"
+                    // sm:h-8 matches the 32px count pills beside it (JK-36).
+                    className="w-20 text-center tabular-nums sm:h-8"
                   />
                 </label>
               </div>
@@ -986,23 +990,34 @@ export function RecommendClient({
                 disabled={pickEmpty}
                 className="focus-ring flex min-h-11 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0"
               >
-                <RefreshCw size={14} aria-hidden="true" />
-                Show different
+                <RefreshCw size={16} aria-hidden="true" />
+                Show different picks
               </button>
             )}
           </div>
 
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-            <AnimatePresence initial={false}>
+          {/* relative: popLayout positions an exiting card against this grid. */}
+          <div className="relative grid grid-cols-1 gap-3 lg:grid-cols-2">
+            {/* popLayout takes a dismissed card out of the flow as its exit
+                starts, so the others move at once instead of after it (EM-12). */}
+            <AnimatePresence initial={false} mode="popLayout">
                 {(recs ?? []).map((r, index) => (
                   <motion.div
                     key={recommendationIdentity(r)}
-                    layout
+                    // MO-06: measure only when the list changes, not on every
+                    // keystroke in the focus box, and move without scaling, so
+                    // a card landing in a row of another height isn't squashed.
+                    layout="position"
+                    layoutDependency={recs}
                     data-motion-enter
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -6 }}
-                    transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+                    exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.15, ease: EASE_OUT } }}
+                    transition={{
+                      duration: 0.3,
+                      ease: EASE_OUT,
+                      layout: { type: "spring", visualDuration: 0.3, bounce: 0 },
+                    }}
                     className="min-w-0"
                   >
                     <RecCard
@@ -1033,7 +1048,7 @@ export function RecommendClient({
       {!loading && recs && recs.length === 0 && !error && (
         <p className="py-8 text-center text-sm text-muted">
           {receivedAny
-            ? "You've hidden every suggestion from this run. Try Show different for another batch."
+            ? "You've hidden every suggestion from this run. Try “Show different picks” for another batch."
             : "No suggestions came back. Try a different focus or count."}
         </p>
       )}
@@ -1089,7 +1104,7 @@ function RecCard({
           </span>
           <span
             className={cn(
-              "rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset",
+              "rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset",
               CONFIDENCE[rec.confidence],
             )}
           >
@@ -1104,16 +1119,16 @@ function RecCard({
             <Link
               ref={resultRef}
               href={`/title/${state.id}`}
-              aria-label={`View ${rec.title} in your watchlist`}
+              aria-label={`View ${nameWithTypeAndYear(rec.title, rec.mediaType, rec.year)} in your watchlist`}
               className="focus-ring flex min-h-11 items-center gap-1.5 rounded-lg bg-emerald-500/15 px-3 py-2 text-sm font-medium text-emerald-300 ring-1 ring-emerald-500/30 sm:min-h-0"
             >
-              <Check size={15} aria-hidden="true" /> {state.existing ? "In library" : "Added"}
+              <Check size={16} aria-hidden="true" /> {state.existing ? "In library" : "Added"}
             </Link>
           ) : (
             <button
               type="button"
               disabled={state.kind === "adding"}
-              aria-label={`Add ${rec.title} to your watchlist`}
+              aria-label={`Add ${nameWithTypeAndYear(rec.title, rec.mediaType, rec.year)} to your watchlist`}
               onClick={() => {
                 focusResult.current = true;
                 start(async () => {
@@ -1141,9 +1156,9 @@ function RecCard({
                   }
                 })
               }}
-              className="focus-ring brand-gradient flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-[#04121c] hover:opacity-90 disabled:opacity-60 sm:min-h-0"
+              className="focus-ring brand-gradient flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-on-accent hover:opacity-90 disabled:opacity-60 sm:min-h-0"
             >
-              {state.kind === "adding" ? <Spinner /> : <Plus size={15} aria-hidden="true" />}
+              {state.kind === "adding" ? <Spinner /> : <Plus size={16} aria-hidden="true" />}
               Watchlist
             </button>
           )
@@ -1165,7 +1180,7 @@ function RecCard({
             title="Seen it: keep this out of future suggestions"
             className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-lg text-muted ring-1 ring-line transition-colors hover:text-foreground sm:min-h-9 sm:min-w-9"
           >
-            <Eye size={15} aria-hidden="true" />
+            <Eye size={16} aria-hidden="true" />
           </button>
           <button
             type="button"
@@ -1174,7 +1189,7 @@ function RecCard({
             title="Not interested: keep this out of future suggestions"
             className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-lg text-muted ring-1 ring-line transition-colors hover:text-foreground sm:min-h-9 sm:min-w-9"
           >
-            <Ban size={15} aria-hidden="true" />
+            <Ban size={16} aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -1235,7 +1250,7 @@ function TitlePicker({
             Search your library titles
           </label>
           <Search
-            size={14}
+            size={16}
             aria-hidden="true"
             className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-faint"
           />
@@ -1308,12 +1323,12 @@ function TitlePicker({
                 <span
                   className={cn(
                     "flex h-4 w-4 shrink-0 items-center justify-center rounded ring-1",
-                    on ? "bg-brand text-[#04121c] ring-brand" : "ring-line",
+                    on ? "bg-brand text-on-accent ring-brand" : "ring-line",
                   )}
                 >
                   {on && <Check size={11} aria-hidden="true" />}
                 </span>
-                <Icon size={14} aria-hidden="true" className="shrink-0 text-muted" />
+                <Icon size={16} aria-hidden="true" className="shrink-0 text-muted" />
                 <span className="min-w-0 flex-1 truncate">{t.name}</span>
                 {t.year ? (
                   <span className="shrink-0 text-xs text-faint">{t.year}</span>
@@ -1322,7 +1337,7 @@ function TitlePicker({
             );
           })}
           {q.trim() === "" && titles.length > filtered.length && (
-            <p className="px-2 py-1.5 text-center text-[11px] text-faint">
+            <p className="px-2 py-1.5 text-center text-xs text-faint">
               Showing the first {filtered.length}. Search to find more.
             </p>
           )}

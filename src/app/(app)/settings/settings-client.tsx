@@ -31,7 +31,15 @@ import {
 } from "lucide-react";
 import type { AccountInfo, ShareSummary } from "@/lib/data";
 import { authClient } from "@/lib/auth-client";
-import { Badge, Button, Card, Input, Select, Spinner } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  Input,
+  Select,
+  Spinner,
+  softDisabledClass,
+} from "@/components/ui";
 import { useConfirm } from "@/components/confirm-dialog";
 import { TmdbAttribution } from "@/components/tmdb-attribution";
 import { fullDate } from "@/lib/format";
@@ -58,8 +66,9 @@ import {
   TAG_COLOR_DEFAULT_SWATCH,
   TAG_COLOR_META,
   tagChipClass,
+  tagColorKey,
 } from "@/lib/tag-colors";
-import { isWatchRegion, regionName, WATCH_REGIONS } from "@/lib/tmdb-extras";
+import { regionName, watchRegionOptions } from "@/lib/tmdb-extras";
 import { TMDB_IMAGE_BASE } from "@/lib/images";
 import { setRememberFiltersEnabled } from "@/lib/remembered-state-client";
 import { saveBlob } from "@/lib/save-blob";
@@ -87,18 +96,13 @@ export interface MetadataFailureSummary {
   metadataLastError: string | null;
 }
 
-// Chrome moves focus to <body> the instant a focused control becomes
-// `disabled`. The buttons that open a confirm and then go busy carry
-// `aria-disabled` and return early instead, so focus is still on them after
-// confirming (JK-03). These classes reproduce Button's `disabled:` styling.
-const softDisabledClass = "aria-disabled:cursor-not-allowed aria-disabled:opacity-50";
-
 export function SettingsClient({
   info,
   shares,
   tags,
   timeZone,
   watchRegion,
+  watchRegions,
   myProviders,
   providers,
   providersUnavailable,
@@ -112,6 +116,8 @@ export function SettingsClient({
   tags: TagSummary[];
   timeZone: string;
   watchRegion: string;
+  /** TMDB's streaming regions, sorted by name. */
+  watchRegions: string[];
   myProviders: number[];
   providers: ProviderOption[];
   providersUnavailable: boolean;
@@ -125,7 +131,11 @@ export function SettingsClient({
   return (
     <div className="flex flex-col gap-5 lg:grid lg:grid-cols-2">
       <ProfileSection name={info.name} email={info.email} />
-      <PreferencesSection timeZone={timeZone} watchRegion={watchRegion} />
+      <PreferencesSection
+        timeZone={timeZone}
+        watchRegion={watchRegion}
+        watchRegions={watchRegions}
+      />
       <div className="lg:col-span-2">
         <MyServicesSection
           key={watchRegion}
@@ -162,21 +172,33 @@ function Section({
   icon: Icon,
   title,
   description,
+  headingId,
   children,
 }: {
   icon: React.ComponentType<{ size?: number; className?: string }>;
   title: string;
   description?: string;
+  /**
+   * Makes the heading a focus target with this id, for when an action in the
+   * section removes the control that had focus (a deleted row).
+   */
+  headingId?: string;
   children: React.ReactNode;
 }) {
   return (
     <Card className="h-full p-5">
       <div className="mb-4 flex items-start gap-3">
         <span aria-hidden="true" className="mt-0.5 text-brand">
-          <Icon size={18} />
+          <Icon size={20} />
         </span>
         <div>
-          <h2 className="text-sm font-semibold">{title}</h2>
+          <h2
+            id={headingId}
+            tabIndex={headingId ? -1 : undefined}
+            className={cn("text-sm font-semibold", headingId && "outline-none")}
+          >
+            {title}
+          </h2>
           {description && <p className="mt-0.5 text-xs text-muted">{description}</p>}
         </div>
       </div>
@@ -187,20 +209,26 @@ function Section({
 
 function Notice({
   kind,
+  focusId,
   children,
 }: {
   kind: "ok" | "error";
+  /** Makes the notice a focus target with this id (see Section's headingId). */
+  focusId?: string;
   children: React.ReactNode;
 }) {
   return (
     <p
+      id={focusId}
+      tabIndex={focusId ? -1 : undefined}
       role={kind === "error" ? "alert" : "status"}
       aria-live={kind === "error" ? "assertive" : "polite"}
-      className={
+      className={cn(
         kind === "ok"
           ? "rounded-lg bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300 ring-1 ring-emerald-500/20"
-          : "rounded-lg bg-rose-500/10 px-3 py-2 text-sm text-rose-300 ring-1 ring-rose-500/20"
-      }
+          : "rounded-lg bg-rose-500/10 px-3 py-2 text-sm text-rose-300 ring-1 ring-rose-500/20",
+        focusId && "outline-none",
+      )}
     >
       {children}
     </p>
@@ -354,9 +382,11 @@ const TIME_ZONES: string[] =
 function PreferencesSection({
   timeZone,
   watchRegion,
+  watchRegions,
 }: {
   timeZone: string;
   watchRegion: string;
+  watchRegions: string[];
 }) {
   const [tz, setTz] = useState(timeZone);
   const [region, setRegion] = useState(watchRegion);
@@ -368,9 +398,9 @@ function PreferencesSection({
   const timeZoneOptions: readonly string[] = TIME_ZONES.includes(tz)
     ? TIME_ZONES
     : [tz, ...TIME_ZONES];
-  const regionOptions: readonly string[] = isWatchRegion(region)
-    ? WATCH_REGIONS
-    : [region, ...WATCH_REGIONS];
+  // TMDB's full list, sorted by name so typing a country's first letters in
+  // the open picker jumps to it.
+  const regionOptions = watchRegionOptions(watchRegions, region);
 
   const dirty = tz !== timeZone || region !== watchRegion;
 
@@ -465,7 +495,9 @@ function RememberFiltersSection({ initialEnabled }: { initialEnabled: boolean })
       title="Remember filters on this device"
       description="Keep each page's viewing preferences between visits."
     >
-      <div className="flex items-center justify-between gap-4 rounded-xl bg-surface-2/45 p-3 ring-1 ring-line">
+      {/* rounded-lg like an inset Card: the section card's 14.4px corner sits
+          20px out, so an inner 12px corner looked swollen (JK-34). */}
+      <div className="flex items-center justify-between gap-4 rounded-lg bg-surface-2/45 p-3 ring-1 ring-line">
         <div>
           <p className="text-sm font-medium">Remember filters</p>
           <p className="mt-0.5 text-xs text-faint">
@@ -571,7 +603,7 @@ function MyServicesSection({
             <div className="relative min-w-0 sm:max-w-sm sm:flex-1">
               <Search
                 aria-hidden="true"
-                size={15}
+                size={16}
                 className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-faint"
               />
               <Input
@@ -610,7 +642,10 @@ function MyServicesSection({
             </p>
           ) : null}
 
-          <div className="max-h-80 overflow-y-auto rounded-lg bg-surface-2/50 p-2 ring-1 ring-line">
+          {/* Concentric corners, capped at the card: list at the card radius
+              (14.4px), tile rounded-lg (about 14.4 - p-2), logo rounded (4px).
+              All three were rounded-lg (JK-34). */}
+          <div className="max-h-80 overflow-y-auto rounded-[var(--radius-card)] bg-surface-2/50 p-2 ring-1 ring-line">
             {visibleProviders.length > 0 ? (
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
                 {visibleProviders.map((provider) => {
@@ -631,7 +666,7 @@ function MyServicesSection({
                           : "bg-surface text-muted ring-line hover:text-foreground hover:ring-line-strong",
                       )}
                     >
-                      <span className="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-surface-2 ring-1 ring-line">
+                      <span className="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded bg-surface-2 ring-1 ring-line">
                         {provider.logoPath ? (
                           <Image
                             src={`${TMDB_IMAGE_BASE}w92${provider.logoPath}`}
@@ -648,7 +683,7 @@ function MyServicesSection({
                       </span>
                       <span className="min-w-0 flex-1 truncate">{provider.name}</span>
                       {isSelected ? (
-                        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand text-[#04121c]">
+                        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand text-on-accent">
                           <Check aria-hidden="true" size={13} strokeWidth={3} />
                         </span>
                       ) : null}
@@ -875,6 +910,8 @@ function SharedLinksSection({ shares }: { shares: ShareSummary[] }) {
       const result = await deleteShareList(id);
       if (!result.ok) throw new Error();
       toast.success("Link deleted");
+      // The row, and the Delete button that had focus, are gone.
+      document.getElementById("settings-shared-links-heading")?.focus();
     } catch {
       toast.error("Couldn't delete that link. Please try again.");
     } finally {
@@ -888,6 +925,7 @@ function SharedLinksSection({ shares }: { shares: ShareSummary[] }) {
       <Section
         icon={Link2}
         title="Shared links"
+        headingId="settings-shared-links-heading"
         description="Read-only links to your library. Revoke access without losing the record, or delete it permanently."
       >
         {shares.length === 0 ? (
@@ -1017,12 +1055,14 @@ function ShareRow({
       <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center">
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            <p className="truncate text-sm font-medium">{s.name ?? "Untitled list"}</p>
+            <p className="truncate text-sm font-medium" title={s.name ?? undefined}>
+              {s.name ?? "Untitled list"}
+            </p>
             <span
               className={
                 active
-                  ? "shrink-0 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-300 ring-1 ring-emerald-500/20"
-                  : "shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-[11px] font-medium text-muted ring-1 ring-line"
+                  ? "shrink-0 rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-300 ring-1 ring-emerald-500/20"
+                  : "shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-xs font-medium text-muted ring-1 ring-line"
               }
             >
               {stateLabel}
@@ -1045,7 +1085,7 @@ function ShareRow({
             disabled={!active || busy}
             className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2/60 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35 sm:h-8 sm:min-h-0 sm:w-8 sm:min-w-0"
           >
-            <Copy aria-hidden="true" size={15} />
+            <Copy aria-hidden="true" size={16} />
           </button>
           <Button
             variant="ghost"
@@ -1056,7 +1096,7 @@ function ShareRow({
           >
             <ChevronDown
               aria-hidden="true"
-              size={14}
+              size={16}
               className={cn("transition-transform", manageOpen && "rotate-180")}
             />
             Manage
@@ -1166,7 +1206,7 @@ function ShareRow({
                         key={t.id}
                         className="flex items-center gap-2 px-2.5 py-1.5 text-xs"
                       >
-                        <span className="min-w-0 flex-1 truncate text-foreground/90">
+                        <span className="min-w-0 flex-1 truncate text-foreground/90" title={t.name}>
                           {t.name}
                         </span>
                         <span className="shrink-0 text-faint">
@@ -1211,6 +1251,8 @@ function TagsSection({ tags }: { tags: TagSummary[] }) {
         return;
       }
       toast.success(`Deleted the “${tag.name}” tag`);
+      // The row, and the Delete button that had focus, are gone.
+      document.getElementById("settings-tags-heading")?.focus();
     } catch {
       toast.error("Couldn't delete that tag. Try again.");
     } finally {
@@ -1224,6 +1266,7 @@ function TagsSection({ tags }: { tags: TagSummary[] }) {
       <Section
         icon={TagIcon}
         title="Tags"
+        headingId="settings-tags-heading"
         description="Rename a tag without losing what it's on, give it a colour, or delete it."
       >
         {tags.length === 0 ? (
@@ -1261,16 +1304,18 @@ function TagRow({
 }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(tag.name);
-  const [color, setColor] = useState<string | null>(tag.color);
+  // A colour from the first palette shows as the palette colour it renders as.
+  const storedColor = tagColorKey(tag.color);
+  const [color, setColor] = useState<string | null>(storedColor);
   const [error, setError] = useState<string | null>(null);
   const [busy, start] = useTransition();
 
-  const dirty = name.trim() !== tag.name || color !== tag.color;
+  const dirty = name.trim() !== tag.name || color !== storedColor;
 
   function cancel() {
     setEditing(false);
     setName(tag.name);
-    setColor(tag.color);
+    setColor(storedColor);
     setError(null);
   }
 
@@ -1288,7 +1333,7 @@ function TagRow({
             return;
           }
         }
-        if (color !== tag.color) {
+        if (color !== storedColor) {
           const res = await setTagColor(tag.id, color);
           if (res.error) {
             setError(res.error);
@@ -1320,7 +1365,7 @@ function TagRow({
             disabled={busy || deleting}
             onClick={() => (editing ? cancel() : setEditing(true))}
           >
-            <Pencil aria-hidden="true" size={14} />
+            <Pencil aria-hidden="true" size={16} />
             {editing ? "Cancel" : "Edit"}
           </Button>
           <Button
@@ -1677,6 +1722,8 @@ function DevicesSection() {
         current?.filter((item) => item.token !== session.token) ?? current,
       );
       toast.success(`${label} signed out`);
+      // The row, and the Sign out button that had focus, are gone.
+      document.getElementById("settings-devices-heading")?.focus();
     } catch {
       setActionError("Celluloid couldn't sign out that device. Check your connection and retry.");
     } finally {
@@ -1720,6 +1767,7 @@ function DevicesSection() {
       <Section
         icon={MonitorSmartphone}
         title="Devices"
+        headingId="settings-devices-heading"
         description="Review active sign-ins and remove devices you no longer use."
       >
         <div className="flex flex-col gap-3">
@@ -1881,10 +1929,18 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
       // qrcode is only needed for this one setup flow — load it on demand
       // instead of shipping it in the settings bundle.
       const QRCode = uri ? (await import("qrcode")).default : null;
-      setQr(uri && QRCode ? await QRCode.toDataURL(uri, { margin: 1, width: 200 }) : null);
-      setSecret(uri ? secretFromUri(uri) : null);
-      setBackupCodes((data as { backupCodes?: string[] })?.backupCodes ?? []);
-      setPhase("setup");
+      const qrDataUrl =
+        uri && QRCode ? await QRCode.toDataURL(uri, { margin: 1, width: 200 }) : null;
+      // The password form, and the Turn on 2FA button that had focus, give way
+      // to the setup steps. Start at step 1 so the QR code, setup key and
+      // backup codes come before the code field.
+      flushSync(() => {
+        setQr(qrDataUrl);
+        setSecret(uri ? secretFromUri(uri) : null);
+        setBackupCodes((data as { backupCodes?: string[] })?.backupCodes ?? []);
+        setPhase("setup");
+      });
+      document.getElementById("settings-two-factor-setup-start")?.focus();
     } catch {
       setError("Celluloid couldn't start 2FA setup. Check your connection and retry.");
     } finally {
@@ -1908,9 +1964,14 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
         (result) => !result.error,
         () => false,
       );
-      setOn(true);
-      setPhase("idle");
-      reset();
+      // The setup form, and the Verify button that had focus, give way to the
+      // "on" panel.
+      flushSync(() => {
+        setOn(true);
+        setPhase("idle");
+        reset();
+      });
+      document.getElementById("settings-two-factor-on")?.focus();
       if (signedOutOthers) {
         toast.success("Two-factor authentication is on. Other devices were signed out.");
       } else {
@@ -1931,7 +1992,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
       !(await confirm({
         title: "Turn off two-factor authentication?",
         body: "Your account will only need a password to sign in.",
-        confirmLabel: "Disable 2FA",
+        confirmLabel: "Turn off 2FA",
         destructive: true,
       }))
     )
@@ -1941,14 +2002,19 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
     try {
       const { error } = await authClient.twoFactor.disable({ password });
       if (error) {
-        setError(error.message ?? "Couldn't disable 2FA. Try again.");
+        setError(error.message ?? "Couldn't turn off 2FA. Try again.");
         return;
       }
-      setOn(false);
-      reset();
+      // The panel, and the Turn off 2FA button that had focus, give way to the
+      // form that turns it back on.
+      flushSync(() => {
+        setOn(false);
+        reset();
+      });
+      document.getElementById("settings-enable-two-factor-password")?.focus();
       router.refresh();
     } catch {
-      setError("Celluloid couldn't disable 2FA. Check your connection and retry.");
+      setError("Celluloid couldn't turn off 2FA. Check your connection and retry.");
     } finally {
       setBusy(false);
     }
@@ -1964,7 +2030,12 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
     >
       {on ? (
         <div className="flex flex-col gap-4">
-          <p role="status" className="text-sm text-emerald-300">
+          <p
+            id="settings-two-factor-on"
+            tabIndex={-1}
+            role="status"
+            className="text-sm text-emerald-300 outline-none"
+          >
             ✓ Two-factor authentication is on.
           </p>
           {revokeError && <Notice kind="error">{revokeError}</Notice>}
@@ -2066,7 +2137,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
           >
             <label className="flex flex-col gap-1.5">
               <span className="text-xs font-medium text-muted">
-                Current password to disable 2FA
+                Current password to turn off 2FA
               </span>
               <Input
                 name="disable-two-factor-password"
@@ -2084,7 +2155,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
               className={cn("self-start", softDisabledClass)}
               aria-disabled={busy || !password}
             >
-              {busy ? <Spinner /> : null} Disable 2FA
+              {busy ? <Spinner /> : null} Turn off 2FA
             </Button>
           </form>
         </div>
@@ -2100,9 +2171,10 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
         >
           <label className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-muted">
-              Current password to enable 2FA
+              Current password to turn on 2FA
             </span>
             <Input
+              id="settings-enable-two-factor-password"
               name="enable-two-factor-password"
               type="password"
               value={password}
@@ -2118,7 +2190,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
             className="self-start"
             disabled={busy || !password}
           >
-            {busy ? <Spinner /> : <ShieldCheck size={15} />} Enable 2FA
+            {busy ? <Spinner /> : <ShieldCheck size={16} />} Turn on 2FA
           </Button>
         </form>
       ) : (
@@ -2143,7 +2215,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
               />
             )}
             <div className="flex flex-col gap-3 text-sm text-muted">
-              <p>
+              <p id="settings-two-factor-setup-start" tabIndex={-1} className="outline-none">
                 1. Scan this QR code with your authenticator app (Google
                 Authenticator, Authy, 1Password, and so on).
               </p>
@@ -2466,7 +2538,7 @@ function BackupSection({
       ) {
         throw new Error("Celluloid returned an incomplete restore result. Refresh and check your library.");
       }
-      setResult({
+      const restored: RestoreResult = {
         create: body.create,
         update: body.update,
         skip: body.skip,
@@ -2483,8 +2555,14 @@ function BackupSection({
         sharesSkipped: body.sharesSkipped,
         eventsCreated: body.eventsCreated,
         eventsSkipped: body.eventsSkipped,
+      };
+      // The preview, and the Restore button that had focus, give way to the
+      // result.
+      flushSync(() => {
+        setResult(restored);
+        setPreview(null);
       });
-      setPreview(null);
+      document.getElementById("settings-restore-result")?.focus();
       toast.success("Backup restored");
       router.refresh();
     } catch (restoreError) {
@@ -2515,7 +2593,7 @@ function BackupSection({
               disabled={busy !== null}
               onClick={downloadBackup}
             >
-              {busy === "download" ? <Spinner /> : <Download aria-hidden="true" size={15} />}
+              {busy === "download" ? <Spinner /> : <Download aria-hidden="true" size={16} />}
               {busy === "download" ? "Preparing backup\u2026" : "Download backup"}
             </Button>
             <div className="mt-2">
@@ -2575,7 +2653,7 @@ function BackupSection({
                 disabled={!file || busy !== null}
                 onClick={previewRestore}
               >
-                {busy === "preview" ? <Spinner /> : <Upload aria-hidden="true" size={15} />}
+                {busy === "preview" ? <Spinner /> : <Upload aria-hidden="true" size={16} />}
                 {busy === "preview" ? "Checking backup\u2026" : "Preview restore"}
               </Button>
             </div>
@@ -2646,14 +2724,14 @@ function BackupSection({
                   void commitRestore();
                 }}
               >
-                {busy === "restore" ? <Spinner /> : <ArchiveRestore aria-hidden="true" size={15} />}
+                {busy === "restore" ? <Spinner /> : <ArchiveRestore aria-hidden="true" size={16} />}
                 {busy === "restore" ? "Restoring\u2026" : "Restore backup"}
               </Button>
             </div>
           ) : null}
 
           {result ? (
-            <Notice kind="ok">
+            <Notice kind="ok" focusId="settings-restore-result">
               Restored {result.create} new and {result.update} existing titles. Skipped {result.skip}
               {result.conflict > 0 ? `, with ${result.conflict} conflicts` : ""}. Created {result.sharesCreated}
               {result.sharesCreated === 1 ? " share link" : " share links"}.
@@ -2761,7 +2839,7 @@ function DangerSection() {
           className={cn("mt-4", softDisabledClass)}
           aria-disabled={pending || !password}
         >
-          <Trash2 size={15} /> Delete my account
+          <Trash2 size={16} /> Delete my account
         </Button>
       </form>
       </Section>

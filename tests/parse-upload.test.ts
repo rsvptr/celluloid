@@ -37,6 +37,13 @@ describe("parseUploadedList (csv)", () => {
     assert.equal(titles[1].releaseDate, null);
   });
 
+  it("reads a Trakt-style tvdb_id column as the row's TVDB id (TM-12)", async () => {
+    const buf = csv(["title,year,type,tvdb_id", "Friends,1994,show,79168", "Dune,2021,movie,"]);
+    const { titles } = await parseUploadedList(buf, "list.csv");
+    assert.equal(titles[0].tvdbId, 79168);
+    assert.equal(titles[1].tvdbId, null);
+  });
+
   it("errors clearly when there is no title column", async () => {
     const buf = csv(["Foo,Bar", "x,y"]);
     const { titles, error } = await parseUploadedList(buf, "list.csv");

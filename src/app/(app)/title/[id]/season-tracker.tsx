@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { Suspense, use, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Check, ChevronDown, ChevronsDown } from "lucide-react";
 import { toast } from "sonner";
@@ -13,6 +13,7 @@ import {
   setSeasonWatched,
 } from "@/lib/actions";
 import { fullDate, progressPct } from "@/lib/format";
+import { episodeLabel, type EpisodeTypeMarker } from "@/lib/tmdb-extras";
 import { cn } from "@/lib/utils";
 
 export interface EpisodeVM {
@@ -35,6 +36,35 @@ function watchedFromServer(seasons: SeasonVM[]): Record<string, boolean> {
   return m;
 }
 
+/** A small premiere or finale label on an episode row. */
+function EpisodeTag({ label }: { label: string }) {
+  return (
+    <span className="shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-xs text-muted ring-1 ring-line">
+      {label}
+    </span>
+  );
+}
+
+/**
+ * The finale label TMDB gives an episode. It waits for the page's TMDB request
+ * inside its own Suspense boundary, so the tracker never does.
+ */
+function FinaleTag({
+  seasonNumber,
+  episodeNumber,
+  episodeTypes,
+}: {
+  seasonNumber: number;
+  episodeNumber: number;
+  episodeTypes: Promise<EpisodeTypeMarker[]>;
+}) {
+  const marker = use(episodeTypes).find(
+    (m) => m.seasonNumber === seasonNumber && m.episodeNumber === episodeNumber,
+  );
+  const label = marker ? episodeLabel(episodeNumber, marker.type) : null;
+  return label ? <EpisodeTag label={label} /> : null;
+}
+
 async function episodeActionFailure(
   action: () => Promise<{ error?: string }>,
 ): Promise<string | null> {
@@ -49,9 +79,15 @@ async function episodeActionFailure(
 export function SeasonTracker({
   titleId,
   seasons,
+  episodeTypes,
 }: {
   titleId: string;
   seasons: SeasonVM[];
+  /**
+   * Finale markers from the page's TMDB request, which describes only the
+   * last aired and the next episode. Absent for an unmatched title.
+   */
+  episodeTypes?: Promise<EpisodeTypeMarker[]>;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -346,14 +382,15 @@ export function SeasonTracker({
                 like a status badge: the button is a toggle, so in that state its
                 press unwatches the whole show — which is the last thing someone
                 tapping the words "Caught up" expects. The button always names
-                the action it performs. */}
+                the action it performs, so it is an action button with no
+                aria-pressed: "Mark all unwatched, pressed" contradicted
+                itself (APG button pattern, JK-06). */}
             {caughtUp && " · caught up on everything aired"}
           </p>
         </div>
         <Button
           size="sm"
           variant={allWatched || caughtUp ? "secondary" : "primary"}
-          aria-pressed={allWatched || caughtUp}
           onClick={() => void requestAllToggle(!(allWatched || caughtUp))}
         >
           {allWatched || caughtUp ? "Mark all unwatched" : "Mark show watched"}
@@ -381,6 +418,8 @@ export function SeasonTracker({
               className="overflow-hidden rounded-xl bg-surface ring-1 ring-line"
             >
               <div className="flex items-center gap-3 px-4 py-3">
+                {/* A season TMDB lists with no episodes yet has nothing to
+                    expand or mark: say so, and offer neither (JK-31). */}
                 <button
                   onClick={() =>
                     setOpen((o) => ({
@@ -388,12 +427,17 @@ export function SeasonTracker({
                       [season.seasonNumber]: !isOpen,
                     }))
                   }
-                  aria-expanded={isOpen}
+                  disabled={sTotal === 0}
+                  aria-expanded={sTotal > 0 ? isOpen : undefined}
                   className="flex min-h-11 flex-1 items-center gap-3 rounded-md text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 sm:min-h-0"
                 >
                   <ChevronDown
                     size={16}
-                    className={cn("text-muted transition-transform", isOpen && "rotate-180")}
+                    className={cn(
+                      "text-muted transition-transform",
+                      isOpen && "rotate-180",
+                      sTotal === 0 && "invisible",
+                    )}
                   />
                   <span className="font-medium">
                     {season.name && season.name !== `Season ${season.seasonNumber}`
@@ -401,30 +445,32 @@ export function SeasonTracker({
                       : `Season ${season.seasonNumber}`}
                   </span>
                   <span className="text-xs text-muted">
-                    {sWatched}/{sTotal}
+                    {sTotal === 0 ? "No episodes announced yet" : `${sWatched}/${sTotal}`}
                   </span>
                 </button>
-                <button
-                  onClick={() => void requestSeasonToggle(season, !sComplete)}
-                  aria-pressed={sComplete}
-                  className={cn(
-                    "focus-ring flex min-h-11 shrink-0 items-center justify-center rounded-md px-2 py-1 text-xs ring-1 press sm:min-h-0",
-                    sComplete
-                      ? "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30"
-                      : "bg-surface-2 text-muted ring-line hover:text-foreground",
-                  )}
-                >
-                  {sComplete ? "Mark season unwatched" : "Mark season watched"}
-                </button>
+                {sTotal > 0 && (
+                  <button
+                    onClick={() => void requestSeasonToggle(season, !sComplete)}
+                    className={cn(
+                      "focus-ring flex min-h-11 shrink-0 items-center justify-center rounded-md px-2 py-1 text-xs ring-1 press sm:min-h-0",
+                      sComplete
+                        ? "bg-status-watched-subtle text-status-watched-text ring-status-watched-border"
+                        : "bg-surface-2 text-muted ring-line hover:text-foreground",
+                    )}
+                  >
+                    {sComplete ? "Mark season unwatched" : "Mark season watched"}
+                  </button>
+                )}
               </div>
 
-              {isOpen && (
+              {isOpen && sTotal > 0 && (
                 <ul className="divide-y divide-line border-t border-line">
                   {season.episodes.map((ep) => {
                     const isWatched = watched[ep.id];
                     // Only worth offering when it would do more than a plain
                     // tick — i.e. something earlier in the season is still
                     // unwatched and has aired.
+                    const premiere = episodeLabel(ep.episodeNumber, null);
                     const canWatchThrough =
                       !isWatched &&
                       hasAired(ep) &&
@@ -442,7 +488,7 @@ export function SeasonTracker({
                           // min-h grows the whole row's hit target to >=44px on
                           // touch without inflating the h-5 w-5 checkbox glyph;
                           // sm:min-h-0 restores the original content-driven height.
-                          className="focus-ring flex min-h-11 flex-1 items-center gap-3 px-4 py-2.5 text-left hover:bg-surface-2/40 active:bg-surface-2/60 sm:min-h-0"
+                          className="focus-ring focus-ring-inset flex min-h-11 flex-1 items-center gap-3 px-4 py-2.5 text-left hover:bg-surface-2/40 active:bg-surface-2/60 sm:min-h-0"
                         >
                           <span
                             className={cn(
@@ -453,7 +499,7 @@ export function SeasonTracker({
                             )}
                           >
                             {isWatched && (
-                              <Check size={13} className="text-[#04121c]" strokeWidth={3} />
+                              <Check size={13} className="text-on-accent" strokeWidth={3} />
                             )}
                           </span>
                           <span className="w-8 shrink-0 text-xs tabular-nums text-faint">
@@ -464,24 +510,41 @@ export function SeasonTracker({
                               "min-w-0 flex-1 truncate text-sm",
                               isWatched ? "text-muted" : "text-foreground",
                             )}
+                            title={ep.name ?? undefined}
                           >
                             {ep.name ?? `Episode ${ep.episodeNumber}`}
                           </span>
+                          {premiere ? (
+                            <EpisodeTag label={premiere} />
+                          ) : episodeTypes ? (
+                            <Suspense fallback={null}>
+                              <FinaleTag
+                                seasonNumber={season.seasonNumber}
+                                episodeNumber={ep.episodeNumber}
+                                episodeTypes={episodeTypes}
+                              />
+                            </Suspense>
+                          ) : null}
                           {ep.airDate && (
                             <span className="hidden shrink-0 text-xs text-faint sm:inline">
                               {fullDate(ep.airDate)}
                             </span>
                           )}
                         </button>
-                        {canWatchThrough && (
+                        {canWatchThrough ? (
                           <button
                             onClick={() => watchThrough(season, ep)}
                             title={`Mark everything watched through episode ${ep.episodeNumber}`}
                             aria-label={`Mark everything watched through episode ${ep.episodeNumber}`}
-                            className="focus-ring flex min-h-11 w-11 shrink-0 items-center justify-center text-faint transition-colors hover:bg-surface-2/40 hover:text-foreground sm:min-h-0"
+                            className="focus-ring focus-ring-inset flex min-h-11 w-11 shrink-0 items-center justify-center text-faint transition-colors hover:bg-surface-2/40 hover:text-foreground sm:min-h-0"
                           >
-                            <ChevronsDown size={15} />
+                            <ChevronsDown size={16} />
                           </button>
+                        ) : (
+                          // Hold the button's slot where the date column shows,
+                          // so the dates line up whether or not a row has one
+                          // (JK-36).
+                          <span aria-hidden="true" className="hidden w-11 shrink-0 sm:block" />
                         )}
                       </li>
                     );

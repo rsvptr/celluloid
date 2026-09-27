@@ -1,4 +1,4 @@
-import { Shimmer } from "@/components/skeleton";
+import { LoadingStatus, Shimmer } from "@/components/skeleton";
 
 /**
  * Stands in for the library (src/components/library.tsx) while it streams in.
@@ -8,7 +8,8 @@ import { Shimmer } from "@/components/skeleton";
  */
 export default function Loading() {
   return (
-    <div className="flex flex-col gap-5 pb-24">
+    <div className="flex flex-col gap-5 pb-24" aria-busy="true">
+      <LoadingStatus>Loading your library…</LoadingStatus>
       <div className="flex flex-col gap-4">
         <Shimmer className="h-7 w-32 rounded" />
 

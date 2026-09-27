@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import {
-  mergeWatchProviderCatalogues,
-  type TmdbProvider,
-} from "../src/lib/tmdb";
+import "./server-only-shim";
+import type { TmdbProvider } from "../src/lib/tmdb";
+
+const { getWatchRegions, mergeWatchProviderCatalogues } = await import("../src/lib/tmdb");
 
 function provider(
   id: number,
@@ -68,5 +68,33 @@ describe("mergeWatchProviderCatalogues", () => {
     );
 
     assert.deepEqual(merged.map((row) => row.provider_name), ["Alpha", "Zulu"]);
+  });
+});
+
+describe("getWatchRegions", { concurrency: false }, () => {
+  it("returns TMDB's region codes sorted by name, cached for 30 days", async () => {
+    const originalFetch = globalThis.fetch;
+    process.env.TMDB_ACCESS_TOKEN ??= "test-tmdb-token";
+    const calls: Array<{ url: URL; init?: RequestInit }> = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: new URL(String(input)), init });
+      // The live shape of /watch/providers/regions, trimmed.
+      return Response.json({
+        results: [
+          { iso_3166_1: "AD", english_name: "Andorra", native_name: "Andorra" },
+          { iso_3166_1: "US", english_name: "United States of America" },
+          { iso_3166_1: "NL", english_name: "Netherlands" },
+          { iso_3166_1: "bad" },
+        ],
+      });
+    }) as typeof fetch;
+    try {
+      assert.deepEqual(await getWatchRegions(), ["AD", "NL", "US"]);
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].url.pathname, "/3/watch/providers/regions");
+      assert.equal(calls[0].init?.next?.revalidate, 60 * 60 * 24 * 30);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

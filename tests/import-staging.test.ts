@@ -61,6 +61,16 @@ describe("staged import matching", () => {
     assert.equal(scoreImportMatch(parsed, candidate()), 0.98);
   });
 
+  it("scores an exact original title as high confidence (TM-05)", () => {
+    const row = { ...parsed, name: "Ladri di biciclette", releaseDate: "1948-01-01" };
+    const match = candidate({
+      title: "Bicycle Thieves",
+      original_title: "Ladri di biciclette",
+      release_date: "1948-07-21",
+    });
+    assert.equal(scoreImportMatch(row, match), 0.98);
+  });
+
   it("scores a weak name and distant year below an exact match", () => {
     const weak = scoreImportMatch(
       parsed,

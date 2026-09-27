@@ -40,7 +40,7 @@ export default async function LoginPage() {
     <MotionProvider>
     <main className="relative min-h-dvh overflow-hidden lg:grid lg:h-dvh lg:grid-cols-[minmax(0,1.08fr)_minmax(28rem,0.92fr)]">
       <div aria-hidden="true" className="pointer-events-none absolute inset-0">
-        {/* Radial glows are desktop-only (mobile has its own hero-float glow);
+        {/* Radial glows are desktop-only (mobile has its own glow below);
             the grid texture and brand accent line carry the identity on every
             breakpoint. */}
         <div className="absolute inset-0 hidden bg-[radial-gradient(circle_at_22%_38%,rgba(45,212,238,0.12),transparent_30%),radial-gradient(circle_at_58%_78%,rgba(37,99,235,0.10),transparent_32%),radial-gradient(circle_at_88%_18%,rgba(45,212,238,0.07),transparent_26%)] lg:block" />
@@ -95,9 +95,11 @@ export default async function LoginPage() {
       <section className="relative flex min-h-dvh items-center justify-center px-4 py-12 sm:px-8 lg:h-full lg:min-h-0 lg:overflow-y-auto lg:px-12">
         <div
           aria-hidden="true"
-          className="hero-float pointer-events-none absolute -top-40 left-1/2 h-96 w-96 -translate-x-1/2 rounded-full bg-brand/20 blur-[120px] lg:hidden"
+          // Static (EM-13): a 9 s drifting loop on a 384px blur(120px) layer
+          // animated for as long as the page stayed open.
+          className="pointer-events-none absolute -top-40 left-1/2 h-96 w-96 -translate-x-1/2 rounded-full bg-brand/20 blur-[120px] lg:hidden"
         />
-        <div className="relative w-full max-w-sm motion-safe:animate-[enter-rise_250ms_cubic-bezier(0.23,1,0.32,1)]">
+        <div className="relative w-full max-w-sm motion-safe:animate-[enter-rise_250ms_var(--ease-out)]">
           <div className="mb-8 flex flex-col items-center text-center lg:hidden">
             <Wordmark size={56} href={null} className="flex-col gap-3" />
             <p className="mt-4 text-sm text-muted">

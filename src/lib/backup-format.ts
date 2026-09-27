@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { WATCH_REGIONS } from "@/lib/tmdb-extras";
+import { isWatchRegion } from "@/lib/tmdb-extras";
 import { WITHDRAWN_EPISODE_NUMBER_OFFSET } from "@/lib/rematch-history";
 
 export const BACKUP_APP = "celluloid" as const;
@@ -250,7 +250,8 @@ export const backupUserSchema = z
       .min(1)
       .max(100)
       .refine(isValidTimeZone, "invalid IANA time zone"),
-    watchRegion: z.enum(WATCH_REGIONS),
+    // Any region code: the picker offers TMDB's full list, not a fixed few.
+    watchRegion: z.string().refine(isWatchRegion, "invalid region code"),
     // Optional rather than defaulted so a pre-CEL-6 v2 backup remains
     // distinguishable from a newer backup that deliberately stores an empty
     // selection or the default recommendation model. Restore can then leave

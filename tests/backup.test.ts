@@ -399,11 +399,11 @@ describe("Celluloid backup envelope", () => {
     assert.equal(parsed.suppressions, undefined);
   });
 
-  it("rejects a watch region the application does not support", () => {
+  it("rejects a watch region that isn't a region code", () => {
     const invalidRegion = JSON.parse(JSON.stringify(envelope)) as {
       user: { watchRegion: string };
     };
-    invalidRegion.user.watchRegion = "ZZ";
+    invalidRegion.user.watchRegion = "usa";
 
     const parsed = backupEnvelopeSchema.safeParse(invalidRegion);
 
@@ -411,6 +411,16 @@ describe("Celluloid backup envelope", () => {
     if (!parsed.success) {
       assert.equal(parsed.error.issues[0]?.path.join("."), "user.watchRegion");
     }
+  });
+
+  it("restores any of TMDB's regions, not only the 16 it used to offer", () => {
+    const portugal = JSON.parse(JSON.stringify(envelope)) as { user: { watchRegion: string } };
+    portugal.user.watchRegion = "PT";
+
+    const parsed = backupEnvelopeSchema.safeParse(portugal);
+
+    assert.equal(parsed.success, true);
+    if (parsed.success) assert.equal(parsed.data.user.watchRegion, "PT");
   });
 });
 

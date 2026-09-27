@@ -38,6 +38,48 @@
   --radius-card: 0.9rem;
 }
 
+/* --- Color roles (JK-16/JK-17) ---------------------------------------------
+   Semantic tokens: components use these, and they point at Tailwind's palette
+   primitives. Retune a role here, not at its call sites. The app is dark only,
+   so there is no light block.
+
+   Status: one hue per watch status, owned by that status alone. Tags use other
+   hues (lib/tag-colors.ts). `subtle` and `border` are 15% and 30% tints;
+   `text` sits on them; `solid` is the dot and the stats bar. `text` on
+   `subtle` measures 8.2:1 or more on surface and 7.5:1 or more on surface-2;
+   on the poster chip (bg-black/75 over a white poster) the worst is Dropped
+   at 5.42:1. */
+@theme {
+  /* Text and icons on a filled accent (the brand gradient, bg-brand). */
+  --color-on-accent: #04121c;
+
+  --color-status-watchlist-text: var(--color-sky-300);
+  --color-status-watchlist-solid: var(--color-sky-400);
+  --color-status-watchlist-subtle: color-mix(in oklab, var(--color-sky-500) 15%, transparent);
+  --color-status-watchlist-border: color-mix(in oklab, var(--color-sky-500) 30%, transparent);
+
+  --color-status-watching-text: var(--color-amber-300);
+  --color-status-watching-solid: var(--color-amber-400);
+  --color-status-watching-subtle: color-mix(in oklab, var(--color-amber-500) 15%, transparent);
+  --color-status-watching-border: color-mix(in oklab, var(--color-amber-500) 30%, transparent);
+
+  --color-status-watched-text: var(--color-emerald-300);
+  --color-status-watched-solid: var(--color-emerald-400);
+  --color-status-watched-subtle: color-mix(in oklab, var(--color-emerald-500) 15%, transparent);
+  --color-status-watched-border: color-mix(in oklab, var(--color-emerald-500) 30%, transparent);
+
+  --color-status-on-hold-text: var(--color-slate-300);
+  --color-status-on-hold-solid: var(--color-slate-400);
+  --color-status-on-hold-subtle: color-mix(in oklab, var(--color-slate-500) 15%, transparent);
+  --color-status-on-hold-border: color-mix(in oklab, var(--color-slate-500) 30%, transparent);
+
+  --color-status-dropped-text: var(--color-rose-300);
+  --color-status-dropped-solid: var(--color-rose-400);
+  --color-status-dropped-subtle: color-mix(in oklab, var(--color-rose-500) 15%, transparent);
+  --color-status-dropped-border: color-mix(in oklab, var(--color-rose-500) 30%, transparent);
+}
+/* --- End color roles ------------------------------------------------------- */
+
 :root {
   color-scheme: dark;
   --brand-gradient: linear-gradient(135deg, #2dd4ee 0%, #38bdf8 45%, #2563eb 100%);
@@ -179,22 +221,8 @@ label {
     rgba(231, 238, 246, 0.06),
     transparent
   );
-  animation: shimmer 1.6s infinite;
-}
-
-/* Slow drifting glow used behind hero/landing art */
-@keyframes hero-float {
-  0%, 100% {
-    transform: translate3d(0, 0, 0);
-    opacity: 0.8;
-  }
-  50% {
-    transform: translate3d(0, -14px, 0);
-    opacity: 1;
-  }
-}
-.hero-float {
-  animation: hero-float 9s ease-in-out infinite;
+  /* Constant motion is linear (EM-16); `ease` surged and stalled each sweep. */
+  animation: shimmer 1.6s linear infinite;
 }
 
 /* Chevron affordance for native selects (which use appearance-none) */
@@ -211,6 +239,47 @@ label {
   outline: 2px solid var(--color-brand);
   outline-offset: 2px;
 }
+/* Full-bleed rows inside overflow-hidden lists (and content-visibility rows,
+   which contain paint) clip an outset ring at the list's edge, so draw it
+   inside the row instead (JK-37). Pair with .focus-ring. */
+.focus-ring-inset:focus-visible {
+  outline-offset: -2px;
+}
+
+/* Icon stroke follows the weight of the label beside it (JK-35, better-ui
+   icons): 1.5 next to regular text, lucide's 2 next to medium, semibold or
+   bold (Button is font-medium). Only icons still on lucide's default stroke
+   ("2") change, so explicit strokeWidth glyphs such as the 3px checkmarks
+   keep theirs. In the base layer, so a stroke-* utility still wins. */
+@layer base {
+  svg.lucide[stroke-width="2"] {
+    stroke-width: 1.5;
+  }
+  :is(.font-medium, .font-semibold, .font-bold) > svg.lucide[stroke-width="2"] {
+    stroke-width: 2;
+  }
+}
+
+/* ==========================================================================
+   Motion tokens (emil-design-eng, EM-14)
+   The one place the curves live; components/motion.tsx mirrors them for
+   Motion. `static` emits them even where no utility names them, because sites
+   read them through var() inside arbitrary values, which Tailwind doesn't
+   trace back to the theme. Overriding --ease-out also makes the `ease-out`
+   utility emil's curve instead of Tailwind's weak default.
+   ========================================================================== */
+@theme static {
+  /* Enter, exit and press: starts fast, settles gently. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  /* Panels docked to a screen edge (the bulk bar). */
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+}
+:root {
+  /* Radix dialogs: exits run faster than entrances. */
+  --duration-dialog-in: 200ms;
+  --duration-dialog-out: 150ms;
+}
+/* ======================== end of motion tokens ========================== */
 
 /* Press feedback (emil-design-eng): scale on pointer-down. It replaces
    transition-colors on a control, so it keeps that property list and adds
@@ -220,7 +289,7 @@ label {
 @utility press {
   transition-property: color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to, opacity, scale;
   transition-duration: 160ms;
-  transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
+  transition-timing-function: var(--ease-out);
   @media (prefers-reduced-motion: no-preference) {
     &:active:not(:disabled, [aria-disabled="true"]) {
       scale: 0.97;
@@ -228,13 +297,22 @@ label {
   }
 }
 
-/* Radix dialog entrance (close is instant — Radix unmounts immediately) */
+/* Radix dialogs (EM-03). Radix's Presence sees the closed state change
+   animation-name, waits for that animation to end, and only then unmounts,
+   so the exit plays in full. Content that changes on close would show during
+   those 150 ms: see share-dialog.tsx and import-review.tsx. The content keeps
+   transform-origin at its centre, which modals are exempt from. */
 @keyframes dialog-overlay-in {
   from {
     opacity: 0;
   }
   to {
     opacity: 1;
+  }
+}
+@keyframes dialog-overlay-out {
+  to {
+    opacity: 0;
   }
 }
 @keyframes dialog-content-in {
@@ -246,6 +324,37 @@ label {
     opacity: 1;
     scale: 1;
   }
+}
+@keyframes dialog-content-out {
+  to {
+    opacity: 0;
+    scale: 0.97;
+  }
+}
+.dialog-overlay[data-state="open"] {
+  animation: dialog-overlay-in var(--duration-dialog-in) var(--ease-out);
+}
+.dialog-overlay[data-state="closed"] {
+  animation: dialog-overlay-out var(--duration-dialog-out) var(--ease-out);
+}
+.dialog-content[data-state="open"] {
+  animation: dialog-content-in var(--duration-dialog-in) var(--ease-out);
+}
+.dialog-content[data-state="closed"] {
+  animation: dialog-content-out var(--duration-dialog-out) var(--ease-out);
+}
+
+/* The toaster rides above the library's bulk bar (EM-07). While open, the bar
+   publishes --toast-bottom, its height plus a gap. The toaster keeps its
+   resting offset and is lifted by the difference on `translate`, so when the
+   bar closes its toasts ease down with the bar (same curve, the bar's 200 ms
+   exit) rather than snapping: `bottom` wasn't transitioned, and animating it
+   would lay out every frame. --toast-desktop-bottom is the resting offset at
+   every width, since below Sonner's 600px mobile layout it equals the mobile
+   one. Sonner's own toaster transition (transform) is restated. */
+[data-sonner-toaster].toast-lift {
+  translate: 0 calc(var(--toast-desktop-bottom, 24px) - var(--toast-bottom, var(--toast-desktop-bottom, 24px)));
+  transition: transform 400ms ease, translate 200ms var(--ease-drawer);
 }
 
 /* Entrances that run from the first paint, with no JS. Sites apply them with
@@ -305,12 +414,48 @@ label {
   transform: none !important;
 }
 
-/* Respect reduced motion */
+/* Reduced motion (EM-04): fewer and gentler, not none (emil-design-eng).
+   - Kill switch: every CSS animation, including any added later, finishes at
+     once and never loops, unless it is allowed below. That stops the shimmer
+     and any other decorative loop.
+   - Single-duration transitions keep their duration, but only on properties
+     that don't move anything: colour, opacity and shadow still ease;
+     transform, translate, scale, rotate and size changes snap.
+   - Allowed: the dialog fades (the content fades without its scale), and the
+     spinner pulses in place, so it still shows that work is under way.
+   Motion's own animations follow MotionConfig reducedMotion="user". */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.001ms !important;
-    transition-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-property: color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to, opacity, box-shadow !important;
+    scroll-behavior: auto !important;
+  }
+  .dialog-overlay[data-state="open"],
+  .dialog-content[data-state="open"] {
+    animation-duration: var(--duration-dialog-in) !important;
+  }
+  .dialog-overlay[data-state="closed"],
+  .dialog-content[data-state="closed"] {
+    animation-duration: var(--duration-dialog-out) !important;
+  }
+  .dialog-content[data-state="open"] {
+    animation-name: dialog-overlay-in;
+  }
+  .dialog-content[data-state="closed"] {
+    animation-name: dialog-overlay-out;
+  }
+  .animate-spin {
+    animation: spinner-pulse 1s ease-in-out infinite alternate !important;
+  }
+}
+@keyframes spinner-pulse {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.35;
   }
 }

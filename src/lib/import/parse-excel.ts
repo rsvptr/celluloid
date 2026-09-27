@@ -36,6 +36,8 @@ export interface ParsedTitle {
   /** Exact identifiers carried by the file, used to skip the fuzzy name search. */
   imdbId?: string | null;
   tmdbId?: number | null;
+  /** A TheTVDB series id (Trakt exports carry one). */
+  tvdbId?: number | null;
   tv?: ParsedTvMeta;
 }
 

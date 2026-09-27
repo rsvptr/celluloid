@@ -80,15 +80,27 @@ function TitleCardImpl({
           lcp={lcp}
           className={cn(
             // Neutral outline, not a tinted ring (JK-33); the brand ring stays
-            // for hover and selection. Drawn on an overlay: an outline on this
-            // box paints under the positioned image. Only the properties that
-            // change (EM-09).
-            "after:pointer-events-none after:absolute after:inset-0 after:rounded-[inherit] after:outline after:-outline-offset-1 after:outline-white/10 transition-[box-shadow,opacity] duration-150 ease-[ease]",
+            // for hover and selection, on the span after this. Drawn on an overlay:
+            // an outline on this box paints under the positioned image. Only
+            // the property that changes (EM-09).
+            "after:pointer-events-none after:absolute after:inset-0 after:rounded-[inherit] after:outline after:-outline-offset-1 after:outline-white/10 transition-opacity duration-150 ease-[ease]",
+            selectable && !selected && "opacity-90 group-hover:opacity-100",
+          )}
+        />
+        {/* The brand ring for hover and selection, on its own layer so it fades
+            on opacity instead of repainting a box-shadow every frame (MO-10),
+            at EM-09's 150 ms ease. It sits where a ring on the poster would,
+            outside its edge, which the poster's overflow-hidden would clip if
+            this were drawn inside it. */}
+        <span
+          aria-hidden
+          className={cn(
+            "pointer-events-none absolute inset-0 rounded-lg ring-2 transition-opacity duration-150 ease-[ease]",
             selectable
               ? selected
-                ? "ring-2 ring-brand"
-                : "opacity-90 group-hover:opacity-100"
-              : "group-hover:ring-2 group-hover:ring-brand/50",
+                ? "ring-brand"
+                : "ring-brand opacity-0"
+              : "ring-brand/50 opacity-0 group-hover:opacity-100",
           )}
         />
 
@@ -97,7 +109,7 @@ function TitleCardImpl({
             className={cn(
               "absolute left-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full ring-1 transition-colors",
               selected
-                ? "bg-brand text-[#04121c] ring-brand"
+                ? "bg-brand text-on-accent ring-brand"
                 : "bg-black/70 text-transparent ring-white/40 group-hover:text-white/70",
             )}
           >
@@ -132,7 +144,7 @@ function TitleCardImpl({
           <span
             id={`${id}-new`}
             className={cn(
-              "absolute right-1.5 rounded-md bg-brand/90 px-1.5 py-0.5 text-[10px] font-medium text-[#04121c] shadow",
+              "absolute right-1.5 rounded-md bg-brand/90 px-1.5 py-0.5 text-xs font-medium text-on-accent shadow",
               // Stack under the favorite heart instead of overlapping it.
               item.favorite ? "top-7" : "top-1.5",
             )}
@@ -143,7 +155,7 @@ function TitleCardImpl({
         {!selectable && item.tmdbRating ? (
           <span
             id={`${id}-rating`}
-            className="absolute bottom-1.5 right-1.5 flex items-center gap-0.5 rounded-md bg-black/75 px-1.5 py-0.5 text-[11px] font-medium text-amber-300"
+            className="absolute bottom-1.5 right-1.5 flex items-center gap-0.5 rounded-md bg-black/75 px-1.5 py-0.5 text-xs font-medium text-amber-300"
           >
             <Star size={11} className="fill-amber-300" />
             <span className="sr-only">TMDB rating{" "}</span>
@@ -156,7 +168,7 @@ function TitleCardImpl({
         {!selectable && item.tmdbId === null ? (
           <span
             id={`${id}-unmatched`}
-            className="absolute bottom-1.5 left-1.5 rounded-md bg-black/75 px-1.5 py-0.5 text-[10px] font-medium text-amber-300/90 ring-1 ring-amber-400/30"
+            className="absolute bottom-1.5 left-1.5 rounded-md bg-black/75 px-1.5 py-0.5 text-xs font-medium text-amber-300/90 ring-1 ring-amber-400/30"
           >
             Unmatched
           </span>
@@ -165,7 +177,7 @@ function TitleCardImpl({
           <div className="absolute inset-x-0 bottom-0 h-1 bg-black/50">
             {/* transform instead of width: compositor-only animation, no layout thrash */}
             <div
-              className="brand-gradient h-full origin-left transition-transform duration-500"
+              className="brand-gradient h-full origin-left transition-transform"
               style={{ transform: `scaleX(${pct / 100})` }}
             />
           </div>
@@ -200,7 +212,7 @@ function TitleCardImpl({
   // a button's 0.97 for a surface this large, transform only, off under
   // reduced motion.
   const pressClass =
-    "flow-root transition-[scale] duration-160 ease-[cubic-bezier(0.23,1,0.32,1)] motion-safe:active:scale-[0.98]";
+    "flow-root transition-[scale] duration-160 ease-out motion-safe:active:scale-[0.98]";
 
   // Selection mode: toggle instead of navigating.
   if (selectable) {

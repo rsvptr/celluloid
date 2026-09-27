@@ -47,6 +47,7 @@ Object.assign(globalThis, {
     episode: {
       aggregate: () =>
         lazy("episode.aggregate", { _sum: { runtime: null }, _count: { _all: 0, runtime: 0 } }),
+      findMany: () => lazy("episode.findMany", []),
     },
     watchEvent: { count: () => lazy("watchEvent.count", 0) },
     $queryRaw: (strings: TemplateStringsArray) => lazy(sqlLabel(strings), []),
@@ -105,6 +106,12 @@ describe("time-zone-free queries don't wait for prefs (VE-13)", { concurrency: f
 
     releasePrefs();
     await upcoming;
-    assert.deepEqual([...started].sort(), ["prefs", "title.aggregate", "title.findMany", "waiting"]);
+    assert.deepEqual([...started].sort(), [
+      "episode.findMany",
+      "prefs",
+      "title.aggregate",
+      "title.findMany",
+      "waiting",
+    ]);
   });
 });

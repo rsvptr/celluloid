@@ -1,18 +1,18 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import {
+import "./server-only-shim";
+import type { Recommendation, StreamContext, SuppressionRow } from "../src/lib/recommend";
+import { MediaType } from "../src/generated/prisma/client";
+import type { TmdbSearchItem } from "../src/lib/tmdb";
+
+const {
   enrichRec,
   isSuppressedByName,
   mergeExcludeNames,
   suppressionContext,
   suppressionMatchKey,
   PROMPT_EXCLUDE_CAP,
-  type Recommendation,
-  type StreamContext,
-  type SuppressionRow,
-} from "../src/lib/recommend";
-import { MediaType } from "../src/generated/prisma/client";
-import type { TmdbSearchItem } from "../src/lib/tmdb";
+} = await import("../src/lib/recommend");
 
 // --- helpers ---------------------------------------------------------------
 

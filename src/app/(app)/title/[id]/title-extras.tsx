@@ -1,15 +1,8 @@
 import Image from "next/image";
-import { cookies } from "next/headers";
 import { ExternalLink, Play, UserRound } from "lucide-react";
 import { prisma } from "@/lib/prisma";
-import { getUserPrefs } from "@/lib/data";
-import { getTitleBundle } from "@/lib/tmdb";
-import {
-  DEFAULT_WATCH_REGION,
-  isWatchRegion,
-  pickTrailer,
-  regionWatchInfo,
-} from "@/lib/tmdb-extras";
+import { getWatchRegions, type TitleBundle } from "@/lib/tmdb";
+import { pickTrailer, regionName, regionWatchInfo } from "@/lib/tmdb-extras";
 import { TMDB_IMAGE_BASE } from "@/lib/images";
 import { yearOf } from "@/lib/tmdb-match";
 import { Badge, Card } from "@/components/ui";
@@ -25,41 +18,35 @@ import { QuickAdd, RegionSelect } from "./title-extras-client";
  */
 export async function TitleExtras({
   userId,
-  tmdbId,
   mediaType,
+  bundle: bundlePromise,
+  region,
+  videoLanguages,
 }: {
   userId: string;
-  tmdbId: number;
   mediaType: MediaType;
+  /**
+   * The page's one TMDB request for this title (see page.tsx), shared with
+   * the rest of the page. Null when it failed.
+   */
+  bundle: Promise<TitleBundle | null>;
+  /** The viewer's streaming region, as the page resolved it. */
+  region: string;
+  /** The trailer languages the bundle was fetched with, most wanted first. */
+  videoLanguages: string[];
 }) {
   const kind = mediaType === MediaType.TV ? ("tv" as const) : ("movie" as const);
-  // Region precedence: the per-device cookie (set by the inline picker) beats
-  // the account default, which beats the built-in fallback.
-  //
-  // The saved User.watchRegion used to be written by Settings and never read
-  // here, so the account preference did nothing: on any browser without the
-  // cookie — a new device, a cleared cache, a private window — you silently got
-  // US providers and a US certification regardless of what Settings said.
-  // Only fall through to the database when the cookie is absent or invalid, so
-  // the common path still costs no extra query.
-  const regionRaw = (await cookies()).get("celluloid-region")?.value;
-  let region = DEFAULT_WATCH_REGION;
-  if (isWatchRegion(regionRaw)) {
-    region = regionRaw;
-  } else {
-    const owner = await getUserPrefs(userId);
-    const saved = owner?.watchRegion;
-    if (isWatchRegion(saved)) region = saved;
-  }
 
-  // One append_to_response request carries everything below — down from
-  // three separate round trips. The region localizes the certification badge
-  // alongside the watch providers it sits next to.
-  const bundle = await getTitleBundle(kind, tmdbId, region).catch(() => null);
+  // The picker's region list is its own long-cached request. Without it the
+  // picker still shows the current region.
+  const [bundle, watchRegions] = await Promise.all([
+    bundlePromise,
+    getWatchRegions().catch(() => [] as string[]),
+  ]);
   if (!bundle) return null;
 
   const watch = regionWatchInfo(bundle.providersResults, region);
-  const trailer = pickTrailer(bundle.videos);
+  const trailer = pickTrailer(bundle.videos, videoLanguages);
   const picks = bundle.related.slice(0, 6);
   const crewLine = bundle.directors.length
     ? `Directed by ${bundle.directors.join(", ")}`
@@ -104,7 +91,14 @@ export async function TitleExtras({
             <h2 className="text-sm font-semibold">Where to watch</h2>
             {bundle.certification && (
               <Badge className="bg-surface-2 text-muted ring-line">
-                {bundle.certification}
+                {/* A rating from another country is labelled with it, so a
+                    fallback never reads as this region's rating (TM-08). */}
+                {bundle.certification.region !== region && (
+                  <abbr title={regionName(bundle.certification.region)} className="no-underline">
+                    {bundle.certification.region}
+                  </abbr>
+                )}
+                {bundle.certification.rating}
               </Badge>
             )}
           </div>
@@ -129,7 +123,7 @@ export async function TitleExtras({
                 View on IMDb <ExternalLink size={11} aria-hidden />
               </a>
             )}
-            <RegionSelect region={region} />
+            <RegionSelect region={region} regions={watchRegions} />
           </div>
         </div>
 
@@ -145,7 +139,7 @@ export async function TitleExtras({
                   rel="noreferrer"
                   className="focus-ring rounded font-medium text-brand hover:underline"
                 >
-                  Check JustWatch
+                  Check TMDB
                 </a>
               </>
             )}
@@ -182,7 +176,7 @@ export async function TitleExtras({
           </div>
         )}
 
-        <p className="mt-3 text-[11px] text-faint">
+        <p className="mt-3 text-xs text-faint">
           Streaming availability via JustWatch
           {watch.link && (
             <>
@@ -193,7 +187,7 @@ export async function TitleExtras({
                 rel="noreferrer"
                 className="focus-ring inline-flex items-center gap-0.5 rounded hover:text-muted"
               >
-                Open <ExternalLink size={10} aria-hidden />
+                Open on TMDB <ExternalLink size={10} aria-hidden />
               </a>
             </>
           )}
@@ -231,11 +225,11 @@ export async function TitleExtras({
                   )}
                 </div>
                 <div className="w-full min-w-0">
-                  <p className="truncate text-[11px] font-medium" title={c.name}>
+                  <p className="truncate text-xs font-medium" title={c.name}>
                     {c.name}
                   </p>
                   {c.character && (
-                    <p className="truncate text-[10px] text-faint" title={c.character}>
+                    <p className="truncate text-xs text-faint" title={c.character}>
                       {c.character}
                     </p>
                   )}
@@ -283,12 +277,13 @@ export async function TitleExtras({
                     <p className="truncate text-xs font-medium" title={name}>
                       {name}
                     </p>
-                    <p className="text-[11px] text-faint">{year ?? ""}</p>
+                    <p className="text-xs text-faint">{year ?? ""}</p>
                   </div>
                   <QuickAdd
                     tmdbId={p.id}
                     mediaType={kind}
                     name={name}
+                    year={year}
                     existingId={existingId}
                   />
                 </div>

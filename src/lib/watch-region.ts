@@ -1,8 +1,4 @@
-import {
-  DEFAULT_WATCH_REGION,
-  isWatchRegion,
-  type WatchRegion,
-} from "@/lib/tmdb-extras";
+import { DEFAULT_WATCH_REGION, isWatchRegion } from "@/lib/tmdb-extras";
 
 /**
  * Streaming-region precedence shared by any surface that combines device and
@@ -12,7 +8,7 @@ import {
 export function resolveWatchRegion(
   deviceRegion: string | null | undefined,
   savedRegion: string | null | undefined,
-): WatchRegion {
+): string {
   if (isWatchRegion(deviceRegion)) return deviceRegion;
   if (isWatchRegion(savedRegion)) return savedRegion;
   return DEFAULT_WATCH_REGION;

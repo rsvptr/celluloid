@@ -11,7 +11,7 @@ import {
 } from "@/lib/tmdb";
 import { pickBest } from "@/lib/tmdb-match";
 import { mapLimit } from "@/lib/async";
-import { chunks } from "@/lib/rematch-history";
+import { chunks, tvRuntime } from "@/lib/rematch-history";
 import { parseWatchedWorkbook, type ParsedTitle } from "./parse-excel";
 
 export interface ImportResult {
@@ -501,7 +501,12 @@ async function writeTv(
     backdropPath: tv.backdrop_path,
     language: tv.original_language || p.languageHint || null,
     tmdbRating: tv.vote_average ?? null,
-    runtime: tv.episode_run_time?.[0] ?? null,
+    // As in the app's add and refresh (TM-11): TMDB's stated runtime, else the
+    // median of the loaded episodes' runtimes.
+    runtime: tvRuntime(
+      tv.episode_run_time,
+      seasons.map((s) => s.sd),
+    ),
     genres: tv.genres?.map((g) => g.name) ?? [],
     totalSeasons: tv.number_of_seasons ?? null,
     // totalEpisodes is reconciled from the episode rows we actually persist

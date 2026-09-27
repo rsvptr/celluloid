@@ -51,6 +51,15 @@ function tvLabel(count: number) {
   return count === 1 ? "TV show" : "TV shows";
 }
 
+/**
+ * Whether a note can overflow its four-line clamp. At 320px a card column
+ * holds about 18 characters of text-xs per line, so 60 characters or 3 line
+ * breaks can; erring long only shows a toggle that changes nothing.
+ */
+function noteMayClamp(notes: string) {
+  return notes.length > 60 || notes.split("\n").length > 3;
+}
+
 export async function generateMetadata({
   params,
 }: {
@@ -104,9 +113,10 @@ export default async function SharePage({
         <div className="absolute inset-x-0 top-0 h-[34rem] opacity-[0.025] [background-image:linear-gradient(to_right,white_1px,transparent_1px),linear-gradient(to_bottom,white_1px,transparent_1px)] [background-size:56px_56px]" />
       </div>
 
+      {/* Appears instantly on Tab: a keyboard action never animates (EM-15). */}
       <a
         href="#share-content"
-        className="focus-ring fixed left-4 top-3 z-50 -translate-y-20 rounded-lg bg-foreground px-4 py-2 text-sm font-semibold text-background transition-transform focus:translate-y-0"
+        className="focus-ring fixed left-4 top-3 z-50 -translate-y-20 rounded-lg bg-foreground px-4 py-2 text-sm font-semibold text-background focus:translate-y-0"
       >
         Skip to shared list
       </a>
@@ -148,14 +158,14 @@ export default async function SharePage({
               </p>
               <span aria-hidden="true" className="hidden h-1 w-1 rounded-full bg-faint sm:block" />
               <p className="inline-flex items-center gap-2">
-                <LockKeyhole aria-hidden="true" size={15} />
+                <LockKeyhole aria-hidden="true" size={16} />
                 Read-only
               </p>
               {includeNotes ? (
                 <>
                   <span aria-hidden="true" className="hidden h-1 w-1 rounded-full bg-faint sm:block" />
                   <p className="inline-flex items-center gap-2">
-                    <MessageSquareQuote aria-hidden="true" size={15} />
+                    <MessageSquareQuote aria-hidden="true" size={16} />
                     Notes included
                   </p>
                 </>
@@ -227,9 +237,22 @@ export default async function SharePage({
                     lcp={index < 2 ? "preload" : index < 7 ? "eager" : undefined}
                   />
                   {includeNotes && item.notes ? (
-                    <blockquote className="mt-3 border-l-2 border-brand-cyan/45 pl-3 text-xs leading-5 text-muted">
+                    <blockquote className="group/note mt-3 border-l-2 border-brand-cyan/45 pl-3 text-xs leading-5 text-muted">
                       <span className="sr-only">Note from {ownerName}: </span>
-                      <p className="line-clamp-4 break-words whitespace-pre-wrap">{item.notes}</p>
+                      {/* Anonymous viewers have no detail page, so a clamped
+                          note needs its own way to the rest (JK-27). Opening
+                          the details lifts the clamp; no client JS. */}
+                      <p className="line-clamp-4 break-words whitespace-pre-wrap group-has-[details[open]]/note:line-clamp-none">
+                        {item.notes}
+                      </p>
+                      {noteMayClamp(item.notes) ? (
+                        <details className="group/more mt-1">
+                          <summary className="focus-ring w-fit cursor-pointer list-none rounded font-medium text-foreground/80 hover:text-foreground [&::-webkit-details-marker]:hidden">
+                            <span className="group-open/more:hidden">Show full note</span>
+                            <span className="hidden group-open/more:inline">Show less</span>
+                          </summary>
+                        </details>
+                      ) : null}
                     </blockquote>
                   ) : null}
                 </article>

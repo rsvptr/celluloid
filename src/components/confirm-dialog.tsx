@@ -8,6 +8,8 @@ interface ConfirmOptions {
   title: string;
   body?: string;
   confirmLabel?: string;
+  /** Names what staying put means when "Cancel" would be ambiguous. */
+  cancelLabel?: string;
   destructive?: boolean;
 }
 
@@ -51,7 +53,7 @@ export function useConfirm() {
       }}
     >
       <AlertDialog.Portal>
-        <AlertDialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-[dialog-overlay-in_0.2s_ease-out]" />
+        <AlertDialog.Overlay className="dialog-overlay fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
         <AlertDialog.Content
           onCloseAutoFocus={(e) => {
             e.preventDefault();
@@ -62,7 +64,7 @@ export function useConfirm() {
             if (el?.isConnected) el.focus();
             else document.getElementById("main")?.focus();
           }}
-          className="fixed left-1/2 top-1/2 z-50 max-h-[85dvh] w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[var(--radius-card)] bg-surface p-5 ring-1 ring-line focus:outline-none data-[state=open]:animate-[dialog-content-in_0.2s_cubic-bezier(0.16,1,0.3,1)]"
+          className="dialog-content fixed left-1/2 top-1/2 z-50 max-h-[85dvh] w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[var(--radius-card)] bg-surface p-5 ring-1 ring-line focus:outline-none"
         >
           <AlertDialog.Title className="text-sm font-semibold">
             {opts.title}
@@ -75,7 +77,7 @@ export function useConfirm() {
           <div className="mt-4 flex justify-end gap-2">
             <AlertDialog.Cancel asChild>
               <Button variant="ghost" size="sm">
-                Cancel
+                {opts.cancelLabel ?? "Cancel"}
               </Button>
             </AlertDialog.Cancel>
             <AlertDialog.Action asChild>

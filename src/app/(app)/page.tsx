@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { requireUser } from "@/lib/session";
 import {
@@ -17,6 +18,9 @@ import {
 } from "@/lib/remembered-state";
 import { resolveWatchRegion } from "@/lib/watch-region";
 import { Library } from "@/components/library";
+
+// "Library · Celluloid", like every other page (JK-23).
+export const metadata: Metadata = { title: "Library" };
 
 const PROVIDER_FRESHNESS_MS = 7 * 24 * 60 * 60 * 1000;
 

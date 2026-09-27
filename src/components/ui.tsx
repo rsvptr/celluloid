@@ -11,7 +11,7 @@ const buttonBase =
 
 const buttonVariants: Record<ButtonVariant, string> = {
   primary:
-    "text-[#04121c] font-semibold brand-gradient hover:opacity-90 shadow-sm shadow-brand/20",
+    "text-on-accent font-semibold brand-gradient hover:opacity-90 shadow-sm shadow-brand/20",
   secondary:
     "bg-surface-2 text-foreground ring-1 ring-line hover:bg-surface-2/70",
   ghost: "text-muted hover:text-foreground hover:bg-surface-2/60",
@@ -51,6 +51,15 @@ export function Button({
     />
   );
 }
+
+/**
+ * Button's `disabled:` styling, keyed on `aria-disabled` instead. Chrome moves
+ * focus to <body> the instant a focused control becomes `disabled`, so a
+ * control that must keep focus while unavailable or busy (a confirm opener,
+ * a bulk or Trash action) carries `aria-disabled`, returns early from its
+ * handler, and takes these classes.
+ */
+export const softDisabledClass = "aria-disabled:cursor-not-allowed aria-disabled:opacity-50";
 
 // --- Inputs ----------------------------------------------------------------
 

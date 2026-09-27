@@ -1,21 +1,31 @@
 /**
  * Server-side TMDB v3 client. Authenticates with the v4 Read Access Token
- * (Bearer). Never import this into client components — it reads a secret.
+ * (Bearer). It reads a secret, so `server-only` fails the build if a client
+ * component ever imports it; `import type` from client code stays fine.
  */
 
+import "server-only";
 import {
   imdbUrl,
+  isWatchRegion,
   pickCreators,
   pickDirector,
+  pickEpisodeTypes,
   pickMovieCertification,
+  pickRegionalReleases,
   pickTopCast,
   pickTvCertification,
+  sortRegionsByName,
+  type Certification,
+  type EpisodeToAirLike,
+  type EpisodeTypeMarker,
+  type RegionalRelease,
   type TitleCastMember,
 } from "@/lib/tmdb-extras";
 // tmdb-match imports only a TYPE from this module, so there is no runtime cycle.
-// Reusing its normalizer keeps "does this page contain the title we asked for?"
-// answered the same way the matcher will answer it.
-import { norm } from "@/lib/tmdb-match";
+// Reusing its normalizer and name list keeps "does this page contain the title
+// we asked for?" answered the same way the matcher will answer it.
+import { norm, resultNames } from "@/lib/tmdb-match";
 
 const BASE = "https://api.themoviedb.org/3";
 
@@ -23,7 +33,7 @@ function getToken(): string {
   const t = process.env.TMDB_ACCESS_TOKEN;
   if (!t) {
     throw new Error(
-      "TMDB_ACCESS_TOKEN is not set. Add your TMDB v4 Read Access Token to .env.",
+      "TMDB_ACCESS_TOKEN is not set. Add your TMDB v4 Read Access Token to .env.local.",
     );
   }
   return t;
@@ -350,9 +360,9 @@ export async function searchByType(
   // year-filtered ones first, so it can still prefer them on an even score.
   if (year !== undefined) {
     const wanted = norm(query);
-    const hasNameMatch = results.some(
-      (r) => norm(r.title ?? r.name ?? "") === wanted,
-    );
+    // The original title counts too: a query written in the original language
+    // ("Ladri di biciclette") found on the filtered page needs no second search.
+    const hasNameMatch = results.some((r) => resultNames(r).includes(wanted));
     if (!hasNameMatch) {
       const seen = new Set(results.map((r) => r.id));
       const unfiltered = (await run()).results.filter((r) => !seen.has(r.id));
@@ -367,11 +377,30 @@ export async function searchByType(
  * Shape of `/find/{external_id}`. TMDB returns one array per object kind; only
  * the two we can import are declared, and `media_type` is stamped by the caller
  * below rather than trusted (it is documented on movie results but not on the
- * TV ones).
+ * TV ones). An episode id comes back only under `tv_episode_results`, which is
+ * deliberately not read: an episode row's status and rating describe one
+ * episode, not its show, so it must not import as the show.
  */
 interface TmdbFindResponse {
   movie_results?: TmdbSearchItem[];
   tv_results?: TmdbSearchItem[];
+}
+
+/** Movies first, then TV. */
+async function findByExternalId(
+  id: string,
+  source: "imdb_id" | "tvdb_id",
+  signal?: AbortSignal,
+): Promise<TmdbSearchItem[]> {
+  const data = await tmdb<TmdbFindResponse>(
+    `/find/${encodeURIComponent(id)}`,
+    { external_source: source, language: "en-US" },
+    { revalidate: 60 * 60 * 24, signal },
+  );
+  return [
+    ...(data.movie_results ?? []).map((r) => ({ ...r, media_type: "movie" as const })),
+    ...(data.tv_results ?? []).map((r) => ({ ...r, media_type: "tv" as const })),
+  ];
 }
 
 /**
@@ -387,15 +416,22 @@ export async function findByImdbId(
 ): Promise<TmdbSearchItem[]> {
   const id = imdbId.trim();
   if (!/^tt\d{5,12}$/i.test(id)) return [];
-  const data = await tmdb<TmdbFindResponse>(
-    `/find/${encodeURIComponent(id)}`,
-    { external_source: "imdb_id", language: "en-US" },
-    { revalidate: 60 * 60 * 24, signal: opts.signal },
-  );
-  return [
-    ...(data.movie_results ?? []).map((r) => ({ ...r, media_type: "movie" as const })),
-    ...(data.tv_results ?? []).map((r) => ({ ...r, media_type: "tv" as const })),
-  ];
+  return findByExternalId(id, "imdb_id", opts.signal);
+}
+
+/**
+ * Resolve a TheTVDB series id (Trakt exports carry one) to its TMDB show. TVDB
+ * numbers series and episodes separately, so the same number can also be some
+ * other show's episode (live, 79168 is Friends and an episode of show 4018):
+ * only the series match is used.
+ */
+export async function findTvByTvdbId(
+  tvdbId: number,
+  opts: { signal?: AbortSignal } = {},
+): Promise<TmdbSearchItem[]> {
+  if (!Number.isSafeInteger(tvdbId) || tvdbId <= 0) return [];
+  const titles = await findByExternalId(String(tvdbId), "tvdb_id", opts.signal);
+  return titles.filter((title) => title.media_type === "tv");
 }
 
 type DetailOptions = Pick<TmdbOptions, "fresh" | "signal" | "deadlineMs" | "retries">;
@@ -537,6 +573,22 @@ export async function getWatchProviders(region: string): Promise<TmdbProvider[]>
 }
 
 /**
+ * Every region TMDB has streaming data for, ordered by English name (139
+ * live in 2026), for the region pickers. The list changes rarely, so it is
+ * cached for 30 days.
+ */
+export async function getWatchRegions(): Promise<string[]> {
+  const data = await tmdb<{ results?: { iso_3166_1?: string }[] }>(
+    "/watch/providers/regions",
+    { language: "en-US" },
+    { revalidate: 60 * 60 * 24 * 30 },
+  );
+  return sortRegionsByName(
+    (data.results ?? []).flatMap((r) => (isWatchRegion(r.iso_3166_1) ? [r.iso_3166_1] : [])),
+  );
+}
+
+/**
  * TMDB ids for a genre named in the app (Title.genres stores TMDB's display
  * names, so the match is by name, case-insensitively). Both catalogues are
  * consulted because one name can carry different ids per medium ("Action &
@@ -577,6 +629,8 @@ export interface TmdbRegionProviders {
 export interface TmdbVideo {
   site: string;
   type: string;
+  /** The video's language; null when untagged. */
+  iso_639_1?: string | null;
   official?: boolean;
   key: string;
   name: string;
@@ -700,7 +754,13 @@ export interface TmdbCreatedBy {
 interface TmdbAppendedDetail {
   id: number;
   imdb_id?: string | null;
+  /** ISO 3166-1 codes. Both movie and TV details carry it. */
+  origin_country?: string[];
+  production_countries?: { iso_3166_1: string }[];
   created_by?: TmdbCreatedBy[];
+  /** TV: the latest aired and the next episode, each with its episode_type. */
+  last_episode_to_air?: EpisodeToAirLike | null;
+  next_episode_to_air?: EpisodeToAirLike | null;
   videos?: { results?: TmdbVideo[] };
   "watch/providers"?: { results?: Record<string, TmdbRegionProviders> };
   recommendations?: TmdbPage<TmdbSearchItem>;
@@ -717,13 +777,14 @@ export interface TitleBundle {
   providersResults: Record<string, TmdbRegionProviders> | undefined;
   /** Related titles, media_type-tagged, with the /similar fallback already applied. */
   related: TmdbSearchItem[];
-  /** Raw videos — feed to pickTrailer(videos). */
+  /** Raw videos in the requested languages — feed to pickTrailer(videos, languages). */
   videos: TmdbVideo[];
   /**
-   * Age/content certification for the viewer's streaming region (falls back
-   * to any region with data), or null.
+   * Age/content certification for the viewer's streaming region, falling back
+   * to the title's own country, then the US, then any region with data. Its
+   * `region` says whose rating it is. Null when no region has one.
    */
-  certification: string | null;
+  certification: Certification | null;
   /** Top-billed cast, ordered by billing and capped. */
   topCast: TitleCastMember[];
   /** Director(s) for movies; empty for TV. */
@@ -732,6 +793,16 @@ export interface TitleBundle {
   creators: string[];
   /** Canonical IMDb URL, or null when TMDB has no imdb_id. */
   imdbUrl: string | null;
+  /**
+   * Movies: the region's theatrical, digital and physical release dates, from
+   * the same release_dates append the certification comes from. Empty for TV.
+   */
+  releases: RegionalRelease[];
+  /**
+   * TV: finale markers for the last aired and the next episode, the only two
+   * the detail response describes. Empty for movies.
+   */
+  episodeTypes: EpisodeTypeMarker[];
 }
 
 /**
@@ -744,12 +815,14 @@ export interface TitleBundle {
  *
  * `region` localizes the certification badge to the viewer's streaming region
  * (the same picker that scopes watch providers); it does not affect the fetch
- * URL, so the 24h response cache stays shared across regions.
+ * URL. `videoLanguages` (see trailerLanguages) does: videos come back only in
+ * those languages, so the 24h response cache is per title and language list.
  */
 export async function getTitleBundle(
   kind: "movie" | "tv",
   id: number,
   region = "US",
+  videoLanguages: readonly string[] = ["en"],
 ): Promise<TitleBundle> {
   const appends =
     kind === "movie"
@@ -758,7 +831,12 @@ export async function getTitleBundle(
 
   const data = await tmdb<TmdbAppendedDetail>(
     `/${kind}/${id}`,
-    { language: "en-US", append_to_response: appends },
+    {
+      language: "en-US",
+      append_to_response: appends,
+      // Appended sub-requests honour it, as the standalone videos call does.
+      include_video_language: videoLanguages.join(","),
+    },
     { revalidate: 60 * 60 * 24 },
   );
 
@@ -776,6 +854,9 @@ export async function getTitleBundle(
   const related = relatedRaw.map((r) => ({ ...r, media_type: kind }));
 
   const credits = kind === "movie" ? data.credits : data.aggregate_credits;
+  const origin = data.origin_country?.length
+    ? data.origin_country
+    : (data.production_countries ?? []).map((c) => c.iso_3166_1);
 
   return {
     providersResults: data["watch/providers"]?.results,
@@ -783,12 +864,15 @@ export async function getTitleBundle(
     videos: data.videos?.results ?? [],
     certification:
       kind === "movie"
-        ? pickMovieCertification(data.release_dates?.results, region)
-        : pickTvCertification(data.content_ratings?.results, region),
+        ? pickMovieCertification(data.release_dates?.results, region, origin)
+        : pickTvCertification(data.content_ratings?.results, region, origin),
     topCast: pickTopCast(credits),
     directors: kind === "movie" ? pickDirector(data.credits) : [],
     creators:
       kind === "tv" ? pickCreators(data.created_by, data.aggregate_credits?.crew) : [],
     imdbUrl: imdbUrl(data.external_ids),
+    releases: kind === "movie" ? pickRegionalReleases(data.release_dates?.results, region) : [],
+    episodeTypes:
+      kind === "tv" ? pickEpisodeTypes([data.last_episode_to_air, data.next_episode_to_air]) : [],
   };
 }

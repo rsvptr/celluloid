@@ -1,13 +1,11 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { afterEach, describe, it } from "node:test";
-import {
-  appendedSeasons,
-  getMovie,
-  getSeasons,
-  getTv,
-  MAX_APPENDED_SEASONS,
-} from "../src/lib/tmdb";
+import "./server-only-shim";
+
+const { appendedSeasons, getMovie, getSeasons, getTv, MAX_APPENDED_SEASONS } = await import(
+  "../src/lib/tmdb"
+);
 
 process.env.TMDB_ACCESS_TOKEN ??= "test-tmdb-token";
 

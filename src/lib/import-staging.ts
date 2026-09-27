@@ -6,6 +6,7 @@ import { addFromTmdb, rematchTitle } from "@/lib/actions";
 import { mapLimit } from "@/lib/async";
 import {
   findByImdbId,
+  findTvByTvdbId,
   getMovie,
   getTv,
   searchByType,
@@ -322,16 +323,19 @@ function tvAsSearchItem(tv: TmdbTvDetails): TmdbSearchItem {
 }
 
 /**
- * Resolve a row through the exact identifier its file carried, if any. A TMDB or
- * IMDb id names one title outright, so honouring it skips the fuzzy name search
- * entirely — the single biggest accuracy win on a large export, where "Drishyam"
- * or "The Office" otherwise resolves by popularity. Never throws: a dead id or a
- * TMDB failure just returns null so the caller falls back to searching by name.
+ * Resolve a row through the exact identifier its file carried, if any. A TMDB,
+ * IMDb or TVDB id names one title outright, so honouring it skips the fuzzy
+ * name search entirely — the single biggest accuracy win on a large export,
+ * where "Drishyam" or "The Office" otherwise resolves by popularity. Never
+ * throws: a dead id or a TMDB failure just returns null so the caller falls
+ * back to searching by name. Every lookup takes the staging `signal`, so none
+ * runs on to its own deadline past the staging budget. The score is 1 for a
+ * certain match, lower when review should check it.
  */
-async function resolveByExactId(
+export async function resolveByExactId(
   parsed: ParsedTitle,
   signal: AbortSignal,
-): Promise<TmdbSearchItem | null> {
+): Promise<{ match: TmdbSearchItem; score: number } | null> {
   const tmdbId = parsed.tmdbId ?? null;
   if (tmdbId !== null) {
     // The Type column is a hint, not a guarantee, and a TMDB id means nothing
@@ -341,9 +345,11 @@ async function resolveByExactId(
       parsed.mediaType === "tv" ? (["tv", "movie"] as const) : (["movie", "tv"] as const);
     for (const kind of kinds) {
       try {
-        return kind === "movie"
-          ? movieAsSearchItem(await getMovie(tmdbId))
-          : tvAsSearchItem(await getTv(tmdbId));
+        const match =
+          kind === "movie"
+            ? movieAsSearchItem(await getMovie(tmdbId, { signal }))
+            : tvAsSearchItem(await getTv(tmdbId, { signal }));
+        return { match, score: 1 };
       } catch {
         // Wrong kind or unknown id — try the other kind, then the name search.
       }
@@ -352,7 +358,24 @@ async function resolveByExactId(
   if (parsed.imdbId) {
     try {
       const found = await findByImdbId(parsed.imdbId, { signal });
-      return found.find((item) => item.media_type === parsed.mediaType) ?? found[0] ?? null;
+      // An episode's id finds no title, so the row falls back to the name
+      // search rather than importing the episode's status as its show's.
+      const title = found.find((item) => item.media_type === parsed.mediaType) ?? found[0];
+      if (title) return { match: title, score: 1 };
+    } catch {
+      // Fall through to the TVDB id, then the name search.
+    }
+  }
+  if (parsed.tvdbId) {
+    try {
+      const [show] = await findTvByTvdbId(parsed.tvdbId, { signal });
+      // A file's TVDB column can hold episode ids, which TVDB numbers apart
+      // from series, so a collision can name an unrelated show. Trust the id
+      // only when the names agree; otherwise leave it for review to check.
+      if (show) {
+        const namesAgree = pickBest([show], parsed.name, null) !== null;
+        return { match: show, score: namesAgree ? 1 : scoreImportMatch(parsed, show) };
+      }
     } catch {
       // Fall through to the name search.
     }
@@ -421,11 +444,10 @@ export async function stageParsedImport(input: {
               // file's Type column disagreed with the identifier it supplied.
               parsed: {
                 ...validParsed,
-                mediaType: exact.media_type === "tv" ? ("tv" as const) : ("movie" as const),
+                mediaType: exact.match.media_type === "tv" ? ("tv" as const) : ("movie" as const),
               },
-              proposed: proposedMatchFromTmdb(exact),
-              // An identifier is certain; there is nothing for review to weigh.
-              score: 1,
+              proposed: proposedMatchFromTmdb(exact.match),
+              score: exact.score,
               invalid: false,
               timedOut: false,
             };

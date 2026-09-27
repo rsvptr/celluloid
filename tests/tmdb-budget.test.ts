@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { getMovie, searchMulti, TmdbError, tmdbErrorCode } from "../src/lib/tmdb";
+import "./server-only-shim";
+
+const { getMovie, searchMulti, TmdbError, tmdbErrorCode } = await import("../src/lib/tmdb");
 
 const originalFetch = globalThis.fetch;
 const originalDateNow = Date.now;

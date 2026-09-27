@@ -29,7 +29,8 @@ describe("press feedback (EM-01)", () => {
   it("defines the press utility with emil's values", async () => {
     const press = pressUtility(await source("app/globals.css"));
     assert.match(press, /transition-duration: 160ms;/);
-    assert.match(press, /transition-timing-function: cubic-bezier\(0\.23, 1, 0\.32, 1\);/);
+    // emil's cubic-bezier(0.23, 1, 0.32, 1), from the motion tokens (EM-14).
+    assert.match(press, /transition-timing-function: var\(--ease-out\);/);
     // Keeps everything transition-colors covered, and adds opacity and scale.
     assert.match(
       press,
@@ -70,7 +71,7 @@ describe("press feedback (EM-01)", () => {
 
   it("tints full-width episode rows instead of scaling them", async () => {
     const tracker = await source("app/(app)/title/[id]/season-tracker.tsx");
-    const row = tracker.match(/className="(focus-ring flex min-h-11 flex-1 [^"]*)"/)?.[1] ?? "";
+    const row = tracker.match(/className="(focus-ring focus-ring-inset flex min-h-11 flex-1 [^"]*)"/)?.[1] ?? "";
     assert.match(row, /(^| )active:bg-surface-2\/60( |$)/);
     assert.doesNotMatch(row, /(^| )press( |$)/);
   });
@@ -98,10 +99,12 @@ describe("press feedback (EM-01)", () => {
 
   it("tints library list rows instantly instead of scaling them", async () => {
     const library = await source("components/library.tsx");
-    const rows = [...library.matchAll(/"(cv-auto focus-ring flex items-center gap-3 [^"]*)"/g)];
+    const rows = [...library.matchAll(/"(cv-auto focus-ring focus-ring-inset flex items-center gap-3 [^"]*)"/g)];
     assert.equal(rows.length, 2);
     for (const [, row] of rows) {
-      assert.match(row, /(^| )active:bg-surface-2\/60 active:transition-none( |$)/);
+      // duration-0, not transition-none: reduced motion (globals.css) sets
+      // transition-property, which would bring a fade back.
+      assert.match(row, /(^| )active:bg-surface-2\/60 active:duration-0( |$)/);
       assert.doesNotMatch(row, /(^| )press( |$)/);
     }
   });

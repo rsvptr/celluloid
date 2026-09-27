@@ -12,11 +12,17 @@ describe("app Toaster config", () => {
       source("../src/app/(app)/layout.tsx"),
       source("../src/components/library.tsx"),
     ]);
+    // The offsets stay at rest and toast-lift raises the toaster by the bar's
+    // height on `translate`, so it can ease back down when the bar closes.
+    assert.match(layout, /offset=\{\{ bottom: "var\(--toast-desktop-bottom, 24px\)" \}\}/);
+    assert.match(layout, /mobileOffset=\{\{ bottom: "calc\(4\.5rem \+ env\(safe-area-inset-bottom\)\)" \}\}/);
+    assert.match(layout, /className="toast-lift /);
+    const css = await source("../src/app/globals.css");
+    const lift = css.slice(css.indexOf("[data-sonner-toaster].toast-lift {"));
     assert.match(
-      layout,
-      /offset=\{\{ bottom: "var\(--toast-bottom, var\(--toast-desktop-bottom, 24px\)\)" \}\}/,
+      lift,
+      /^\[data-sonner-toaster\]\.toast-lift \{\s*translate: 0 calc\(var\(--toast-desktop-bottom, 24px\) - var\(--toast-bottom, var\(--toast-desktop-bottom, 24px\)\)\);\s*transition: transform 400ms ease, translate 200ms var\(--ease-drawer\);/,
     );
-    assert.match(layout, /mobileOffset=\{\{\s*bottom: "var\(--toast-bottom, /);
     // The bar publishes its own measured height plus a gap at every width.
     assert.match(library, /"--toast-bottom",\s*`\$\{Math\.ceil\(bar\.getBoundingClientRect\(\)\.height\) \+ 8\}px`/);
   });
@@ -30,7 +36,7 @@ describe("app Toaster config", () => {
     assert.match(nav, /className="fixed inset-x-0 bottom-0 [^"]*\blg:hidden\b/);
     assert.match(
       layout,
-      /className="\[--toast-desktop-bottom:calc\(4\.5rem\+env\(safe-area-inset-bottom\)\)\] lg:\[--toast-desktop-bottom:24px\]"/,
+      /className="toast-lift \[--toast-desktop-bottom:calc\(4\.5rem\+env\(safe-area-inset-bottom\)\)\] lg:\[--toast-desktop-bottom:24px\]"/,
     );
   });
 
@@ -48,5 +54,27 @@ describe("app Toaster config", () => {
       layout,
       /closeButton:\s*"focus-ring bg-surface-2! border-line-strong! text-foreground! hover:bg-line!"/,
     );
+  });
+});
+
+describe("match dialog duplicate toast", () => {
+  it("raises the Open action only after the modal dialog has closed", async () => {
+    const controls = await source("../src/components/match-controls.tsx");
+    const pick = controls.slice(controls.indexOf("function pick("), controls.indexOf("function refresh("));
+    // While a Radix modal is open the page outside it is inert, so the toast
+    // with the action is queued, the dialog closes, and Radix's
+    // onCloseAutoFocus (called after unmount) raises it.
+    assert.match(pick, /if \(!existingId\) \{\s*toast\.error\(error\);\s*return;\s*\}/);
+    const duplicate = pick.slice(pick.indexOf("if (!existingId)") + "if (!existingId)".length);
+    const queued = duplicate.slice(duplicate.indexOf("return;") + "return;".length);
+    assert.match(queued, /afterClose\.current = \(\) =>\s*toast\.error\(error, \{/);
+    assert.match(queued, /setOpen\(false\);\s*return;/);
+    assert.equal(queued.match(/toast\.error\(/g)?.length, 1);
+    assert.match(queued, /action: \{ label: "Open", onClick: \(\) => router\.push\(`\/title\/\$\{existingId\}`\) \}/);
+    // As long as an undo toast, with a close button.
+    assert.match(queued, /duration: 10_000,\s*closeButton: true,/);
+
+    const onClose = controls.slice(controls.indexOf("onCloseAutoFocus={"), controls.indexOf("className=", controls.indexOf("onCloseAutoFocus={")));
+    assert.match(onClose, /afterClose\.current\?\.\(\);\s*afterClose\.current = null;/);
   });
 });

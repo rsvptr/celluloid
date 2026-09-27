@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { flushSync } from "react-dom";
 import { Eye, EyeOff } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { AnimatePresence, InertOnExit, motion } from "@/components/motion";
+import { AnimatePresence, EASE_OUT, InertOnExit, motion } from "@/components/motion";
 import { Button, Card, Input } from "@/components/ui";
 import { authClient } from "@/lib/auth-client";
 
@@ -202,7 +202,7 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
     return (
       // CSS entrance, so the code form can't be left invisible by a failed
       // Motion feature chunk.
-      <div className="motion-safe:animate-[enter-scale_250ms_cubic-bezier(0.16,1,0.3,1)]">
+      <div className="motion-safe:animate-[enter-scale_250ms_var(--ease-out)]">
         <Card className="p-6 lg:p-7">
           <form method="post" onSubmit={onSubmit} className="flex flex-col gap-4">
             <div>
@@ -295,7 +295,7 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
               initial={false}
               animate={{ opacity: 1, height: "auto" }}
               exit={{ opacity: 0, height: 0 }}
-              transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+              transition={{ duration: 0.22, ease: EASE_OUT }}
               // -m-1 + inner p-1: the height animation needs overflow-hidden,
               // but that clips the Input's focus ring (a box-shadow). The inner
               // padding gives the ring room inside the clip box; the negative
@@ -303,7 +303,7 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
               // -mb-3 here and pb-3 inside also cancel the form's gap-4 below
               // this first child, so the collapsed region takes no space and
               // the Email field never jumps.
-              className="-m-1 -mb-3 grid grid-rows-[1fr] overflow-hidden motion-safe:animate-[collapse-in_220ms_cubic-bezier(0.16,1,0.3,1)]"
+              className="-m-1 -mb-3 grid grid-rows-[1fr] overflow-hidden motion-safe:animate-[collapse-in_220ms_var(--ease-out)]"
             >
               <InertOnExit className="min-h-0">
               <div className="flex flex-col gap-4 p-1 pb-3">
@@ -380,14 +380,16 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
             <button
               type="button"
               onClick={() => setShowPassword((visible) => !visible)}
-              aria-label={showPassword ? "Hide password" : "Show password"}
+              // A toggle keeps one name and lets aria-pressed carry the state
+              // ("Hide password, pressed" contradicted itself, JK-06).
+              aria-label="Show password"
               aria-pressed={showPassword}
               className="focus-ring absolute inset-y-0 right-0 flex min-w-11 items-center justify-center rounded-r-lg text-faint transition-colors hover:text-foreground"
             >
               {showPassword ? (
-                <EyeOff aria-hidden="true" size={17} />
+                <EyeOff aria-hidden="true" size={16} />
               ) : (
-                <Eye aria-hidden="true" size={17} />
+                <Eye aria-hidden="true" size={16} />
               )}
             </button>
           </div>
@@ -409,12 +411,30 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
           {loading ? "Please wait…" : isSignup ? "Create account" : "Sign in"}
         </Button>
 
-        {isSignup ? (
-          <p className="text-xs leading-relaxed text-faint">
-            After you join, turn on two-factor authentication in Settings for extra
-            protection.
-          </p>
-        ) : null}
+        <AnimatePresence initial={false}>
+          {isSignup ? (
+            <motion.div
+              key="signup-note"
+              // MO-08: the note opens and closes with the name fields, on the
+              // same reveal, instead of popping in and out at the bottom.
+              // -mt-4 here and pt-4 inside cancel the form's gap-4, and the
+              // padding sits below the min-h-0 child, so the collapsed note
+              // takes no space.
+              initial={false}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.22, ease: EASE_OUT }}
+              className="-mt-4 grid grid-rows-[1fr] overflow-hidden motion-safe:animate-[collapse-in_220ms_var(--ease-out)]"
+            >
+              <div className="min-h-0">
+                <p className="pt-4 text-xs leading-relaxed text-faint">
+                  After you join, turn on two-factor authentication in Settings for extra
+                  protection.
+                </p>
+              </div>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
       </form>
 
       {!signupsDisabled ? (

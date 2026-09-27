@@ -40,3 +40,23 @@ describe("title page hero (JK-15)", () => {
     assert.ok(h1.includes("text-balance"), h1.join(" "));
   });
 });
+
+describe("title page TMDB request", () => {
+  it("starts one bundle request and shares it with everything drawn from TMDB", async () => {
+    const [page, extras, releases] = await Promise.all([
+      source("../src/app/(app)/title/[id]/page.tsx"),
+      source("../src/app/(app)/title/[id]/title-extras.tsx"),
+      source("../src/app/(app)/title/[id]/regional-releases.tsx"),
+    ]);
+    assert.equal(page.match(/getTitleBundle\(/g)?.length, 1);
+    assert.doesNotMatch(extras, /getTitleBundle\(/);
+    assert.doesNotMatch(releases, /getTitleBundle\(/);
+    assert.match(page, /<TitleExtras[^>]*bundle=\{bundle\}/);
+    // Regional release dates: watchlisted films only, streamed in so the hero
+    // never waits on TMDB.
+    assert.match(
+      page,
+      /!isTv && title\.status === "WATCHLIST" && \(\s*<Suspense fallback=\{null\}>\s*<RegionalReleases bundle=\{bundle\} region=\{region\} \/>/,
+    );
+  });
+});

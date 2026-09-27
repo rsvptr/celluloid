@@ -115,7 +115,7 @@ export function TmdbSearch({
     <div className="@container flex flex-col gap-4" aria-busy={loading}>
       <div className="relative">
         <Search
-          size={18}
+          size={20}
           aria-hidden="true"
           className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-faint"
         />
@@ -129,7 +129,12 @@ export function TmdbSearch({
           placeholder={placeholder}
           aria-label="Search The Movie Database"
           spellCheck={false}
-          className="h-12 pl-11 text-base"
+          // While the spinner shows, it takes the native clear button's
+          // place instead of sitting on top of it (JK-36).
+          className={cn(
+            "h-12 pl-11 text-base",
+            loading && "pr-11 [&::-webkit-search-cancel-button]:hidden",
+          )}
         />
         {loading && (
           <Spinner className="absolute right-4 top-1/2 -translate-y-1/2 text-muted" />
@@ -247,7 +252,7 @@ function ResultRow({
         type="button"
         onClick={() => onPick(r)}
         className={cn(
-          "focus-ring flex w-full min-w-0 items-center gap-3 rounded-xl bg-surface p-2.5 text-left ring-1 ring-line transition-colors hover:bg-surface-2/60 hover:ring-brand/40",
+          "focus-ring flex w-full min-w-0 items-center gap-3 rounded-2xl bg-surface p-2.5 text-left ring-1 ring-line transition-colors hover:bg-surface-2/60 hover:ring-brand/40",
         )}
       >
         {body}
@@ -256,7 +261,7 @@ function ResultRow({
   }
 
   return (
-    <div className="flex min-w-0 items-center gap-3 rounded-xl bg-surface p-2.5 ring-1 ring-line">
+    <div className="flex min-w-0 items-center gap-3 rounded-2xl bg-surface p-2.5 ring-1 ring-line">
       {body}
     </div>
   );
