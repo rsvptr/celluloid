@@ -8,7 +8,8 @@ import { REC_ERAS, type RecEraId } from "@/lib/models";
  * - streaming: a request is open. `error` can already be set: the server's
  *   error event arrives before the stream closes, and the form shows it while
  *   the run winds down.
- * - done: the run ended without an error, including one the owner stopped.
+ * - done: the run ended without an error, including one the owner stopped
+ *   (`stopped`).
  * - error: the run ended with an error. Picks that arrived before it are kept.
  *
  * Every state carries the run's results, because dismiss and Undo change the
@@ -41,7 +42,7 @@ export type RecommendState = RunResults &
   (
     | { status: "idle"; error: null }
     | { status: "streaming"; phase: StreamPhase; error: string | null }
-    | { status: "done"; error: null }
+    | { status: "done"; error: null; stopped: boolean }
     | { status: "error"; error: string }
   );
 
@@ -51,7 +52,7 @@ export type RecommendAction =
   | { type: "rec"; rec: Recommendation }
   | { type: "warning"; message: string }
   | { type: "fail"; error: string }
-  | { type: "finish"; language: string | undefined; era: RecEraId | "" }
+  | { type: "finish"; language: string | undefined; era: RecEraId | ""; stopped: boolean }
   | { type: "dismiss"; identity: string }
   | { type: "restore"; rec: Recommendation; index: number; runId: number }
   | { type: "dismissWarning"; warning: string };
@@ -163,7 +164,7 @@ export function recommendReducer(
             )
           : state.recs;
       return state.error === null
-        ? { ...results(state), recs, status: "done", error: null }
+        ? { ...results(state), recs, status: "done", error: null, stopped: action.stopped }
         : { ...results(state), recs, status: "error", error: state.error };
     }
     case "dismiss":

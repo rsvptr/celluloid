@@ -160,7 +160,9 @@ export function RecResults({
         <p className="py-8 text-center text-sm text-muted">
           {receivedAny
             ? "You've hidden every suggestion from this run. Try “Show different picks” for another batch."
-            : "No suggestions came back. Try a different focus or count."}
+            : run.stopped
+              ? "Stopped before any suggestions came back."
+              : "No suggestions came back. Try a different focus or count."}
         </p>
       )}
     </>

@@ -363,6 +363,9 @@ export function RecommendClient({
           type: "finish",
           language: language || undefined,
           era: era as RecEraId | "",
+          // Only Stop aborts the current run without an error: a stall fails
+          // it, and a newer run or leaving the page skips this finish.
+          stopped: ac.signal.aborted,
         });
       }
     }

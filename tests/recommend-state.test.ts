@@ -23,7 +23,7 @@ function rec(overrides: Partial<Recommendation> = {}): Recommendation {
 const run = (...actions: RecommendAction[]) =>
   actions.reduce(recommendReducer, initialRecommendState);
 
-const finish: RecommendAction = { type: "finish", language: undefined, era: "" };
+const finish: RecommendAction = { type: "finish", language: undefined, era: "", stopped: false };
 const titles = (state: RecommendState) => state.recs.map((r) => r.title);
 
 const alien = rec({ title: "Alien", year: 1979, tmdbId: 348 });
@@ -108,7 +108,7 @@ describe("recommend request lifecycle (VE-08)", () => {
       { type: "rec", rec: french },
       { type: "rec", rec: heat },
       { type: "rec", rec: zodiac },
-      { type: "finish", language: "fr", era: "1990s" },
+      { type: "finish", language: "fr", era: "1990s", stopped: false },
     );
     assert.equal(state.status, "done");
     assert.equal(state.error, null);
@@ -138,11 +138,15 @@ describe("recommend request lifecycle (VE-08)", () => {
     assert.deepEqual(state.received, []);
   });
 
-  it("ends a run stopped before any pick done and empty", () => {
-    const state = run({ type: "start" }, { type: "phase", phase: "thinking" }, finish);
+  it("ends a run stopped before any pick done and empty, and says it was stopped", () => {
+    const state = run({ type: "start" }, { type: "phase", phase: "thinking" }, { ...finish, stopped: true });
     assert.equal(state.status, "done");
+    assert.equal(state.status === "done" && state.stopped, true);
     assert.deepEqual(state.recs, []);
     assert.deepEqual(state.received, []);
+    // A run that simply came back empty isn't a stop.
+    const empty = run({ type: "start" }, finish);
+    assert.equal(empty.status === "done" && empty.stopped, false);
   });
 
   it("leaves the cards alone when nothing streamed in", () => {
