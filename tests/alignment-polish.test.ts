@@ -19,7 +19,7 @@ describe("alignment polish (JK-36)", () => {
   });
 
   it("the custom count input matches the 32px pills", async () => {
-    const rec = await source("../src/app/(app)/recommend/recommend-client.tsx");
+    const rec = await source("../src/app/(app)/recommend/recommend-form.tsx");
     assert.match(rec, /className="w-20 text-center tabular-nums sm:h-8"/);
   });
 

@@ -30,7 +30,7 @@ const HIDDEN_INITIAL =
 const INTERACTION_ONLY = new Map([
   ["src/components/nav.tsx", 1], // mobile More menu
   ["src/components/library-bulk-bar.tsx", 1], // bulk action bar
-  ["src/app/(app)/recommend/recommend-client.tsx", 1], // streamed-in cards
+  ["src/app/(app)/recommend/rec-results.tsx", 1], // streamed-in cards
 ]);
 
 describe("server-rendered content starts visible", () => {

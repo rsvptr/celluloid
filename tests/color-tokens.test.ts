@@ -62,7 +62,8 @@ describe("status color tokens (JK-16)", () => {
       "../src/app/(app)/add/add-search.tsx",
       "../src/app/(app)/title/[id]/season-tracker.tsx",
       "../src/app/(app)/settings/settings-client.tsx",
-      "../src/app/(app)/recommend/recommend-client.tsx",
+      "../src/app/(app)/recommend/rec-card.tsx",
+      "../src/app/(app)/recommend/title-picker.tsx",
     ];
     for (const file of files) {
       const text = await source(file);
@@ -112,7 +113,7 @@ describe("tag palette (JK-17)", () => {
 
 describe("recommendation confidence (JK-17)", () => {
   it("borrows no status hue", async () => {
-    const client = await source("../src/app/(app)/recommend/recommend-client.tsx");
+    const client = await source("../src/app/(app)/recommend/rec-card.tsx");
     const block = client.slice(client.indexOf("const CONFIDENCE = {"), client.indexOf("} as const;"));
     assert.doesNotMatch(block, /emerald|amber|slate|sky|rose|status-/);
   });
