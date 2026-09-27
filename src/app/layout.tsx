@@ -8,9 +8,13 @@ const geistSans = Geist({
   subsets: ["latin"],
 });
 
+// Not preloaded: font-mono appears only in the share link, the export preview
+// and the 2FA setup key and backup codes, so every other page would fetch it
+// for nothing. It still loads (display: swap) where it's used (VE-10).
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+  preload: false,
 });
 
 export const metadata: Metadata = {
