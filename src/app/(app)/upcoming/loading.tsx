@@ -1,8 +1,9 @@
-import { Shimmer } from "@/components/skeleton";
+import { LoadingStatus, Shimmer } from "@/components/skeleton";
 
 export default function Loading() {
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-8" aria-busy="true">
+      <LoadingStatus>Loading airing schedule…</LoadingStatus>
       <div className="flex flex-col gap-2">
         <Shimmer className="h-7 w-40" />
         <Shimmer className="h-4 w-72 max-w-full" />
