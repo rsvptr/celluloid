@@ -31,6 +31,16 @@ describe("password rule is visible and explained (JK-12)", () => {
     assert.match(section, /id="settings-current-password-error"[\s\S]*?Enter your current password\./);
   });
 
+  it("announces the message when Enter is pressed in the already-focused field", async () => {
+    const settings = await source("../src/app/(app)/settings/settings-client.tsx");
+    // focus() on the focused field fires nothing, so the messages must be live.
+    assert.match(settings, /id="settings-current-password-error"\s+role="alert"/);
+    assert.match(
+      settings,
+      /id="settings-new-password-help"\s+aria-live="polite"\s+aria-atomic="true"/,
+    );
+  });
+
   it("sign-up shows the rule as help text next to the Caps Lock warning", async () => {
     const auth = await source("../src/app/login/auth-form.tsx");
     assert.doesNotMatch(auth, /At least 10 characters/);

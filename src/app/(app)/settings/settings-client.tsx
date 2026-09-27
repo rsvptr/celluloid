@@ -1496,7 +1496,13 @@ function PasswordSection() {
             />
           </label>
           {invalid === "current" ? (
-            <p id="settings-current-password-error" className="text-xs text-rose-300">
+            // role="alert": Enter in this already-focused field moves no
+            // focus, so nothing would re-read the field and its description.
+            <p
+              id="settings-current-password-error"
+              role="alert"
+              className="text-xs text-rose-300"
+            >
               Enter your current password.
             </p>
           ) : null}
@@ -1518,8 +1524,12 @@ function PasswordSection() {
               aria-describedby="settings-new-password-help"
             />
           </label>
+          {/* Live for the same reason as the current-password alert; atomic so
+              the whole message is read, not just the added "Too short." */}
           <p
             id="settings-new-password-help"
+            aria-live="polite"
+            aria-atomic="true"
             className={cn("text-xs", invalid === "new" ? "text-rose-300" : "text-faint")}
           >
             {invalid === "new" ? "Too short. " : null}Use at least 10 characters.
