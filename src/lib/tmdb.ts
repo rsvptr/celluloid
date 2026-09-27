@@ -10,12 +10,15 @@ import {
   isWatchRegion,
   pickCreators,
   pickDirector,
+  pickEpisodeTypes,
   pickMovieCertification,
   pickRegionalReleases,
   pickTopCast,
   pickTvCertification,
   sortRegionsByName,
   type Certification,
+  type EpisodeToAirLike,
+  type EpisodeTypeMarker,
   type RegionalRelease,
   type TitleCastMember,
 } from "@/lib/tmdb-extras";
@@ -768,6 +771,9 @@ interface TmdbAppendedDetail {
   origin_country?: string[];
   production_countries?: { iso_3166_1: string }[];
   created_by?: TmdbCreatedBy[];
+  /** TV: the latest aired and the next episode, each with its episode_type. */
+  last_episode_to_air?: EpisodeToAirLike | null;
+  next_episode_to_air?: EpisodeToAirLike | null;
   videos?: { results?: TmdbVideo[] };
   "watch/providers"?: { results?: Record<string, TmdbRegionProviders> };
   recommendations?: TmdbPage<TmdbSearchItem>;
@@ -805,6 +811,11 @@ export interface TitleBundle {
    * the same release_dates append the certification comes from. Empty for TV.
    */
   releases: RegionalRelease[];
+  /**
+   * TV: finale markers for the last aired and the next episode, the only two
+   * the detail response describes. Empty for movies.
+   */
+  episodeTypes: EpisodeTypeMarker[];
 }
 
 /**
@@ -874,5 +885,7 @@ export async function getTitleBundle(
       kind === "tv" ? pickCreators(data.created_by, data.aggregate_credits?.crew) : [],
     imdbUrl: imdbUrl(data.external_ids),
     releases: kind === "movie" ? pickRegionalReleases(data.release_dates?.results, region) : [],
+    episodeTypes:
+      kind === "tv" ? pickEpisodeTypes([data.last_episode_to_air, data.next_episode_to_air]) : [],
   };
 }

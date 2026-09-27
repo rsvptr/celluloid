@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { Suspense, use, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Check, ChevronDown, ChevronsDown } from "lucide-react";
 import { toast } from "sonner";
@@ -13,6 +13,7 @@ import {
   setSeasonWatched,
 } from "@/lib/actions";
 import { fullDate, progressPct } from "@/lib/format";
+import { episodeLabel, type EpisodeTypeMarker } from "@/lib/tmdb-extras";
 import { cn } from "@/lib/utils";
 
 export interface EpisodeVM {
@@ -35,6 +36,35 @@ function watchedFromServer(seasons: SeasonVM[]): Record<string, boolean> {
   return m;
 }
 
+/** A small premiere or finale label on an episode row. */
+function EpisodeTag({ label }: { label: string }) {
+  return (
+    <span className="shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-xs text-muted ring-1 ring-line">
+      {label}
+    </span>
+  );
+}
+
+/**
+ * The finale label TMDB gives an episode. It waits for the page's TMDB request
+ * inside its own Suspense boundary, so the tracker never does.
+ */
+function FinaleTag({
+  seasonNumber,
+  episodeNumber,
+  episodeTypes,
+}: {
+  seasonNumber: number;
+  episodeNumber: number;
+  episodeTypes: Promise<EpisodeTypeMarker[]>;
+}) {
+  const marker = use(episodeTypes).find(
+    (m) => m.seasonNumber === seasonNumber && m.episodeNumber === episodeNumber,
+  );
+  const label = marker ? episodeLabel(episodeNumber, marker.type) : null;
+  return label ? <EpisodeTag label={label} /> : null;
+}
+
 async function episodeActionFailure(
   action: () => Promise<{ error?: string }>,
 ): Promise<string | null> {
@@ -49,9 +79,15 @@ async function episodeActionFailure(
 export function SeasonTracker({
   titleId,
   seasons,
+  episodeTypes,
 }: {
   titleId: string;
   seasons: SeasonVM[];
+  /**
+   * Finale markers from the page's TMDB request, which describes only the
+   * last aired and the next episode. Absent for an unmatched title.
+   */
+  episodeTypes?: Promise<EpisodeTypeMarker[]>;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -425,6 +461,7 @@ export function SeasonTracker({
                     // Only worth offering when it would do more than a plain
                     // tick — i.e. something earlier in the season is still
                     // unwatched and has aired.
+                    const premiere = episodeLabel(ep.episodeNumber, null);
                     const canWatchThrough =
                       !isWatched &&
                       hasAired(ep) &&
@@ -467,6 +504,17 @@ export function SeasonTracker({
                           >
                             {ep.name ?? `Episode ${ep.episodeNumber}`}
                           </span>
+                          {premiere ? (
+                            <EpisodeTag label={premiere} />
+                          ) : episodeTypes ? (
+                            <Suspense fallback={null}>
+                              <FinaleTag
+                                seasonNumber={season.seasonNumber}
+                                episodeNumber={ep.episodeNumber}
+                                episodeTypes={episodeTypes}
+                              />
+                            </Suspense>
+                          ) : null}
                           {ep.airDate && (
                             <span className="hidden shrink-0 text-xs text-faint sm:inline">
                               {fullDate(ep.airDate)}

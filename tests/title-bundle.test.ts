@@ -47,4 +47,18 @@ describe("getTitleBundle", { concurrency: false }, () => {
     const tv = await getTitleBundle("tv", 1166133, "IN", ["en"]);
     assert.deepEqual(tv.releases, []);
   });
+
+  it("marks the last aired and next episodes TMDB calls finales, for TV only", async () => {
+    serve({
+      id: 95396,
+      recommendations: { results: [{ id: 1 }] },
+      last_episode_to_air: { season_number: 2, episode_number: 10, episode_type: "finale" },
+      next_episode_to_air: { season_number: 3, episode_number: 1, episode_type: "standard" },
+    });
+    const tv = await getTitleBundle("tv", 95396, "US", ["en"]);
+    assert.deepEqual(tv.episodeTypes, [{ seasonNumber: 2, episodeNumber: 10, type: "finale" }]);
+    const movie = await getTitleBundle("movie", 95396, "US", ["en"]);
+    assert.deepEqual(movie.episodeTypes, []);
+  });
 });
+

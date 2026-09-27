@@ -2,7 +2,9 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   DEFAULT_WATCH_REGION,
+  episodeLabel,
   isWatchRegion,
+  pickEpisodeTypes,
   pickTrailer,
   regionWatchInfo,
   sortRegionsByName,
@@ -190,5 +192,36 @@ describe("region picker options", () => {
     assert.deepEqual(watchRegionOptions(regions, "IN"), regions);
     assert.deepEqual(watchRegionOptions(regions, "PT"), ["DE", "IN", "PT", "US"]);
     assert.deepEqual(watchRegionOptions([], "GB"), ["GB"]);
+  });
+});
+
+describe("finale and premiere labels", () => {
+  it("marks finales and mid-season finales among the episodes a TV detail names", () => {
+    // Severance's live last_episode_to_air (S2E10 "Cold Harbor"); nothing next.
+    const last = { season_number: 2, episode_number: 10, episode_type: "finale" };
+    assert.deepEqual(pickEpisodeTypes([last, null]), [
+      { seasonNumber: 2, episodeNumber: 10, type: "finale" },
+    ]);
+    assert.deepEqual(
+      pickEpisodeTypes([
+        { season_number: 3, episode_number: 4, episode_type: "standard" },
+        { season_number: 3, episode_number: 5, episode_type: "mid_season" },
+      ]),
+      [{ seasonNumber: 3, episodeNumber: 5, type: "mid_season" }],
+    );
+  });
+
+  it("ignores episodes without a type or without numbers", () => {
+    assert.deepEqual(
+      pickEpisodeTypes([undefined, { season_number: 1, episode_number: 2 }, { episode_type: "finale" }]),
+      [],
+    );
+  });
+
+  it("labels first episodes as premieres and marked ones as finales", () => {
+    assert.equal(episodeLabel(1, null), "Premiere");
+    assert.equal(episodeLabel(10, "finale"), "Season finale");
+    assert.equal(episodeLabel(5, "mid_season"), "Mid-season finale");
+    assert.equal(episodeLabel(4, null), null);
   });
 });

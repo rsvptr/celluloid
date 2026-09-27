@@ -282,6 +282,58 @@ export function pickTvCertification(
   return null;
 }
 
+/** The TMDB `episode_type` values worth a label; "standard" is every other episode. */
+export type MarkedEpisodeType = "finale" | "mid_season";
+
+/** An episode TMDB marks as a finale or a mid-season finale. */
+export interface EpisodeTypeMarker {
+  seasonNumber: number;
+  episodeNumber: number;
+  type: MarkedEpisodeType;
+}
+
+/** A TV detail's `last_episode_to_air` / `next_episode_to_air`. */
+export interface EpisodeToAirLike {
+  season_number?: number;
+  episode_number?: number;
+  episode_type?: string | null;
+}
+
+/**
+ * Finale markers from the episodes a TV detail response names. The title
+ * page's one TMDB request carries only the last aired and the next episode, so
+ * only those two can be marked; `episode_type` isn't stored with episodes.
+ */
+export function pickEpisodeTypes(
+  episodes: readonly (EpisodeToAirLike | null | undefined)[],
+): EpisodeTypeMarker[] {
+  return episodes.flatMap((episode) => {
+    const type = episode?.episode_type;
+    if (type !== "finale" && type !== "mid_season") return [];
+    const seasonNumber = episode?.season_number;
+    const episodeNumber = episode?.episode_number;
+    if (!Number.isInteger(seasonNumber) || !Number.isInteger(episodeNumber)) return [];
+    return [{ seasonNumber: seasonNumber as number, episodeNumber: episodeNumber as number, type }];
+  });
+}
+
+const EPISODE_TYPE_LABELS: Record<MarkedEpisodeType, string> = {
+  finale: "Season finale",
+  mid_season: "Mid-season finale",
+};
+
+/**
+ * The label for an episode: "Premiere" for every season's first episode,
+ * which needs no TMDB data, else TMDB's finale marker when there is one.
+ */
+export function episodeLabel(
+  episodeNumber: number,
+  marker: MarkedEpisodeType | null | undefined,
+): string | null {
+  if (episodeNumber === 1) return "Premiere";
+  return marker ? EPISODE_TYPE_LABELS[marker] : null;
+}
+
 /** TMDB release types shown for a watchlisted film: theatrical, digital, physical. */
 export type RegionalReleaseType = 3 | 4 | 5;
 

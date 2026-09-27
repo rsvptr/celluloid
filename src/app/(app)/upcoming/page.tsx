@@ -102,7 +102,9 @@ function progressText(entry: {
 
 function AiringRow({ entry }: { entry: AiringSoonEntry }) {
   const status = STATUS_META[entry.status];
-  const meta = [entry.tmdbStatus, progressText(entry)].filter(Boolean).join(" · ");
+  const meta = [entry.premiere ? "Premiere" : null, entry.tmdbStatus, progressText(entry)]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <TitleRow
       id={entry.id}

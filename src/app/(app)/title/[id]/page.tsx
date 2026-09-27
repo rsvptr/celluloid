@@ -101,8 +101,9 @@ export default async function TitlePage({
     title.language,
   );
   // One TMDB request for everything this page draws from TMDB at render
-  // time: the extras below, and the regional release dates in the hero.
-  // Started here and never awaited here, so only the parts that need it wait.
+  // time: the extras below, the regional release dates in the hero and the
+  // tracker's finale labels. Started here and never awaited here, so only the
+  // parts that need it wait.
   const bundle =
     title.tmdbId != null
       ? getTitleBundle(isTv ? "tv" : "movie", title.tmdbId, region, videoLanguages).catch(
@@ -287,6 +288,9 @@ export default async function TitlePage({
           <div className="order-2 flex flex-col gap-6 lg:order-none lg:col-span-2 lg:col-start-1 lg:row-start-1 lg:row-span-2">
             <SeasonTracker
               titleId={title.id}
+              episodeTypes={
+                title.tmdbId != null ? bundle.then((b) => b?.episodeTypes ?? []) : undefined
+              }
               seasons={title.seasons.map((s) => ({
                 id: s.id,
                 seasonNumber: s.seasonNumber,
