@@ -15,7 +15,7 @@ import {
 // lean `m` component and receives its features from MotionProvider below.
 export { AnimatePresence, LayoutGroup, m as motion, useReducedMotion };
 
-// `layout` is used by recommendation/library cards, so this needs domMax rather
+// `layout` (recommendation cards) and `layoutId` (nav pill) need domMax rather
 // than domAnimation. The async feature import keeps that larger feature bundle
 // out of the app shell's initial JS while the statically analyzable path lets
 // Next split it into its own chunk. If the chunk fails to load (flaky network,
@@ -31,63 +31,14 @@ const loadDomMax = () =>
 export const EASE_OUT = [0.16, 1, 0.3, 1] as const;
 
 /**
- * Mounted once by RootLayout so every Motion animation honors the OS "reduce
- * motion" setting. Motion drives animations via JS, so the CSS media query in
- * globals.css cannot provide this guarantee on its own.
+ * Mounted by the app layout and the login page so every Motion animation
+ * honors the OS "reduce motion" setting. Motion drives animations via JS, so
+ * the CSS media query in globals.css cannot provide this guarantee on its own.
  */
 export function MotionProvider({ children }: { children: React.ReactNode }) {
   return (
     <LazyMotion features={loadDomMax} strict>
       <MotionConfig reducedMotion="user">{children}</MotionConfig>
     </LazyMotion>
-  );
-}
-
-const containerVariants = {
-  hidden: {},
-  show: (stagger: number) => ({
-    transition: { staggerChildren: stagger, delayChildren: 0.02 },
-  }),
-};
-
-export const staggerItem = {
-  hidden: { opacity: 0, y: 10 },
-  show: { opacity: 1, y: 0, transition: { duration: 0.3, ease: EASE_OUT } },
-};
-
-/** Container that fades its `StaggerItem` children in one after another. */
-export function Stagger({
-  children,
-  className,
-  stagger = 0.035,
-}: {
-  children: React.ReactNode;
-  className?: string;
-  stagger?: number;
-}) {
-  return (
-    <m.div
-      className={className}
-      variants={containerVariants}
-      initial="hidden"
-      animate="show"
-      custom={stagger}
-    >
-      {children}
-    </m.div>
-  );
-}
-
-export function StaggerItem({
-  children,
-  className,
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <m.div className={className} variants={staggerItem}>
-      {children}
-    </m.div>
   );
 }
