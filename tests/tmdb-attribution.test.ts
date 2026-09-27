@@ -39,6 +39,17 @@ describe("TMDB attribution (TM-01)", () => {
     assert.match(settings, /<AboutSection \/>/);
   });
 
+  it("labels the provider link by where it goes: TMDB, not JustWatch (TM-09)", async () => {
+    const extras = await source("../src/app/(app)/title/[id]/title-extras.tsx");
+    const links = [...extras.matchAll(/<a\s[^>]*href=\{watch\.link\}[^>]*>\s*([^<{]+)/g)].map(
+      (match) => match[1].trim(),
+    );
+    assert.deepEqual(links, ["Check TMDB", "Open on TMDB"]);
+    assert.doesNotMatch(extras, /Check JustWatch/);
+    // The data is still JustWatch's, and TMDB's terms ask for that attribution.
+    assert.match(extras, /Streaming availability via JustWatch/);
+  });
+
   it("keeps the logo out of the auth gate so anonymous share visitors can load it", async () => {
     const proxy = await source("../src/proxy.ts");
     const matcher = proxy.match(/matcher:\s*\[\s*"([^"]+)"/)?.[1];

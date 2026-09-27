@@ -30,6 +30,8 @@ export interface AiringSoonEntry {
   tmdbStatus: string | null;
   totalEpisodes: number | null;
   watchedEpisodes: number;
+  /** The next episode opens a season (its episode number is 1). */
+  premiere: boolean;
 }
 
 /** A tracked show with episodes that have aired and are still unwatched. */
@@ -91,7 +93,7 @@ export async function getUpcoming(userId: string): Promise<UpcomingData> {
   const today = new Date(`${todayKey}T00:00:00.000Z`);
   const horizon = new Date(today.getTime() + HORIZON_DAYS * DAY_MS);
 
-  const [airing, waitingRows] = await Promise.all([
+  const [airing, waitingRows, firstEpisodes] = await Promise.all([
     prisma.title.findMany({
       where: {
         userId,
@@ -141,7 +143,32 @@ export async function getUpcoming(userId: string): Promise<UpcomingData> {
       GROUP BY t.id
       ORDER BY MAX(e."airDate") DESC, t.name ASC
       LIMIT ${WAITING_LIMIT}`,
+    // Season openers airing in the window: a show whose next episode is one
+    // is a premiere. Episode rows don't store TMDB's episode_type, so episode
+    // 1 is the one label the stored data supports; finales can't be told.
+    prisma.episode.findMany({
+      where: {
+        episodeNumber: 1,
+        withdrawnAt: null,
+        airDate: { gte: today, lte: horizon },
+        season: {
+          seasonNumber: { gte: 1 },
+          title: {
+            userId,
+            deletedAt: null,
+            mediaType: MediaType.TV,
+            status: { not: WatchStatus.DROPPED },
+          },
+        },
+      },
+      select: { airDate: true, season: { select: { titleId: true } } },
+    }),
   ]);
+  const premieres = new Set(
+    firstEpisodes.flatMap((episode) =>
+      episode.airDate ? [`${episode.season.titleId}:${dateKey(episode.airDate)}`] : [],
+    ),
+  );
 
   // One group per date, in the order the query already put them in.
   const groups: { dateKey: string; entries: AiringSoonEntry[] }[] = [];
@@ -157,6 +184,7 @@ export async function getUpcoming(userId: string): Promise<UpcomingData> {
       tmdbStatus: t.tmdbStatus,
       totalEpisodes: t.totalEpisodes,
       watchedEpisodes: t.watchedEpisodes,
+      premiere: premieres.has(`${t.id}:${key}`),
     };
     const last = groups[groups.length - 1];
     if (last && last.dateKey === key) last.entries.push(entry);

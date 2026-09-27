@@ -32,6 +32,17 @@ const isProductionDeployment =
 const MIN_SECRET_LENGTH = 32;
 const MIN_INVITE_CODE_LENGTH = 16;
 
+/**
+ * TMDB's API Read Access Token is a JWT. Its v3 "API key" is 32 hex characters
+ * and fails every Bearer request with 401 (code 7), so a pasted v3 key is
+ * refused everywhere. The JWT shape itself is only required in production,
+ * which keeps CI and test placeholders working.
+ */
+const TMDB_V3_API_KEY = /^[0-9a-f]{32}$/i;
+const TMDB_READ_ACCESS_TOKEN = /^eyJ[\w-]+\.[\w-]+\.[\w-]+$/;
+const TMDB_TOKEN_HINT =
+  "use TMDB's API Read Access Token (the long token starting with eyJ), not the v3 API key";
+
 const optionalInviteCode = z.preprocess(
   (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
   z
@@ -58,7 +69,11 @@ const rawEnvSchema = z
     BETTER_AUTH_URL: optionalString,
     NEXT_PUBLIC_SITE_URL: optionalString,
     ENCRYPTION_KEY: optionalString,
-    TMDB_ACCESS_TOKEN: z.string().trim().min(1),
+    TMDB_ACCESS_TOKEN: z
+      .string()
+      .trim()
+      .min(1)
+      .refine((token) => !TMDB_V3_API_KEY.test(token), TMDB_TOKEN_HINT),
     ANTHROPIC_API_KEY: optionalString,
     SIGNUP_INVITE_CODE: optionalInviteCode,
   })
@@ -108,6 +123,13 @@ const rawEnvSchema = z
           code: "custom",
           path: ["ENCRYPTION_KEY"],
           message: `must be at least ${MIN_SECRET_LENGTH} characters in production — generate one with: openssl rand -base64 32`,
+        });
+      }
+      if (!TMDB_READ_ACCESS_TOKEN.test(value.TMDB_ACCESS_TOKEN)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["TMDB_ACCESS_TOKEN"],
+          message: `must be a JWT in production: ${TMDB_TOKEN_HINT}`,
         });
       }
     }

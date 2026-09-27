@@ -107,7 +107,7 @@ function progressText(entry: {
 
 function AiringRow({ entry }: { entry: AiringSoonEntry }) {
   const status = STATUS_META[entry.status];
-  const meta = [entry.tmdbStatus && tvStatusLabel(entry.tmdbStatus), progressText(entry)]
+  const meta = [entry.premiere ? "Premiere" : null, entry.tmdbStatus && tvStatusLabel(entry.tmdbStatus), progressText(entry)]
     .filter(Boolean)
     .join(" · ");
   return (

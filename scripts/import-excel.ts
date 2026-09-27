@@ -1,6 +1,22 @@
+import { register } from "node:module";
 import { loadEnv } from "./load-env.mjs";
 
 loadEnv();
+
+// The TMDB client is marked `server-only`. Plain Node resolves that package to
+// a file that throws; Next resolves it to a no-op under the "react-server"
+// condition, and so does this script.
+register(
+  `data:text/javascript,${encodeURIComponent(`
+export async function resolve(specifier, context, nextResolve) {
+  if (specifier !== "server-only") return nextResolve(specifier, context);
+  return nextResolve(specifier, {
+    ...context,
+    conditions: [...context.conditions, "react-server"],
+  });
+}`)}`,
+  import.meta.url,
+);
 
 // Load database-dependent modules only after the environment is populated.
 const { runImportFromEnv } = await import("../src/lib/import/run-import");

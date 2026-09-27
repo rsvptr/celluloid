@@ -58,3 +58,26 @@ describe("confirm openers keep focus after confirming (JK-03)", () => {
     assertSoftDisabled(buttonAround(review, "void cancel()"), "Cancel import");
   });
 });
+
+describe("soft-disabled styling", () => {
+  it("is defined once, in ui.tsx, and imported where it's used", async () => {
+    const ui = await source("../src/components/ui.tsx");
+    assert.match(
+      ui,
+      /export const softDisabledClass = "aria-disabled:cursor-not-allowed aria-disabled:opacity-50";/,
+    );
+    for (const path of [
+      "../src/app/(app)/settings/settings-client.tsx",
+      "../src/components/library.tsx",
+      "../src/components/import-review.tsx",
+    ]) {
+      const file = await source(path);
+      assert.doesNotMatch(file, /const softDisabledClass\b/, `${path} defines its own`);
+      assert.match(
+        file,
+        /import \{[^}]*\bsoftDisabledClass\b[^}]*\} from "(?:@\/components|\.)\/ui";/,
+        `${path} doesn't import it`,
+      );
+    }
+  });
+});

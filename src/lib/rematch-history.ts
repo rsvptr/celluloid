@@ -10,6 +10,8 @@ export interface EpisodeEventCoordinate {
   tmdbId: number | null;
   seasonNumber: number;
   episodeNumber: number;
+  /** The event's episode had already been withdrawn before this refresh. */
+  withdrawn: boolean;
 }
 
 export interface FreshEpisodeCoordinate {
@@ -17,6 +19,7 @@ export interface FreshEpisodeCoordinate {
   tmdbId: number | null;
   seasonNumber: number;
   episodeNumber: number;
+  withdrawn: boolean;
 }
 
 export interface EpisodeEventRelink {
@@ -178,16 +181,43 @@ export function planEpisodeEventRelinks(
       episode.episodeId,
     ]),
   );
+  const activeCoordinates = new Set(
+    freshEpisodes
+      .filter((episode) => !episode.withdrawn)
+      .map((episode) => coordinateKey(episode.seasonNumber, episode.episodeNumber)),
+  );
+  const withdrawnLegacyByCoordinate = new Map(
+    freshEpisodes
+      .filter((episode) => episode.withdrawn && episode.tmdbId === null)
+      .map((episode) => [
+        coordinateKey(episode.seasonNumber, episode.episodeNumber),
+        episode.episodeId,
+      ]),
+  );
 
   return events.flatMap((event) => {
-    // Once TMDB supplied an identity, never fall back to a mutable coordinate:
-    // a renumbering must move the event with the episode rather than attach it
-    // to whatever now occupies the old number. Coordinate fallback exists only
-    // for legacy rows that predate a stored TMDB id.
-    const episodeId =
-      event.tmdbId === null
-        ? freshByCoordinate.get(coordinateKey(event.seasonNumber, event.episodeNumber))
-        : freshByTmdbId.get(event.tmdbId);
+    let episodeId: string | undefined;
+    if (event.tmdbId !== null) {
+      // Once TMDB supplied an identity, never fall back to a mutable
+      // coordinate: a renumbering must move the event with the episode rather
+      // than attach it to whatever now occupies the old number.
+      episodeId = freshByTmdbId.get(event.tmdbId);
+    } else if (event.withdrawn) {
+      // A legacy row that was already withdrawn is recreated as a withdrawn
+      // row, moved to the reserved range when an active episode now has its
+      // number (writeSeasons). Its history follows it there. Attached to that
+      // new, unwatched episode instead, an untick of it would delete the
+      // history. A row that wasn't recreated leaves the event detached.
+      const own = coordinateKey(event.seasonNumber, event.episodeNumber);
+      const recreatedAt = activeCoordinates.has(own)
+        ? coordinateKey(event.seasonNumber, event.episodeNumber + WITHDRAWN_EPISODE_NUMBER_OFFSET)
+        : own;
+      episodeId = withdrawnLegacyByCoordinate.get(recreatedAt);
+    } else {
+      // Coordinate fallback exists only for legacy rows that predate a stored
+      // TMDB id.
+      episodeId = freshByCoordinate.get(coordinateKey(event.seasonNumber, event.episodeNumber));
+    }
     return episodeId ? [{ eventId: event.eventId, episodeId }] : [];
   });
 }

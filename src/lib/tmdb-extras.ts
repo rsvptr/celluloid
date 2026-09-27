@@ -9,32 +9,17 @@ import type {
   TmdbVideo,
 } from "@/lib/tmdb";
 
-/** Regions offered in the streaming-region picker (ISO 3166-1 alpha-2). */
-export const WATCH_REGIONS = [
-  "US",
-  "GB",
-  "IN",
-  "CA",
-  "AU",
-  "DE",
-  "FR",
-  "ES",
-  "IT",
-  "NL",
-  "SE",
-  "JP",
-  "KR",
-  "BR",
-  "MX",
-  "AE",
-] as const;
+export const DEFAULT_WATCH_REGION = "US";
 
-export type WatchRegion = (typeof WATCH_REGIONS)[number];
-
-export const DEFAULT_WATCH_REGION: WatchRegion = "US";
-
-export function isWatchRegion(v: string | null | undefined): v is WatchRegion {
-  return !!v && (WATCH_REGIONS as readonly string[]).includes(v);
+/**
+ * Whether a stored or submitted value can be a streaming region: an ISO 3166-1
+ * alpha-2 code. Which regions the pickers offer comes from TMDB's own list
+ * (getWatchRegions, 139 in 2026), which grows over time, so this checks the
+ * shape rather than a copy of that list. A region TMDB doesn't cover is
+ * harmless: it has no providers and no ratings.
+ */
+export function isWatchRegion(v: string | null | undefined): v is string {
+  return !!v && /^[A-Z]{2}$/.test(v);
 }
 
 const regionDisplay =
@@ -50,13 +35,30 @@ export function regionName(code: string): string {
   }
 }
 
+/** Region codes ordered by their English names, so a long picker reads A to Z. */
+export function sortRegionsByName(codes: readonly string[]): string[] {
+  return [...codes].sort((a, b) => regionName(a).localeCompare(regionName(b), "en"));
+}
+
+/**
+ * The options for a region picker: TMDB's list, plus the current region if the
+ * list lacks it (TMDB dropped it, or the list couldn't load), so the picker can
+ * always show what is selected.
+ */
+export function watchRegionOptions(regions: readonly string[], current: string): string[] {
+  return regions.includes(current) ? [...regions] : sortRegionsByName([...regions, current]);
+}
+
 export interface ProviderGroup {
   label: "Stream" | "Rent" | "Buy";
   providers: TmdbProvider[];
 }
 
 export interface RegionWatchInfo {
-  /** JustWatch page for this title in this region (TMDB terms ask for attribution). */
+  /**
+   * TMDB's watch page for this title in this region, which links on to each
+   * service. The availability data is JustWatch's, so that attribution stays.
+   */
   link: string | null;
   groups: ProviderGroup[];
 }
@@ -106,25 +108,66 @@ export interface TrailerPick {
 }
 
 /**
- * Choose the best YouTube video for a "Watch trailer" link: official trailers
- * first, then any trailer, then a teaser — newest first within each tier.
+ * Choose the best YouTube video for a "Watch trailer" link. Videos in the
+ * earlier of `languages` win (TMDB's "null" stands for untagged videos, and a
+ * language not listed comes last); within a language, official trailers come
+ * first, then any trailer, then a teaser, newest first within each tier.
  */
-export function pickTrailer(videos: TmdbVideo[]): TrailerPick | null {
+export function pickTrailer(
+  videos: TmdbVideo[],
+  languages: readonly string[] = [],
+): TrailerPick | null {
   const yt = videos.filter((v) => v.site === "YouTube" && v.key);
+  const languageRank = (v: TmdbVideo) => {
+    const rank = languages.indexOf(v.iso_639_1 ?? "null");
+    return rank === -1 ? languages.length : rank;
+  };
   const byDate = (a: TmdbVideo, b: TmdbVideo) =>
     (b.published_at ?? "").localeCompare(a.published_at ?? "");
-  const tiers = [
-    yt.filter((v) => v.type === "Trailer" && v.official).sort(byDate),
-    yt.filter((v) => v.type === "Trailer").sort(byDate),
-    yt.filter((v) => v.type === "Teaser").sort(byDate),
-  ];
-  for (const tier of tiers) {
-    if (tier.length) {
-      const v = tier[0];
-      return { key: v.key, name: v.name, url: `https://www.youtube.com/watch?v=${v.key}` };
+  for (let rank = 0; rank <= languages.length; rank++) {
+    const pool = yt.filter((v) => languageRank(v) === rank);
+    const tiers = [
+      pool.filter((v) => v.type === "Trailer" && v.official).sort(byDate),
+      pool.filter((v) => v.type === "Trailer").sort(byDate),
+      pool.filter((v) => v.type === "Teaser").sort(byDate),
+    ];
+    for (const tier of tiers) {
+      if (tier.length) {
+        const v = tier[0];
+        return { key: v.key, name: v.name, url: `https://www.youtube.com/watch?v=${v.key}` };
+      }
     }
   }
   return null;
+}
+
+/**
+ * The languages to ask TMDB for trailers in, most wanted first: the viewer's
+ * language (the first tag of the browser's Accept-Language), or when that
+ * isn't known the region's usual language, then English, then the title's
+ * original language and untagged videos ("null") to stand in for "any".
+ * TMDB filters videos to `language` (en) unless include_video_language is
+ * sent, which is why regional titles with only native-language videos had no
+ * trailer at all.
+ */
+export function trailerLanguages(
+  acceptLanguage: string | null | undefined,
+  region: string,
+  originalLanguage: string | null | undefined,
+): string[] {
+  const viewer = acceptLanguage?.split(",")[0]?.split(";")[0]?.trim().split("-")[0]?.toLowerCase();
+  const preferred = viewer && /^[a-z]{2}$/.test(viewer) ? viewer : regionLanguage(region);
+  const original = originalLanguage?.trim().toLowerCase();
+  return [...new Set([preferred, "en", ...(original ? [original] : []), "null"])];
+}
+
+/** The language most used in a region (CLDR likely subtags), else English. */
+function regionLanguage(region: string): string {
+  try {
+    return new Intl.Locale(`und-${region}`).maximize().language;
+  } catch {
+    return "en";
+  }
 }
 
 // --- Title enrichment: certification, cast, crew, IMDb ----------------------
@@ -178,42 +221,148 @@ function firstMovieCert(result: TmdbReleaseDatesResult | undefined): string | nu
   return null;
 }
 
+/** An age rating and the country whose board issued it. */
+export interface Certification {
+  rating: string;
+  /** ISO 3166-1 code of the issuing country. */
+  region: string;
+}
+
 /**
- * Pick a movie's age rating from `release_dates.results`. Prefers `region`
- * (default US), then falls back to any region that has a non-empty
- * certification. Returns a trimmed string or null.
+ * Where to look for a rating, in order: the viewer's region, then the title's
+ * own countries (a regional film is rated at home even when the viewer's
+ * country never rated it), then the US. Any other region comes after.
+ */
+function certificationRegions(region: string, origin: readonly string[]): string[] {
+  return [...new Set([region, ...origin, "US"])];
+}
+
+/**
+ * Pick a movie's age rating from `release_dates.results`: `region` (default
+ * US), then the title's `origin` countries, then the US, then any region with a
+ * non-empty certification. TMDB lists regions alphabetically, so "any" alone
+ * showed a US viewer Spain's rating for an Indian film. The issuing region is
+ * returned so the page can say whose rating it is.
  */
 export function pickMovieCertification(
   results: TmdbReleaseDatesResult[] | null | undefined,
   region = "US",
-): string | null {
+  origin: readonly string[] = [],
+): Certification | null {
   if (!results?.length) return null;
-  const preferred = firstMovieCert(results.find((r) => r.iso_3166_1 === region));
-  if (preferred) return preferred;
+  for (const code of certificationRegions(region, origin)) {
+    const rating = firstMovieCert(results.find((r) => r.iso_3166_1 === code));
+    if (rating) return { rating, region: code };
+  }
   for (const r of results) {
-    const cert = firstMovieCert(r);
-    if (cert) return cert;
+    const rating = firstMovieCert(r);
+    if (rating) return { rating, region: r.iso_3166_1 };
   }
   return null;
 }
 
 /**
- * Pick a TV show's age rating from `content_ratings.results`. Prefers `region`
- * (default US), then falls back to any region with a non-empty rating. Returns
- * a trimmed string or null.
+ * Pick a TV show's age rating from `content_ratings.results`, in the same
+ * order as pickMovieCertification.
  */
 export function pickTvCertification(
   results: TmdbContentRating[] | null | undefined,
   region = "US",
-): string | null {
+  origin: readonly string[] = [],
+): Certification | null {
   if (!results?.length) return null;
-  const preferred = results.find((r) => r.iso_3166_1 === region)?.rating?.trim();
-  if (preferred) return preferred;
+  for (const code of certificationRegions(region, origin)) {
+    const rating = results.find((r) => r.iso_3166_1 === code)?.rating?.trim();
+    if (rating) return { rating, region: code };
+  }
   for (const r of results) {
     const rating = r.rating?.trim();
-    if (rating) return rating;
+    if (rating) return { rating, region: r.iso_3166_1 };
   }
   return null;
+}
+
+/** The TMDB `episode_type` values worth a label; "standard" is every other episode. */
+export type MarkedEpisodeType = "finale" | "mid_season";
+
+/** An episode TMDB marks as a finale or a mid-season finale. */
+export interface EpisodeTypeMarker {
+  seasonNumber: number;
+  episodeNumber: number;
+  type: MarkedEpisodeType;
+}
+
+/** A TV detail's `last_episode_to_air` / `next_episode_to_air`. */
+export interface EpisodeToAirLike {
+  season_number?: number;
+  episode_number?: number;
+  episode_type?: string | null;
+}
+
+/**
+ * Finale markers from the episodes a TV detail response names. The title
+ * page's one TMDB request carries only the last aired and the next episode, so
+ * only those two can be marked; `episode_type` isn't stored with episodes.
+ */
+export function pickEpisodeTypes(
+  episodes: readonly (EpisodeToAirLike | null | undefined)[],
+): EpisodeTypeMarker[] {
+  return episodes.flatMap((episode) => {
+    const type = episode?.episode_type;
+    if (type !== "finale" && type !== "mid_season") return [];
+    const seasonNumber = episode?.season_number;
+    const episodeNumber = episode?.episode_number;
+    if (!Number.isInteger(seasonNumber) || !Number.isInteger(episodeNumber)) return [];
+    return [{ seasonNumber: seasonNumber as number, episodeNumber: episodeNumber as number, type }];
+  });
+}
+
+const EPISODE_TYPE_LABELS: Record<MarkedEpisodeType, string> = {
+  finale: "Season finale",
+  mid_season: "Mid-season finale",
+};
+
+/**
+ * The label for an episode: "Premiere" for every season's first episode,
+ * which needs no TMDB data, else TMDB's finale marker when there is one.
+ */
+export function episodeLabel(
+  episodeNumber: number,
+  marker: MarkedEpisodeType | null | undefined,
+): string | null {
+  if (episodeNumber === 1) return "Premiere";
+  return marker ? EPISODE_TYPE_LABELS[marker] : null;
+}
+
+/** TMDB release types shown for a watchlisted film: theatrical, digital, physical. */
+export type RegionalReleaseType = 3 | 4 | 5;
+
+/** When a film reaches one region in one form. */
+export interface RegionalRelease {
+  type: RegionalReleaseType;
+  /** TMDB's timestamp for the release, a UTC midnight. */
+  date: string;
+}
+
+const REGIONAL_RELEASE_TYPES: readonly RegionalReleaseType[] = [3, 4, 5];
+
+/**
+ * The region's earliest theatrical (3), digital (4) and physical (5) release
+ * dates from a movie's `release_dates.results`, in that order. Premieres,
+ * limited runs and TV airings are left out, as is any date that doesn't parse.
+ */
+export function pickRegionalReleases(
+  results: TmdbReleaseDatesResult[] | null | undefined,
+  region: string,
+): RegionalRelease[] {
+  const dates = results?.find((r) => r.iso_3166_1 === region)?.release_dates ?? [];
+  return REGIONAL_RELEASE_TYPES.flatMap((type) => {
+    const earliest = dates
+      .filter((rd) => rd.type === type && !!rd.release_date && !Number.isNaN(Date.parse(rd.release_date)))
+      .map((rd) => rd.release_date as string)
+      .sort()[0];
+    return earliest ? [{ type, date: earliest }] : [];
+  });
 }
 
 /**

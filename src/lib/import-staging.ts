@@ -6,6 +6,7 @@ import { addFromTmdb, rematchTitle } from "@/lib/actions";
 import { mapLimit } from "@/lib/async";
 import {
   findByImdbId,
+  findTvByTvdbId,
   getMovie,
   getTv,
   searchByType,
@@ -322,13 +323,15 @@ function tvAsSearchItem(tv: TmdbTvDetails): TmdbSearchItem {
 }
 
 /**
- * Resolve a row through the exact identifier its file carried, if any. A TMDB or
- * IMDb id names one title outright, so honouring it skips the fuzzy name search
- * entirely — the single biggest accuracy win on a large export, where "Drishyam"
- * or "The Office" otherwise resolves by popularity. Never throws: a dead id or a
- * TMDB failure just returns null so the caller falls back to searching by name.
+ * Resolve a row through the exact identifier its file carried, if any. A TMDB,
+ * IMDb or TVDB id names one title outright, so honouring it skips the fuzzy
+ * name search entirely — the single biggest accuracy win on a large export,
+ * where "Drishyam" or "The Office" otherwise resolves by popularity. Never
+ * throws: a dead id or a TMDB failure just returns null so the caller falls
+ * back to searching by name. Every lookup takes the staging `signal`, so none
+ * runs on to its own deadline past the staging budget.
  */
-async function resolveByExactId(
+export async function resolveByExactId(
   parsed: ParsedTitle,
   signal: AbortSignal,
 ): Promise<TmdbSearchItem | null> {
@@ -342,8 +345,8 @@ async function resolveByExactId(
     for (const kind of kinds) {
       try {
         return kind === "movie"
-          ? movieAsSearchItem(await getMovie(tmdbId))
-          : tvAsSearchItem(await getTv(tmdbId));
+          ? movieAsSearchItem(await getMovie(tmdbId, { signal }))
+          : tvAsSearchItem(await getTv(tmdbId, { signal }));
       } catch {
         // Wrong kind or unknown id — try the other kind, then the name search.
       }
@@ -351,8 +354,22 @@ async function resolveByExactId(
   }
   if (parsed.imdbId) {
     try {
-      const found = await findByImdbId(parsed.imdbId, { signal });
-      return found.find((item) => item.media_type === parsed.mediaType) ?? found[0] ?? null;
+      const { titles, episodeShowIds } = await findByImdbId(parsed.imdbId, { signal });
+      const title = titles.find((item) => item.media_type === parsed.mediaType) ?? titles[0];
+      if (title) return title;
+      // An episode-level export: the episode's id names its series. Several
+      // episodes of one show become duplicate-match conflicts in review.
+      if (episodeShowIds.length > 0) {
+        return tvAsSearchItem(await getTv(episodeShowIds[0], { signal }));
+      }
+    } catch {
+      // Fall through to the TVDB id, then the name search.
+    }
+  }
+  if (parsed.tvdbId) {
+    try {
+      const [show] = await findTvByTvdbId(parsed.tvdbId, { signal });
+      if (show) return show;
     } catch {
       // Fall through to the name search.
     }

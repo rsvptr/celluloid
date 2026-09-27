@@ -8,7 +8,7 @@ import { Spinner } from "@/components/ui";
 import { nameWithTypeAndYear } from "@/lib/format";
 import { addFromTmdb } from "@/lib/actions";
 import { saveWatchRegionPreference, setWatchRegion } from "@/lib/region-actions";
-import { regionName, WATCH_REGIONS } from "@/lib/tmdb-extras";
+import { regionName, watchRegionOptions } from "@/lib/tmdb-extras";
 
 /** One-click add for a "More like this" pick; links to the title once owned. */
 export function QuickAdd({
@@ -79,8 +79,12 @@ export function QuickAdd({
   );
 }
 
-/** Streaming-region picker; persists to a cookie and re-renders the page. */
-export function RegionSelect({ region }: { region: string }) {
+/**
+ * Streaming-region picker; persists to a cookie and re-renders the page.
+ * `regions` is TMDB's full list, sorted by name, so typing a country's first
+ * letters in the open picker jumps to it.
+ */
+export function RegionSelect({ region, regions }: { region: string; regions: string[] }) {
   const [pending, start] = useTransition();
   return (
     <select
@@ -100,7 +104,7 @@ export function RegionSelect({ region }: { region: string }) {
       }}
       className="has-chevron h-7 min-h-11 cursor-pointer appearance-none rounded-md bg-surface-2 pl-2 pr-7 text-xs text-muted ring-1 ring-line focus:outline-hidden focus:ring-2 focus:ring-brand/60 forced-colors:border disabled:opacity-60 sm:min-h-0"
     >
-      {WATCH_REGIONS.map((r) => (
+      {watchRegionOptions(regions, region).map((r) => (
         <option key={r} value={r}>
           {regionName(r)}
         </option>

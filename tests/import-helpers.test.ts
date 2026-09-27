@@ -1,8 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { deriveStatus } from "../src/lib/import/run-import";
+import "./server-only-shim";
 import { parseHumanDate } from "../src/lib/import/parse-excel";
 import { WatchStatus } from "../src/generated/prisma/client";
+
+const { deriveStatus } = await import("../src/lib/import/run-import");
 
 describe("deriveStatus", () => {
   it("passes DROPPED / ON_HOLD through untouched, whatever the counts", () => {

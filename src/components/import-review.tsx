@@ -17,7 +17,7 @@ import type { SearchResult } from "@/app/api/search/route";
 import { useConfirm } from "@/components/confirm-dialog";
 import { Poster } from "@/components/poster";
 import { TmdbSearch } from "@/components/tmdb-search";
-import { Button, Card, Select, Spinner } from "@/components/ui";
+import { Button, Card, Select, Spinner, softDisabledClass } from "@/components/ui";
 import {
   IMPORT_COMMIT_BATCH_SIZE,
   IMPORT_MAX_ATTEMPTS,
@@ -39,12 +39,6 @@ const CONFIDENCE_LABELS: Record<ConfidenceBucket, string> = {
   good: "Good confidence",
   high: "High confidence",
 };
-
-// Chrome moves focus to <body> the instant a focused control becomes
-// `disabled`. Cancel import opens a confirm and then goes busy, so it carries
-// `aria-disabled` and returns early instead, keeping focus after confirming
-// (JK-03). These classes reproduce Button's `disabled:` styling.
-const softDisabledClass = "aria-disabled:cursor-not-allowed aria-disabled:opacity-50";
 
 /** Least confident first, matching the default row order. */
 const CONFIDENCE_ORDER: ConfidenceBucket[] = ["needs", "check", "good", "high"];

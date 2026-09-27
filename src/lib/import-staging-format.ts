@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { norm } from "@/lib/tmdb-match";
+import { norm, resultNames } from "@/lib/tmdb-match";
 import type { ParsedTitle } from "@/lib/import/parse-excel";
 import type { TmdbSearchItem } from "@/lib/tmdb";
 import {
@@ -59,6 +59,7 @@ export const parsedTitleSchema = z
       .nullable()
       .optional(),
     tmdbId: z.number().int().positive().nullable().optional(),
+    tvdbId: z.number().int().positive().nullable().optional(),
     tv: z
       .object({
         finalSeasonText: z.string().max(500).nullable(),
@@ -201,10 +202,11 @@ function parsedYear(parsed: ParsedTitle): number | null {
 /** A stable 0..1 confidence for the review UI; it never decides the match itself. */
 export function scoreImportMatch(parsed: ParsedTitle, candidate: TmdbSearchItem): number {
   const left = norm(parsed.name);
-  const right = norm(candidate.title ?? candidate.name ?? "");
-  const exact = left.length > 0 && left === right;
+  // The localized and the original title both count, as they do in pickBest.
+  const names = resultNames(candidate);
+  const exact = left.length > 0 && names.includes(left);
   const partial =
-    left.length > 0 && right.length > 0 && (left.includes(right) || right.includes(left));
+    left.length > 0 && names.some((right) => left.includes(right) || right.includes(left));
   const leftYear = parsedYear(parsed);
   const rightYear = candidateYear(candidate);
   const yearDiff =

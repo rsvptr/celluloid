@@ -31,7 +31,15 @@ import {
 } from "lucide-react";
 import type { AccountInfo, ShareSummary } from "@/lib/data";
 import { authClient } from "@/lib/auth-client";
-import { Badge, Button, Card, Input, Select, Spinner } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  Input,
+  Select,
+  Spinner,
+  softDisabledClass,
+} from "@/components/ui";
 import { useConfirm } from "@/components/confirm-dialog";
 import { TmdbAttribution } from "@/components/tmdb-attribution";
 import { fullDate } from "@/lib/format";
@@ -60,7 +68,7 @@ import {
   tagChipClass,
   tagColorKey,
 } from "@/lib/tag-colors";
-import { isWatchRegion, regionName, WATCH_REGIONS } from "@/lib/tmdb-extras";
+import { regionName, watchRegionOptions } from "@/lib/tmdb-extras";
 import { TMDB_IMAGE_BASE } from "@/lib/images";
 import { setRememberFiltersEnabled } from "@/lib/remembered-state-client";
 import { saveBlob } from "@/lib/save-blob";
@@ -88,18 +96,13 @@ export interface MetadataFailureSummary {
   metadataLastError: string | null;
 }
 
-// Chrome moves focus to <body> the instant a focused control becomes
-// `disabled`. The buttons that open a confirm and then go busy carry
-// `aria-disabled` and return early instead, so focus is still on them after
-// confirming (JK-03). These classes reproduce Button's `disabled:` styling.
-const softDisabledClass = "aria-disabled:cursor-not-allowed aria-disabled:opacity-50";
-
 export function SettingsClient({
   info,
   shares,
   tags,
   timeZone,
   watchRegion,
+  watchRegions,
   myProviders,
   providers,
   providersUnavailable,
@@ -113,6 +116,8 @@ export function SettingsClient({
   tags: TagSummary[];
   timeZone: string;
   watchRegion: string;
+  /** TMDB's streaming regions, sorted by name. */
+  watchRegions: string[];
   myProviders: number[];
   providers: ProviderOption[];
   providersUnavailable: boolean;
@@ -126,7 +131,11 @@ export function SettingsClient({
   return (
     <div className="flex flex-col gap-5 lg:grid lg:grid-cols-2">
       <ProfileSection name={info.name} email={info.email} />
-      <PreferencesSection timeZone={timeZone} watchRegion={watchRegion} />
+      <PreferencesSection
+        timeZone={timeZone}
+        watchRegion={watchRegion}
+        watchRegions={watchRegions}
+      />
       <div className="lg:col-span-2">
         <MyServicesSection
           key={watchRegion}
@@ -163,11 +172,17 @@ function Section({
   icon: Icon,
   title,
   description,
+  headingId,
   children,
 }: {
   icon: React.ComponentType<{ size?: number; className?: string }>;
   title: string;
   description?: string;
+  /**
+   * Makes the heading a focus target with this id, for when an action in the
+   * section removes the control that had focus (a deleted row).
+   */
+  headingId?: string;
   children: React.ReactNode;
 }) {
   return (
@@ -177,7 +192,13 @@ function Section({
           <Icon size={20} />
         </span>
         <div>
-          <h2 className="text-sm font-semibold">{title}</h2>
+          <h2
+            id={headingId}
+            tabIndex={headingId ? -1 : undefined}
+            className={cn("text-sm font-semibold", headingId && "outline-none")}
+          >
+            {title}
+          </h2>
           {description && <p className="mt-0.5 text-xs text-muted">{description}</p>}
         </div>
       </div>
@@ -188,20 +209,26 @@ function Section({
 
 function Notice({
   kind,
+  focusId,
   children,
 }: {
   kind: "ok" | "error";
+  /** Makes the notice a focus target with this id (see Section's headingId). */
+  focusId?: string;
   children: React.ReactNode;
 }) {
   return (
     <p
+      id={focusId}
+      tabIndex={focusId ? -1 : undefined}
       role={kind === "error" ? "alert" : "status"}
       aria-live={kind === "error" ? "assertive" : "polite"}
-      className={
+      className={cn(
         kind === "ok"
           ? "rounded-lg bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300 ring-1 ring-emerald-500/20"
-          : "rounded-lg bg-rose-500/10 px-3 py-2 text-sm text-rose-300 ring-1 ring-rose-500/20"
-      }
+          : "rounded-lg bg-rose-500/10 px-3 py-2 text-sm text-rose-300 ring-1 ring-rose-500/20",
+        focusId && "outline-none",
+      )}
     >
       {children}
     </p>
@@ -355,9 +382,11 @@ const TIME_ZONES: string[] =
 function PreferencesSection({
   timeZone,
   watchRegion,
+  watchRegions,
 }: {
   timeZone: string;
   watchRegion: string;
+  watchRegions: string[];
 }) {
   const [tz, setTz] = useState(timeZone);
   const [region, setRegion] = useState(watchRegion);
@@ -369,9 +398,9 @@ function PreferencesSection({
   const timeZoneOptions: readonly string[] = TIME_ZONES.includes(tz)
     ? TIME_ZONES
     : [tz, ...TIME_ZONES];
-  const regionOptions: readonly string[] = isWatchRegion(region)
-    ? WATCH_REGIONS
-    : [region, ...WATCH_REGIONS];
+  // TMDB's full list, sorted by name so typing a country's first letters in
+  // the open picker jumps to it.
+  const regionOptions = watchRegionOptions(watchRegions, region);
 
   const dirty = tz !== timeZone || region !== watchRegion;
 
@@ -881,6 +910,8 @@ function SharedLinksSection({ shares }: { shares: ShareSummary[] }) {
       const result = await deleteShareList(id);
       if (!result.ok) throw new Error();
       toast.success("Link deleted");
+      // The row, and the Delete button that had focus, are gone.
+      document.getElementById("settings-shared-links-heading")?.focus();
     } catch {
       toast.error("Couldn't delete that link. Please try again.");
     } finally {
@@ -894,6 +925,7 @@ function SharedLinksSection({ shares }: { shares: ShareSummary[] }) {
       <Section
         icon={Link2}
         title="Shared links"
+        headingId="settings-shared-links-heading"
         description="Read-only links to your library. Revoke access without losing the record, or delete it permanently."
       >
         {shares.length === 0 ? (
@@ -1219,6 +1251,8 @@ function TagsSection({ tags }: { tags: TagSummary[] }) {
         return;
       }
       toast.success(`Deleted the “${tag.name}” tag`);
+      // The row, and the Delete button that had focus, are gone.
+      document.getElementById("settings-tags-heading")?.focus();
     } catch {
       toast.error("Couldn't delete that tag. Try again.");
     } finally {
@@ -1232,6 +1266,7 @@ function TagsSection({ tags }: { tags: TagSummary[] }) {
       <Section
         icon={TagIcon}
         title="Tags"
+        headingId="settings-tags-heading"
         description="Rename a tag without losing what it's on, give it a colour, or delete it."
       >
         {tags.length === 0 ? (
@@ -1687,6 +1722,8 @@ function DevicesSection() {
         current?.filter((item) => item.token !== session.token) ?? current,
       );
       toast.success(`${label} signed out`);
+      // The row, and the Sign out button that had focus, are gone.
+      document.getElementById("settings-devices-heading")?.focus();
     } catch {
       setActionError("Celluloid couldn't sign out that device. Check your connection and retry.");
     } finally {
@@ -1730,6 +1767,7 @@ function DevicesSection() {
       <Section
         icon={MonitorSmartphone}
         title="Devices"
+        headingId="settings-devices-heading"
         description="Review active sign-ins and remove devices you no longer use."
       >
         <div className="flex flex-col gap-3">
@@ -1891,10 +1929,18 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
       // qrcode is only needed for this one setup flow — load it on demand
       // instead of shipping it in the settings bundle.
       const QRCode = uri ? (await import("qrcode")).default : null;
-      setQr(uri && QRCode ? await QRCode.toDataURL(uri, { margin: 1, width: 200 }) : null);
-      setSecret(uri ? secretFromUri(uri) : null);
-      setBackupCodes((data as { backupCodes?: string[] })?.backupCodes ?? []);
-      setPhase("setup");
+      const qrDataUrl =
+        uri && QRCode ? await QRCode.toDataURL(uri, { margin: 1, width: 200 }) : null;
+      // The password form, and the Enable 2FA button that had focus, give way
+      // to the setup steps. Start at step 1 so the QR code, setup key and
+      // backup codes come before the code field.
+      flushSync(() => {
+        setQr(qrDataUrl);
+        setSecret(uri ? secretFromUri(uri) : null);
+        setBackupCodes((data as { backupCodes?: string[] })?.backupCodes ?? []);
+        setPhase("setup");
+      });
+      document.getElementById("settings-two-factor-setup-start")?.focus();
     } catch {
       setError("Celluloid couldn't start 2FA setup. Check your connection and retry.");
     } finally {
@@ -1918,9 +1964,14 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
         (result) => !result.error,
         () => false,
       );
-      setOn(true);
-      setPhase("idle");
-      reset();
+      // The setup form, and the Verify button that had focus, give way to the
+      // "on" panel.
+      flushSync(() => {
+        setOn(true);
+        setPhase("idle");
+        reset();
+      });
+      document.getElementById("settings-two-factor-on")?.focus();
       if (signedOutOthers) {
         toast.success("Two-factor authentication is on. Other devices were signed out.");
       } else {
@@ -1954,8 +2005,13 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
         setError(error.message ?? "Couldn't disable 2FA. Try again.");
         return;
       }
-      setOn(false);
-      reset();
+      // The panel, and the Disable 2FA button that had focus, give way to the
+      // form that turns it back on.
+      flushSync(() => {
+        setOn(false);
+        reset();
+      });
+      document.getElementById("settings-enable-two-factor-password")?.focus();
       router.refresh();
     } catch {
       setError("Celluloid couldn't disable 2FA. Check your connection and retry.");
@@ -1974,7 +2030,12 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
     >
       {on ? (
         <div className="flex flex-col gap-4">
-          <p role="status" className="text-sm text-emerald-300">
+          <p
+            id="settings-two-factor-on"
+            tabIndex={-1}
+            role="status"
+            className="text-sm text-emerald-300 outline-none"
+          >
             ✓ Two-factor authentication is on.
           </p>
           {revokeError && <Notice kind="error">{revokeError}</Notice>}
@@ -2113,6 +2174,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
               Current password to enable 2FA
             </span>
             <Input
+              id="settings-enable-two-factor-password"
               name="enable-two-factor-password"
               type="password"
               value={password}
@@ -2153,7 +2215,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
               />
             )}
             <div className="flex flex-col gap-3 text-sm text-muted">
-              <p>
+              <p id="settings-two-factor-setup-start" tabIndex={-1} className="outline-none">
                 1. Scan this QR code with your authenticator app (Google
                 Authenticator, Authy, 1Password, and so on).
               </p>
@@ -2476,7 +2538,7 @@ function BackupSection({
       ) {
         throw new Error("Celluloid returned an incomplete restore result. Refresh and check your library.");
       }
-      setResult({
+      const restored: RestoreResult = {
         create: body.create,
         update: body.update,
         skip: body.skip,
@@ -2493,8 +2555,14 @@ function BackupSection({
         sharesSkipped: body.sharesSkipped,
         eventsCreated: body.eventsCreated,
         eventsSkipped: body.eventsSkipped,
+      };
+      // The preview, and the Restore button that had focus, give way to the
+      // result.
+      flushSync(() => {
+        setResult(restored);
+        setPreview(null);
       });
-      setPreview(null);
+      document.getElementById("settings-restore-result")?.focus();
       toast.success("Backup restored");
       router.refresh();
     } catch (restoreError) {
@@ -2663,7 +2731,7 @@ function BackupSection({
           ) : null}
 
           {result ? (
-            <Notice kind="ok">
+            <Notice kind="ok" focusId="settings-restore-result">
               Restored {result.create} new and {result.update} existing titles. Skipped {result.skip}
               {result.conflict > 0 ? `, with ${result.conflict} conflicts` : ""}. Created {result.sharesCreated}
               {result.sharesCreated === 1 ? " share link" : " share links"}.

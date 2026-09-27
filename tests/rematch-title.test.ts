@@ -736,6 +736,27 @@ describe("addFromTmdb sync fields", { concurrency: false }, () => {
     assert.equal("metadataSyncState" in state.created, false);
   });
 
+  it("takes the median episode runtime when TMDB states none, as refresh does (TM-11)", async () => {
+    const state = createAddDb();
+    const tmdb = globalThis.__CELLULOID_C1_TMDB__;
+    tmdb.tv = { ...TWO_SEASONS, episode_run_time: [] };
+    tmdb.episodes = [
+      { id: 3001, episode_number: 1, name: "Pilot", air_date: "2022-02-17", runtime: 57 },
+      { id: 3002, episode_number: 2, name: "Two", air_date: "2022-02-24", runtime: 53 },
+      { id: 3003, episode_number: 3, name: "Finale", air_date: "2022-03-03", runtime: 80 },
+    ];
+    Object.assign(globalThis.__CELLULOID_C1_DB__, state.db);
+
+    assert.deepEqual(await addFromTmdb(200, "tv"), { id: "title-new" });
+    assert.equal(state.created.runtime, 57);
+
+    tmdb.tv = { ...TWO_SEASONS, episode_run_time: [42] };
+    const stated = createAddDb();
+    Object.assign(globalThis.__CELLULOID_C1_DB__, stated.db);
+    await addFromTmdb(200, "tv");
+    assert.equal(stated.created.runtime, 42);
+  });
+
   it("loads a long show 20 seasons per request and keeps the requests that loaded", async () => {
     const state = createAddDb();
     const tmdb = globalThis.__CELLULOID_C1_TMDB__;
