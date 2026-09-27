@@ -80,7 +80,7 @@ export async function updateProfile(name: string): Promise<ActionResult> {
 }
 
 export async function setAnthropicKey(key: string): Promise<ActionResult> {
-  const userId = await requireUserId();
+  const userId = await requireUserId({ skipCookieCache: true });
   const parsed = anthropicKeySchema.safeParse({ key });
   if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   const k = parsed.data.key.trim();
@@ -97,7 +97,7 @@ export async function setAnthropicKey(key: string): Promise<ActionResult> {
 }
 
 export async function removeAnthropicKey(): Promise<ActionResult> {
-  const userId = await requireUserId();
+  const userId = await requireUserId({ skipCookieCache: true });
   await prisma.user.update({
     where: { id: userId },
     data: { anthropicKeyEnc: null },

@@ -18,7 +18,23 @@ const trustedOrigins = [
 
 export const signupsDisabled = !env.SIGNUP_INVITE_CODE;
 
+// Better Auth authorizes these 2FA changes from the 60-second cookie cache, so
+// for up to a minute a revoked session that knows the password could still
+// replace the TOTP secret or the backup codes, and verify-totp, while 2FA is
+// being turned on, would mint it a new session. The hook makes their session
+// lookup read the row, as Better Auth already does for delete-user,
+// change-password, revoke-session, revoke-other-sessions and two-factor/disable.
+// A verify-totp during sign-in has no session cookie, so nothing changes there.
+const databaseSessionPaths = new Set([
+  "/two-factor/enable",
+  "/two-factor/generate-backup-codes",
+  "/two-factor/verify-totp",
+]);
+
 const enforceAuthRequestPolicy = createAuthMiddleware(async (context) => {
+  if (databaseSessionPaths.has(context.path)) {
+    return { context: { query: { ...context.query, disableCookieCache: true } } };
+  }
   if (context.path === "/delete-user") {
     const body = context.body as Record<string, unknown> | undefined;
     if (typeof body?.password !== "string" || body.password.length === 0) {

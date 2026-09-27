@@ -26,7 +26,7 @@ function json(data: unknown, status = 200): Response {
 }
 
 export async function POST(request: Request) {
-  const session = await getSession();
+  const session = await getSession({ skipCookieCache: true });
   if (!session?.user) return json({ error: "Unauthorized" }, 401);
 
   const limited = rateLimit(`backup-restore:${session.user.id}`, 8, 60_000);

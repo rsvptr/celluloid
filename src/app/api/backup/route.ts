@@ -8,7 +8,7 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 export async function GET() {
-  const session = await getSession();
+  const session = await getSession({ skipCookieCache: true });
   if (!session?.user) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
