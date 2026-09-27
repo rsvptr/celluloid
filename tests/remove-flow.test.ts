@@ -31,7 +31,7 @@ describe("remove flow (EM-18)", () => {
   });
 
   it("still confirms a bulk remove", async () => {
-    const library = await source("../src/components/library.tsx");
+    const library = await source("../src/components/library-bulk-bar.tsx");
     const remove = buttonLabelled(library, /<Trash2 size=\{\d+\} \/> Remove\n/);
     assert.match(remove, /await confirm\(\{[\s\S]*confirmLabel: "Remove"[\s\S]*removeSelected\(\)/);
   });

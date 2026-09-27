@@ -59,7 +59,7 @@ describe("reduced motion (EM-04)", () => {
   });
 
   it("lets Motion handle the filter panel without a bespoke branch", async () => {
-    const library = await readFile(new URL("components/library.tsx", SRC), "utf8");
+    const library = (await Promise.all(["library", "library-toolbar", "library-filter-panel", "library-results", "library-bulk-bar", "library-trash", "library-filters-context"].map((name) => readFile(new URL(`components/${name}.tsx`, SRC), "utf8")))).join("\n");
     assert.doesNotMatch(library, /useReducedMotion|reduceMotion/);
   });
 });

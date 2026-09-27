@@ -9,7 +9,7 @@ async function source(path: string) {
 describe("watched interaction safeguards", () => {
   it("stages status select changes instead of committing ArrowDown", async () => {
     const [library, controls] = await Promise.all([
-      source("../src/components/library.tsx"),
+      source("../src/components/library-bulk-bar.tsx"),
       source("../src/app/(app)/title/[id]/title-controls.tsx"),
     ]);
 

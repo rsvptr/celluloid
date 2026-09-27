@@ -16,7 +16,7 @@ describe("full-bleed rows draw focus inside (JK-37)", () => {
 
   it("applies it to the rows that touch an overflow-hidden list edge", async () => {
     const [library, tracker, upcoming] = await Promise.all([
-      source("../src/components/library.tsx"),
+      source("../src/components/library-results.tsx"),
       source("../src/app/(app)/title/[id]/season-tracker.tsx"),
       source("../src/app/(app)/upcoming/page.tsx"),
     ]);

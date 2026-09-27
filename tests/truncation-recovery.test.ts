@@ -8,7 +8,7 @@ async function source(path: string) {
 
 describe("truncated text stays recoverable (JK-27)", () => {
   it("list, Trash and tag chips carry a title", async () => {
-    const library = await source("../src/components/library.tsx");
+    const library = (await Promise.all(["library-results", "library-trash"].map((name) => source(`../src/components/${name}.tsx`)))).join("\n");
     assert.match(library, /<span className="truncate text-sm font-medium" title=\{item\.name\}>/);
     assert.match(library, /<div className="truncate text-sm font-medium" title=\{item\.name\}>/);
     assert.match(library, /key=\{t\}\s+title=\{t\}/);

@@ -25,7 +25,7 @@ describe("motion polish", () => {
   });
 
   it("docks the bulk bar from its full height on the drawer curve, leaving faster (EM-11)", async () => {
-    const library = await source("components/library.tsx");
+    const library = await source("components/library-bulk-bar.tsx");
     const bar = library.slice(library.indexOf("ref={barRef}"), library.indexOf(">", library.indexOf("exit=", library.indexOf("ref={barRef}"))));
     assert.match(bar, /initial=\{\{ y: "100%", opacity: 0 \}\}/);
     assert.match(bar, /animate=\{\{ y: 0, opacity: 1, transition: \{ duration: 0\.25, ease: EASE_DRAWER \} \}\}/);
