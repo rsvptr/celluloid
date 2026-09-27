@@ -87,7 +87,6 @@ model Suppression {
   createdAt DateTime @default(now())
 
   @@unique([userId, matchKey])
-  @@index([userId])
 }
 
 enum SuppressionReason {
@@ -303,10 +302,9 @@ model Title {
   importItems    ImportItem[]
   shareListItems ShareListItem[]
 
+  // Its left prefixes also serve lookups by userId and by (userId, mediaType).
   @@unique([userId, mediaType, tmdbId])
-  @@index([userId])
   @@index([userId, status])
-  @@index([userId, mediaType])
   @@index([userId, deletedAt])
   // "What's airing soon" scans a narrow date window for one owner.
   @@index([userId, nextEpisodeAirDate])
@@ -333,7 +331,6 @@ model Season {
   episodes Episode[]
 
   @@unique([titleId, seasonNumber])
-  @@index([titleId])
 }
 
 model Episode {
@@ -361,7 +358,6 @@ model Episode {
   watchEvents WatchEvent[]
 
   @@unique([seasonId, episodeNumber])
-  @@index([seasonId])
 }
 
 model Tag {
@@ -385,7 +381,6 @@ model Tag {
   // findOrCreateTag depends on the index to lose the race safely (P2002) when two
   // requests create the same tag in different casings.
   @@unique([userId, name])
-  @@index([userId])
 }
 
 model TitleTag {
