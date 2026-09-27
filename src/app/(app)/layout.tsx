@@ -65,6 +65,11 @@ export default async function AppLayout({
             // focus shadow is invisible on dark, so use the app's ring.
             toast: "focus-ring",
             actionButton: "min-h-11 sm:min-h-0",
+            // Sonner's dark close button is an off-palette black disc (1.2:1
+            // on surface). Tokens instead: border 3.4:1 on surface, glyph 14:1.
+            // `!` beats Sonner's unlayered theme rules.
+            closeButton:
+              "focus-ring bg-surface-2! border-line-strong! text-foreground! hover:bg-line!",
             // The inline style above beat richColors (JK-20), so errors looked
             // like successes. They get the danger token on the border (its
             // `!` beats the inline style) and the icon (6.4:1 on surface);

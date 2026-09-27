@@ -41,4 +41,12 @@ describe("app Toaster config", () => {
     assert.doesNotMatch(toaster, /^\s*richColors\b/m);
     assert.match(toaster, /error: "border-danger\/60! \[&_\[data-icon\]\]:text-danger"/);
   });
+
+  it("styles the close button with the app's tokens", async () => {
+    const layout = await source("../src/app/(app)/layout.tsx");
+    assert.match(
+      layout,
+      /closeButton:\s*"focus-ring bg-surface-2! border-line-strong! text-foreground! hover:bg-line!"/,
+    );
+  });
 });
