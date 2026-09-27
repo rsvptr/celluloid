@@ -41,11 +41,16 @@ export function DangerSection() {
             return;
           start(async () => {
             setError(null);
-            // The auth boundary requires and verifies this password even for
-            // a fresh session, so a session cookie alone cannot delete data.
-            const { error } = await authClient.deleteUser({ password });
-            if (error) {
-              setError(error.message ?? "Couldn't delete the account. Try again.");
+            try {
+              // The auth boundary requires and verifies this password even for
+              // a fresh session, so a session cookie alone cannot delete data.
+              const { error } = await authClient.deleteUser({ password });
+              if (error) {
+                setError(error.message ?? "Couldn't delete the account. Try again.");
+                return;
+              }
+            } catch {
+              setError("Celluloid couldn't delete your account. Check your connection and retry.");
               return;
             }
             router.push("/login");
