@@ -155,7 +155,8 @@ describe("resolveByExactId (TM-12)", { concurrency: false }, () => {
 
     const found = await resolveByExactId(row({ tvdbId: 79168 }), signal);
 
-    assert.equal(found?.id, 1668);
+    assert.equal(found?.match.id, 1668);
+    assert.equal(found?.score, 1);
     assert.deepEqual(
       tmdbState.calls.map((call) => [call.fn, call.arg, call.signal === signal]),
       [["findTvByTvdbId", 79168, true]],
@@ -168,11 +169,39 @@ describe("resolveByExactId (TM-12)", { concurrency: false }, () => {
       row({ imdbId: "tt9999999", tvdbId: 79168 }),
       new AbortController().signal,
     );
-    assert.equal(found?.id, 1668);
+    assert.equal(found?.match.id, 1668);
     assert.deepEqual(
       tmdbState.calls.map((call) => call.fn),
       ["findByImdbId", "findTvByTvdbId"],
     );
+  });
+
+  it("downgrades a TVDB id match to check when the show's name doesn't match", async () => {
+    // A TVDB column holding episode ids can collide with an unrelated series.
+    tmdbState.tvdb = [
+      {
+        id: 4018,
+        media_type: "tv",
+        name: "Heartbeat",
+        original_name: "Heartbeat",
+        first_air_date: "1992-04-10",
+      },
+    ];
+
+    const found = await resolveByExactId(row({ tvdbId: 79168 }), new AbortController().signal);
+
+    assert.equal(found?.match.id, 4018);
+    // Below 0.7 reads as "Check match" in review.
+    assert.ok(found !== null && found.score < 0.7, `score ${found?.score}`);
+  });
+
+  it("trusts a TVDB id match whose name partly matches the row's", async () => {
+    tmdbState.tvdb = [{ ...friends, media_type: "tv" }];
+    const found = await resolveByExactId(
+      row({ name: "Friends (1994)", tvdbId: 79168 }),
+      new AbortController().signal,
+    );
+    assert.equal(found?.score, 1);
   });
 
   it("passes the staging signal to TMDB-id detail lookups", async () => {
