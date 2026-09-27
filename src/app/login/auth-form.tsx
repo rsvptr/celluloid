@@ -163,7 +163,7 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
       // Motion feature chunk.
       <div className="motion-safe:animate-[enter-scale_250ms_cubic-bezier(0.16,1,0.3,1)]">
         <Card className="p-6 lg:p-7">
-          <form onSubmit={onSubmit} className="flex flex-col gap-4">
+          <form method="post" onSubmit={onSubmit} className="flex flex-col gap-4">
             <div>
               <h1 className="text-sm font-semibold lg:text-xl lg:tracking-tight">
                 Two-factor authentication
@@ -232,7 +232,7 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
         {isSignup ? "Create your Celluloid account" : "Sign in to Celluloid"}
       </h1>
 
-      <form onSubmit={onSubmit} className="flex flex-col gap-4">
+      <form method="post" onSubmit={onSubmit} className="flex flex-col gap-4">
         <AnimatePresence initial={false}>
           {isSignup ? (
             <motion.div

@@ -61,8 +61,6 @@ describe("forms submit natively as POST", () => {
     const files = await sourceFiles(new URL("../src/", import.meta.url));
     let count = 0;
     for (const url of files) {
-      // auth-form.tsx gets its method on a separate branch (merge conflict).
-      if (url.pathname.endsWith("/src/app/login/auth-form.tsx")) continue;
       for (const form of forms(await readFile(url, "utf8"))) {
         count++;
         // The opening tag, stepping over the `=>` of inline handlers.
@@ -70,6 +68,6 @@ describe("forms submit natively as POST", () => {
         assert.match(openTag, /\smethod="post"/, `form without method="post" in ${url.pathname}`);
       }
     }
-    assert.ok(count >= 12, `expected at least 12 forms, found ${count}`);
+    assert.ok(count >= 14, `expected at least 14 forms, found ${count}`);
   });
 });
