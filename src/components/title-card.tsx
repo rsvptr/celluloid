@@ -96,7 +96,11 @@ function TitleCardImpl({
           </span>
         ) : (
           <span className="absolute left-1.5 top-1.5">
-            <Badge className={status.badge}>
+            {/* Opaque chip, like the rating chip below: the status tint alone is
+                15% and left the text unreadable on bright posters (JK-01). Every
+                status text color stays above 5.4:1 on bg-black/75 even over a
+                white poster, and keeping it preserves the hue cue. */}
+            <Badge className={cn(status.badge, "bg-black/75")}>
               <span className={cn("h-1.5 w-1.5 rounded-full", status.dot)} />
               {status.label}
             </Badge>
