@@ -9,10 +9,12 @@ name: Preview branch migrations
 # use the migrated branch by pointing its DATABASE_URL at `preview/pr-<number>`.
 # The branch is deleted when the PR closes, and expires after 14 days either way.
 #
-# Opt-in. Nothing runs until the repository has a NEON_API_KEY secret (prefer a
-# key scoped to this Neon project) and a NEON_PROJECT_ID variable. Optional
-# variables: NEON_DATABASE (default neondb), NEON_ROLE (default neondb_owner),
-# NEON_PARENT_BRANCH. PRs from forks never receive secrets, so they skip.
+# Opt-in. Nothing runs until the repository has BOTH a NEON_API_KEY secret
+# (prefer a key scoped to this Neon project) and a NEON_PROJECT_ID variable;
+# with only one of them the jobs skip with a warning instead of failing the PR.
+# Optional variables: NEON_DATABASE (default neondb), NEON_ROLE (default
+# neondb_owner), NEON_PARENT_BRANCH. PRs from forks never receive secrets, so
+# they skip.
 #
 # If a PR rewrites a migration it has already applied here, delete its branch
 # in the Neon console; the next push recreates it from production.
@@ -35,11 +37,32 @@ env:
   NEON_API: https://console.neon.tech/api/v2/projects/${{ vars.NEON_PROJECT_ID }}
 
 jobs:
+  # `secrets` can't be read in a job-level `if`, so this checks both settings
+  # and the other jobs skip unless it reports ready.
+  config:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - name: Check for NEON_API_KEY and NEON_PROJECT_ID
+        id: check
+        env:
+          HAS_KEY: ${{ secrets.NEON_API_KEY != '' }}
+          HAS_PROJECT: ${{ vars.NEON_PROJECT_ID != '' }}
+        run: |
+          if [ "$HAS_KEY" = true ] && [ "$HAS_PROJECT" = true ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            if [ "$HAS_KEY" = true ] || [ "$HAS_PROJECT" = true ]; then
+              echo "::warning::Skipping preview-branch migrations: set both the NEON_API_KEY secret and the NEON_PROJECT_ID variable, or neither."
+            fi
+          fi
+
   migrate:
-    if: >-
-      github.event.action != 'closed' &&
-      vars.NEON_PROJECT_ID != '' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+    needs: config
+    if: github.event.action != 'closed' && needs.config.outputs.ready == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -99,10 +122,8 @@ jobs:
         run: DATABASE_URL="$NEON_DIRECT_URL" DIRECT_URL="$NEON_DIRECT_URL" npx prisma migrate deploy
 
   cleanup:
-    if: >-
-      github.event.action == 'closed' &&
-      vars.NEON_PROJECT_ID != '' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+    needs: config
+    if: github.event.action == 'closed' && needs.config.outputs.ready == 'true'
     runs-on: ubuntu-latest
     steps:
       # Branch search matches partial names, so pr-1 must not delete pr-12.
