@@ -496,7 +496,8 @@ export function Library({
             filtersTriggerRef={filtersTriggerRef}
           />
 
-          <LibraryFilterChips />
+          {/* The Filters button is hidden on a first run, and the search isn't. */}
+          <LibraryFilterChips fallbackFocusRef={firstRun ? searchInputRef : filtersTriggerRef} />
 
           <LibraryFilterPanel
             showFilters={showFilters}

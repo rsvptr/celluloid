@@ -1,11 +1,16 @@
 "use client";
 
-import type { RefObject } from "react";
+import { useRef, type RefObject } from "react";
+import { flushSync } from "react-dom";
 import Link from "next/link";
 import { Clapperboard, Plus, Search, SlidersHorizontal, X } from "lucide-react";
 import type { LibraryItem } from "@/lib/data";
 import type { TypeFilter } from "@/lib/library-filters";
-import { hasLibraryFilters, libraryFilterChips } from "@/lib/library-filter-state";
+import {
+  hasLibraryFilters,
+  libraryChipFocusAfterRemoval,
+  libraryFilterChips,
+} from "@/lib/library-filter-state";
 import { Input } from "./ui";
 import { useLibraryFilters } from "./library-filters-context";
 import { formatCount } from "@/lib/format";
@@ -175,22 +180,41 @@ export function LibraryFilterRow({
 }
 
 // Active-filter chips — one removable chip per active facet, shown whether or
-// not the advanced panel is open.
-export function LibraryFilterChips() {
+// not the advanced panel is open. Removing a chip, or all of them, unmounts the
+// button that had focus, so focus moves to the chip that took its place, or to
+// `fallbackFocusRef` once no chip is left.
+export function LibraryFilterChips({
+  fallbackFocusRef,
+}: {
+  fallbackFocusRef: RefObject<HTMLElement | null>;
+}) {
   const {
     state,
     actions: { set, clear },
   } = useLibraryFilters();
+  const chipsRef = useRef<HTMLDivElement>(null);
   const facetChips = libraryFilterChips(state);
   if (facetChips.length === 0) return null;
 
+  function focusChipOrFallback(key: string | null) {
+    const chip = key
+      ? chipsRef.current?.querySelector<HTMLElement>(`[data-chip="${key}"]`)
+      : null;
+    (chip ?? fallbackFocusRef.current)?.focus();
+  }
+
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div ref={chipsRef} className="flex flex-wrap items-center gap-2">
       {facetChips.map((chip) => (
         <button
           key={chip.key}
           type="button"
-          onClick={() => set(chip.clear)}
+          data-chip={chip.key}
+          onClick={() => {
+            const next = libraryChipFocusAfterRemoval(facetChips, chip.key);
+            flushSync(() => set(chip.clear));
+            focusChipOrFallback(next);
+          }}
           aria-label={`Remove ${chip.label} filter`}
           className="focus-ring flex min-h-11 min-w-0 items-center gap-1.5 rounded-full bg-surface-2 px-3 text-xs text-foreground ring-1 ring-line press hover:text-foreground sm:min-h-0 sm:py-1"
         >
@@ -200,7 +224,10 @@ export function LibraryFilterChips() {
       ))}
       <button
         type="button"
-        onClick={clear}
+        onClick={() => {
+          flushSync(clear);
+          focusChipOrFallback(null);
+        }}
         className="focus-ring flex min-h-11 items-center rounded-lg px-2 text-xs font-medium text-muted transition-colors hover:text-foreground sm:min-h-0"
       >
         Clear all

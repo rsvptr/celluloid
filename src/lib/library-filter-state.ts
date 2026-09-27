@@ -132,6 +132,19 @@ export function libraryFilterChips(filters: LibraryFilters): LibraryFilterChip[]
   return chips;
 }
 
+/**
+ * The chip focus moves to when `key`'s chip is removed: the one that takes its
+ * place, or the one before it when it was last. Null when it was the only one.
+ */
+export function libraryChipFocusAfterRemoval(
+  chips: LibraryFilterChip[],
+  key: string,
+): string | null {
+  const index = chips.findIndex((chip) => chip.key === key);
+  if (index === -1) return null;
+  return chips[index + 1]?.key ?? chips[index - 1]?.key ?? null;
+}
+
 // Deep link to /export with the current filters pre-applied (query and the
 // needs-match toggle have no export equivalent; sort doesn't affect content).
 export function libraryExportHref(filters: LibraryFilters): string {
