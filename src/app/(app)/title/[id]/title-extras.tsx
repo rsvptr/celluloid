@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { ExternalLink, Play, UserRound } from "lucide-react";
 import { prisma } from "@/lib/prisma";
 import { getUserPrefs } from "@/lib/data";
@@ -10,6 +10,7 @@ import {
   pickTrailer,
   regionName,
   regionWatchInfo,
+  trailerLanguages,
 } from "@/lib/tmdb-extras";
 import { TMDB_IMAGE_BASE } from "@/lib/images";
 import { yearOf } from "@/lib/tmdb-match";
@@ -28,10 +29,13 @@ export async function TitleExtras({
   userId,
   tmdbId,
   mediaType,
+  language,
 }: {
   userId: string;
   tmdbId: number;
   mediaType: MediaType;
+  /** The title's original language, so its own trailers are fetched too. */
+  language: string | null;
 }) {
   const kind = mediaType === MediaType.TV ? ("tv" as const) : ("movie" as const);
   // Region precedence: the per-device cookie (set by the inline picker) beats
@@ -53,14 +57,22 @@ export async function TitleExtras({
     if (isWatchRegion(saved)) region = saved;
   }
 
+  // Trailers in the viewer's language, then English, then the title's own
+  // (TM-10). Before, only English-tagged videos were ever fetched.
+  const videoLanguages = trailerLanguages(
+    (await headers()).get("accept-language"),
+    region,
+    language,
+  );
+
   // One append_to_response request carries everything below — down from
   // three separate round trips. The region localizes the certification badge
   // alongside the watch providers it sits next to.
-  const bundle = await getTitleBundle(kind, tmdbId, region).catch(() => null);
+  const bundle = await getTitleBundle(kind, tmdbId, region, videoLanguages).catch(() => null);
   if (!bundle) return null;
 
   const watch = regionWatchInfo(bundle.providersResults, region);
-  const trailer = pickTrailer(bundle.videos);
+  const trailer = pickTrailer(bundle.videos, videoLanguages);
   const picks = bundle.related.slice(0, 6);
   const crewLine = bundle.directors.length
     ? `Directed by ${bundle.directors.join(", ")}`

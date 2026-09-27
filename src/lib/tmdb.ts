@@ -580,6 +580,8 @@ export interface TmdbRegionProviders {
 export interface TmdbVideo {
   site: string;
   type: string;
+  /** The video's language; null when untagged. */
+  iso_639_1?: string | null;
   official?: boolean;
   key: string;
   name: string;
@@ -723,7 +725,7 @@ export interface TitleBundle {
   providersResults: Record<string, TmdbRegionProviders> | undefined;
   /** Related titles, media_type-tagged, with the /similar fallback already applied. */
   related: TmdbSearchItem[];
-  /** Raw videos — feed to pickTrailer(videos). */
+  /** Raw videos in the requested languages — feed to pickTrailer(videos, languages). */
   videos: TmdbVideo[];
   /**
    * Age/content certification for the viewer's streaming region, falling back
@@ -751,12 +753,14 @@ export interface TitleBundle {
  *
  * `region` localizes the certification badge to the viewer's streaming region
  * (the same picker that scopes watch providers); it does not affect the fetch
- * URL, so the 24h response cache stays shared across regions.
+ * URL. `videoLanguages` (see trailerLanguages) does: videos come back only in
+ * those languages, so the 24h response cache is per title and language list.
  */
 export async function getTitleBundle(
   kind: "movie" | "tv",
   id: number,
   region = "US",
+  videoLanguages: readonly string[] = ["en"],
 ): Promise<TitleBundle> {
   const appends =
     kind === "movie"
@@ -765,7 +769,12 @@ export async function getTitleBundle(
 
   const data = await tmdb<TmdbAppendedDetail>(
     `/${kind}/${id}`,
-    { language: "en-US", append_to_response: appends },
+    {
+      language: "en-US",
+      append_to_response: appends,
+      // Appended sub-requests honour it, as the standalone videos call does.
+      include_video_language: videoLanguages.join(","),
+    },
     { revalidate: 60 * 60 * 24 },
   );
 

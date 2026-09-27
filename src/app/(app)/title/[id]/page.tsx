@@ -285,6 +285,7 @@ export default async function TitlePage({
                 userId={user.id}
                 tmdbId={title.tmdbId}
                 mediaType={title.mediaType}
+                language={title.language}
               />
             </Suspense>
           </div>

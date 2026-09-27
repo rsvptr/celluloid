@@ -109,25 +109,66 @@ export interface TrailerPick {
 }
 
 /**
- * Choose the best YouTube video for a "Watch trailer" link: official trailers
- * first, then any trailer, then a teaser — newest first within each tier.
+ * Choose the best YouTube video for a "Watch trailer" link. Videos in the
+ * earlier of `languages` win (TMDB's "null" stands for untagged videos, and a
+ * language not listed comes last); within a language, official trailers come
+ * first, then any trailer, then a teaser, newest first within each tier.
  */
-export function pickTrailer(videos: TmdbVideo[]): TrailerPick | null {
+export function pickTrailer(
+  videos: TmdbVideo[],
+  languages: readonly string[] = [],
+): TrailerPick | null {
   const yt = videos.filter((v) => v.site === "YouTube" && v.key);
+  const languageRank = (v: TmdbVideo) => {
+    const rank = languages.indexOf(v.iso_639_1 ?? "null");
+    return rank === -1 ? languages.length : rank;
+  };
   const byDate = (a: TmdbVideo, b: TmdbVideo) =>
     (b.published_at ?? "").localeCompare(a.published_at ?? "");
-  const tiers = [
-    yt.filter((v) => v.type === "Trailer" && v.official).sort(byDate),
-    yt.filter((v) => v.type === "Trailer").sort(byDate),
-    yt.filter((v) => v.type === "Teaser").sort(byDate),
-  ];
-  for (const tier of tiers) {
-    if (tier.length) {
-      const v = tier[0];
-      return { key: v.key, name: v.name, url: `https://www.youtube.com/watch?v=${v.key}` };
+  for (let rank = 0; rank <= languages.length; rank++) {
+    const pool = yt.filter((v) => languageRank(v) === rank);
+    const tiers = [
+      pool.filter((v) => v.type === "Trailer" && v.official).sort(byDate),
+      pool.filter((v) => v.type === "Trailer").sort(byDate),
+      pool.filter((v) => v.type === "Teaser").sort(byDate),
+    ];
+    for (const tier of tiers) {
+      if (tier.length) {
+        const v = tier[0];
+        return { key: v.key, name: v.name, url: `https://www.youtube.com/watch?v=${v.key}` };
+      }
     }
   }
   return null;
+}
+
+/**
+ * The languages to ask TMDB for trailers in, most wanted first: the viewer's
+ * language (the first tag of the browser's Accept-Language), or when that
+ * isn't known the region's usual language, then English, then the title's
+ * original language and untagged videos ("null") to stand in for "any".
+ * TMDB filters videos to `language` (en) unless include_video_language is
+ * sent, which is why regional titles with only native-language videos had no
+ * trailer at all.
+ */
+export function trailerLanguages(
+  acceptLanguage: string | null | undefined,
+  region: string,
+  originalLanguage: string | null | undefined,
+): string[] {
+  const viewer = acceptLanguage?.split(",")[0]?.split(";")[0]?.trim().split("-")[0]?.toLowerCase();
+  const preferred = viewer && /^[a-z]{2}$/.test(viewer) ? viewer : regionLanguage(region);
+  const original = originalLanguage?.trim().toLowerCase();
+  return [...new Set([preferred, "en", ...(original ? [original] : []), "null"])];
+}
+
+/** The language most used in a region (CLDR likely subtags), else English. */
+function regionLanguage(region: string): string {
+  try {
+    return new Intl.Locale(`und-${region}`).maximize().language;
+  } catch {
+    return "en";
+  }
 }
 
 // --- Title enrichment: certification, cast, crew, IMDb ----------------------

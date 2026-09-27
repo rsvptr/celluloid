@@ -5,6 +5,7 @@ import {
   isWatchRegion,
   pickTrailer,
   regionWatchInfo,
+  trailerLanguages,
 } from "../src/lib/tmdb-extras";
 import type { TmdbProvider, TmdbVideo } from "../src/lib/tmdb";
 
@@ -104,6 +105,57 @@ describe("pickTrailer", () => {
   it("ignores non-YouTube videos and returns null when nothing fits", () => {
     assert.equal(pickTrailer([v({ site: "Vimeo" })]), null);
     assert.equal(pickTrailer([]), null);
+  });
+
+  // Bramayugam's videos, live, with include_video_language=hi,en,ml,null.
+  const bramayugam = [
+    v({ key: "en-trailer", iso_639_1: "en", official: true }),
+    v({ key: "hi-trailer", iso_639_1: "hi", official: false }),
+    v({ key: "ml-trailer", iso_639_1: "ml", official: false }),
+    v({ key: "ml-teaser", iso_639_1: "ml", type: "Teaser" }),
+  ];
+
+  it("prefers the earlier language, then English, then the rest (TM-10)", () => {
+    assert.equal(pickTrailer(bramayugam, ["hi", "en", "ml", "null"])?.key, "hi-trailer");
+    assert.equal(pickTrailer(bramayugam, ["en", "ml", "null"])?.key, "en-trailer");
+    assert.equal(pickTrailer(bramayugam.slice(2), ["en", "ml", "null"])?.key, "ml-trailer");
+  });
+
+  it("keeps the tier order within one language, and falls back to unlisted ones", () => {
+    const videos = [
+      v({ key: "de-teaser", iso_639_1: "de", type: "Teaser" }),
+      v({ key: "de-trailer", iso_639_1: "de", official: false }),
+      v({ key: "fr-official", iso_639_1: "fr", official: true }),
+    ];
+    assert.equal(pickTrailer(videos, ["de", "en"])?.key, "de-trailer");
+    assert.equal(pickTrailer(videos.slice(2), ["de", "en"])?.key, "fr-official");
+  });
+
+  it("treats an untagged video as TMDB's null language", () => {
+    const videos = [v({ key: "tagged", iso_639_1: "ja" }), v({ key: "untagged", iso_639_1: null })];
+    assert.equal(pickTrailer(videos, ["en", "null"])?.key, "untagged");
+  });
+});
+
+describe("trailerLanguages", () => {
+  it("puts the viewer's language first, then English, the original and untagged", () => {
+    assert.deepEqual(trailerLanguages("de-DE,de;q=0.9,en;q=0.8", "US", "ja"), [
+      "de",
+      "en",
+      "ja",
+      "null",
+    ]);
+    assert.deepEqual(trailerLanguages("en-IN,en;q=0.9", "IN", "ml"), ["en", "ml", "null"]);
+  });
+
+  it("falls back to the region's usual language when the browser names none", () => {
+    assert.deepEqual(trailerLanguages(null, "IN", "ml"), ["hi", "en", "ml", "null"]);
+    assert.deepEqual(trailerLanguages("*", "DE", null), ["de", "en", "null"]);
+    assert.deepEqual(trailerLanguages("", "JP", "ja"), ["ja", "en", "null"]);
+  });
+
+  it("does not repeat a language", () => {
+    assert.deepEqual(trailerLanguages("en-US", "US", "en"), ["en", "null"]);
   });
 });
 
