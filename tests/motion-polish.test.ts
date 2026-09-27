@@ -31,4 +31,16 @@ describe("motion polish", () => {
     assert.match(bar, /animate=\{\{ y: 0, opacity: 1, transition: \{ duration: 0\.25, ease: EASE_DRAWER \} \}\}/);
     assert.match(bar, /exit=\{\{ y: "100%", opacity: 0, transition: \{ duration: 0\.2, ease: EASE_DRAWER \} \}\}/);
   });
+
+  it("dismisses recommend cards without an exit-then-reflow, measuring on list changes only (EM-12, MO-06)", async () => {
+    const rec = await source("app/(app)/recommend/recommend-client.tsx");
+    const at = rec.indexOf('<AnimatePresence initial={false} mode="popLayout">');
+    assert.notEqual(at, -1, "recommend cards need popLayout");
+    // popLayout positions the exiting card against its nearest positioned parent.
+    assert.match(rec.slice(rec.lastIndexOf("<div", at), at), /className="relative grid /);
+    const card = rec.slice(at, rec.indexOf("<RecCard", at));
+    assert.match(card, /layout="position"\s+layoutDependency=\{recs\}/);
+    assert.match(card, /exit=\{\{ opacity: 0, scale: 0\.97, transition: \{ duration: 0\.15, ease: EASE_OUT \} \}\}/);
+    assert.match(card, /layout: \{ type: "spring", visualDuration: 0\.3, bounce: 0 \}/);
+  });
 });

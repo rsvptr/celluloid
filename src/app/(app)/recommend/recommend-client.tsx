@@ -992,17 +992,28 @@ export function RecommendClient({
             )}
           </div>
 
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-            <AnimatePresence initial={false}>
+          {/* relative: popLayout positions an exiting card against this grid. */}
+          <div className="relative grid grid-cols-1 gap-3 lg:grid-cols-2">
+            {/* popLayout takes a dismissed card out of the flow as its exit
+                starts, so the others move at once instead of after it (EM-12). */}
+            <AnimatePresence initial={false} mode="popLayout">
                 {(recs ?? []).map((r, index) => (
                   <motion.div
                     key={recommendationIdentity(r)}
-                    layout
+                    // MO-06: measure only when the list changes, not on every
+                    // keystroke in the focus box, and move without scaling, so
+                    // a card landing in a row of another height isn't squashed.
+                    layout="position"
+                    layoutDependency={recs}
                     data-motion-enter
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -6 }}
-                    transition={{ duration: 0.3, ease: EASE_OUT }}
+                    exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.15, ease: EASE_OUT } }}
+                    transition={{
+                      duration: 0.3,
+                      ease: EASE_OUT,
+                      layout: { type: "spring", visualDuration: 0.3, bounce: 0 },
+                    }}
                     className="min-w-0"
                   >
                     <RecCard
