@@ -58,4 +58,17 @@ describe("the 2FA sign-in step has a way back (BA-08)", () => {
     assert.match(back, /setPassword\(""\)/);
     assert.match(back, /getElementById\("login-password"\)\?\.focus\(\)/);
   });
+
+  it("explains the rate limit instead of leaving a dead screen", async () => {
+    // The limiter's 429 trips on the sixth backup code, before the challenge's
+    // five-code cap, so it needs its own message (Back to sign in stays offered).
+    const { file } = await twoFactorStep();
+    const limited = file.indexOf("if (error?.status === 429");
+    assert.notEqual(limited, -1);
+    assert.ok(limited < file.indexOf("if (error) {"), "429 is handled before the generic error");
+    assert.match(
+      file.slice(limited),
+      /^if \(error\?\.status === 429 && error\.code !== "ACCOUNT_TEMPORARILY_LOCKED"\) \{\s*setError\("Too many attempts\. Wait a minute, then try again\."\);\s*return;/,
+    );
+  });
 });
