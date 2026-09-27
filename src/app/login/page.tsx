@@ -97,7 +97,7 @@ export default async function LoginPage() {
           aria-hidden="true"
           className="hero-float pointer-events-none absolute -top-40 left-1/2 h-96 w-96 -translate-x-1/2 rounded-full bg-brand/20 blur-[120px] lg:hidden"
         />
-        <div className="relative w-full max-w-sm motion-safe:animate-[enter-rise_250ms_cubic-bezier(0.23,1,0.32,1)]">
+        <div className="relative w-full max-w-sm motion-safe:animate-[enter-rise_250ms_var(--ease-out)]">
           <div className="mb-8 flex flex-col items-center text-center lg:hidden">
             <Wordmark size={56} href={null} className="flex-col gap-3" />
             <p className="mt-4 text-sm text-muted">

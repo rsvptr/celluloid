@@ -36,8 +36,10 @@ const loadDomMax = () =>
       return new Promise<never>(() => {});
     });
 
-// A cinematic ease-out curve used for most entrances.
-export const EASE_OUT = [0.16, 1, 0.3, 1] as const;
+// Motion's copies of the curves in globals.css's motion tokens (EM-14); keep
+// the two in step (tests/motion-tokens.test.ts checks).
+export const EASE_OUT = [0.23, 1, 0.32, 1] as const;
+export const EASE_DRAWER = [0.32, 0.72, 0, 1] as const;
 
 /**
  * Mounted by the app layout and the login page so every Motion animation

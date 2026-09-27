@@ -21,7 +21,7 @@ import type { TitleIndexEntry } from "@/lib/data";
 import { Button, Card, Input, Select, Spinner } from "@/components/ui";
 import { Shimmer } from "@/components/skeleton";
 import { Poster } from "@/components/poster";
-import { AnimatePresence, motion } from "@/components/motion";
+import { AnimatePresence, EASE_OUT, motion } from "@/components/motion";
 import { addFromTmdb } from "@/lib/actions";
 import { setRecommendModel } from "@/lib/settings-actions";
 import { suppressSuggestion, unsuppressSuggestion } from "@/lib/suppression-actions";
@@ -1002,7 +1002,7 @@ export function RecommendClient({
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -6 }}
-                    transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+                    transition={{ duration: 0.3, ease: EASE_OUT }}
                     className="min-w-0"
                   >
                     <RecCard

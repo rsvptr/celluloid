@@ -795,7 +795,7 @@ export function Library({
               animate={{ opacity: 1, height: "auto" }}
               exit={{ opacity: 0, height: 0 }}
               transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: EASE_OUT }}
-              className="-mt-4 grid grid-rows-[1fr] overflow-hidden motion-safe:animate-[collapse-in_200ms_cubic-bezier(0.16,1,0.3,1)]"
+              className="-mt-4 grid grid-rows-[1fr] overflow-hidden motion-safe:animate-[collapse-in_200ms_var(--ease-out)]"
             >
               <InertOnExit className="min-h-0">
               <Card variant="inset" className="mt-4 flex flex-col gap-3 p-3">
@@ -1222,7 +1222,7 @@ function BulkBar({
           initial={{ y: 80, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
           exit={{ y: 80, opacity: 0 }}
-          transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+          transition={{ duration: 0.25, ease: EASE_OUT }}
         >
           {/* max-w-5xl (was 4xl): the full control set measures ~930px, so the
               wider cap is what lets a desktop still show it on a single row. */}

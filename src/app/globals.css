@@ -212,6 +212,22 @@ label {
   outline-offset: 2px;
 }
 
+/* ==========================================================================
+   Motion tokens (emil-design-eng, EM-14)
+   The one place the curves live; components/motion.tsx mirrors them for
+   Motion. `static` emits them even where no utility names them, because sites
+   read them through var() inside arbitrary values, which Tailwind doesn't
+   trace back to the theme. Overriding --ease-out also makes the `ease-out`
+   utility emil's curve instead of Tailwind's weak default.
+   ========================================================================== */
+@theme static {
+  /* Enter, exit and press: starts fast, settles gently. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  /* Panels docked to a screen edge (the bulk bar). */
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+}
+/* ======================== end of motion tokens ========================== */
+
 /* Press feedback (emil-design-eng): scale on pointer-down. It replaces
    transition-colors on a control, so it keeps that property list and adds
    opacity and scale. An @utility (not a bare class) stays in Tailwind's
@@ -220,7 +236,7 @@ label {
 @utility press {
   transition-property: color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to, opacity, scale;
   transition-duration: 160ms;
-  transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
+  transition-timing-function: var(--ease-out);
   @media (prefers-reduced-motion: no-preference) {
     &:active:not(:disabled, [aria-disabled="true"]) {
       scale: 0.97;

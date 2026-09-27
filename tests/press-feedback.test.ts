@@ -29,7 +29,8 @@ describe("press feedback (EM-01)", () => {
   it("defines the press utility with emil's values", async () => {
     const press = pressUtility(await source("app/globals.css"));
     assert.match(press, /transition-duration: 160ms;/);
-    assert.match(press, /transition-timing-function: cubic-bezier\(0\.23, 1, 0\.32, 1\);/);
+    // emil's cubic-bezier(0.23, 1, 0.32, 1), from the motion tokens (EM-14).
+    assert.match(press, /transition-timing-function: var\(--ease-out\);/);
     // Keeps everything transition-colors covered, and adds opacity and scale.
     assert.match(
       press,

@@ -25,7 +25,7 @@ export function BarRow({
       <div className="h-2 flex-1 overflow-hidden rounded-full bg-surface-2">
         <div
           className={cn(
-            "h-full origin-left rounded-full motion-safe:animate-[grow-x_300ms_cubic-bezier(0.23,1,0.32,1)]",
+            "h-full origin-left rounded-full motion-safe:animate-[grow-x_300ms_var(--ease-out)]",
             colorClass ?? "brand-gradient",
           )}
           style={{ width: `${pct}%` }}
@@ -71,7 +71,7 @@ export function ColumnChart({
             )}
             <div
               title={`${d.label}: ${d.value}`}
-              className="w-full rounded-t-md brand-gradient motion-safe:animate-[grow-y_300ms_cubic-bezier(0.23,1,0.32,1)]"
+              className="w-full rounded-t-md brand-gradient motion-safe:animate-[grow-y_300ms_var(--ease-out)]"
               style={{ height: px, transformOrigin: "bottom" }}
             />
             {/* Past 8 buckets, labels collide at narrow widths; drop every
@@ -147,7 +147,7 @@ export function Sparkline({
         <path
           d={area}
           fill="url(#spark-fill)"
-          className="motion-safe:animate-[fade-in_300ms_cubic-bezier(0.23,1,0.32,1)]"
+          className="motion-safe:animate-[fade-in_300ms_var(--ease-out)]"
         />
         <path
           d={line}
@@ -158,7 +158,7 @@ export function Sparkline({
           strokeLinecap="round"
           vectorEffect="non-scaling-stroke"
           pathLength={1}
-          className="motion-safe:animate-[draw-line_400ms_cubic-bezier(0.23,1,0.32,1)]"
+          className="motion-safe:animate-[draw-line_400ms_var(--ease-out)]"
         />
       </svg>
       {labels && (

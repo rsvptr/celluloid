@@ -165,7 +165,7 @@ function TitleCardImpl({
           <div className="absolute inset-x-0 bottom-0 h-1 bg-black/50">
             {/* transform instead of width: compositor-only animation, no layout thrash */}
             <div
-              className="brand-gradient h-full origin-left transition-transform duration-500"
+              className="brand-gradient h-full origin-left transition-transform"
               style={{ transform: `scaleX(${pct / 100})` }}
             />
           </div>
@@ -200,7 +200,7 @@ function TitleCardImpl({
   // a button's 0.97 for a surface this large, transform only, off under
   // reduced motion.
   const pressClass =
-    "flow-root transition-[scale] duration-160 ease-[cubic-bezier(0.23,1,0.32,1)] motion-safe:active:scale-[0.98]";
+    "flow-root transition-[scale] duration-160 ease-out motion-safe:active:scale-[0.98]";
 
   // Selection mode: toggle instead of navigating.
   if (selectable) {
