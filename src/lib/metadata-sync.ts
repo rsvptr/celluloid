@@ -73,16 +73,31 @@ class SyncBudgetExhaustedError extends Error {
   }
 }
 
-/** The fields the sync reads off /tv/{id}; a superset of TmdbTvDetails. */
-interface TmdbTvSyncDetail {
+/** The title-level fields the sync reads off /movie/{id} or /tv/{id}. */
+interface TmdbTitleSyncDetail {
   id: number;
-  name?: string;
-  number_of_seasons?: number | null;
+  overview?: string | null;
+  poster_path?: string | null;
+  backdrop_path?: string | null;
+  vote_average?: number | null;
+  genres?: { name: string }[] | null;
+  /** Movies. */
+  release_date?: string | null;
+  runtime?: number | null;
+  /** TV. `episode_run_time` is empty for most current shows. */
+  first_air_date?: string | null;
+  episode_run_time?: number[] | null;
   /** TMDB's lifecycle string: "Returning Series", "Ended", "Canceled", ... */
   status?: string | null;
+  "watch/providers"?: { results?: Record<string, TmdbRegionProviders> };
+}
+
+/** The fields the sync reads off /tv/{id}; a superset of TmdbTvDetails. */
+interface TmdbTvSyncDetail extends TmdbTitleSyncDetail {
+  name?: string;
+  number_of_seasons?: number | null;
   next_episode_to_air?: { air_date?: string | null } | null;
   seasons?: TmdbSeasonSummary[];
-  "watch/providers"?: { results?: Record<string, TmdbRegionProviders> };
 }
 
 /** The compact season rows included in TMDB's TV-detail response. */
@@ -191,20 +206,21 @@ function fetchSeason(
   );
 }
 
-interface TmdbWatchProvidersResponse {
-  results?: Record<string, TmdbRegionProviders>;
-}
-
-/** One cheap provider-only request for a title that needs no other metadata. */
-function fetchWatchProviders(
+/**
+ * One request for a title that needs no season data: its details, with
+ * providers riding along. It costs the same single request as the bare
+ * /watch/providers call it replaced, and it is the only refresh movies get, so
+ * a moved release date, a new poster or a settled rating reaches them too.
+ */
+function fetchDetailWithProviders(
   mediaType: MediaType,
   tmdbId: number,
   deadline: number,
-): Promise<TmdbWatchProvidersResponse> {
+): Promise<TmdbTitleSyncDetail> {
   const kind = mediaType === MediaType.TV ? "tv" : "movie";
-  return tmdbGet<TmdbWatchProvidersResponse>(
-    `/${kind}/${tmdbId}/watch/providers`,
-    {},
+  return tmdbGet<TmdbTitleSyncDetail>(
+    `/${kind}/${tmdbId}`,
+    { language: "en-US", append_to_response: "watch/providers" },
     deadline,
   );
 }
@@ -536,6 +552,36 @@ export function seasonNumbersToRefresh(
 }
 
 /**
+ * Title-level metadata to refresh from a TMDB detail response.
+ *
+ * A refresh only ever replaces a stored value with a real one. An empty
+ * overview (a missing en-US translation), an empty genre list, a missing image
+ * or date, a 0 rating (no votes yet) and a 0 runtime all mean TMDB doesn't
+ * know, and blanking what the title page already shows would be a regression.
+ * TV runtime comes from `episode_run_time`, which is empty for most current
+ * shows, so it is written only when TMDB actually states one. The name is left
+ * alone: legacy import rows may carry the owner's own spelling.
+ */
+export function titleMetadataFromDetail(
+  detail: TmdbTitleSyncDetail,
+  mediaType: MediaType,
+): Prisma.TitleUpdateManyMutationInput {
+  const isTv = mediaType === MediaType.TV;
+  const releaseDate = toDate(isTv ? detail.first_air_date : detail.release_date);
+  const runtime = isTv ? detail.episode_run_time?.[0] : detail.runtime;
+  const genres = (detail.genres ?? []).map((g) => g.name);
+  return {
+    ...(detail.poster_path ? { posterPath: detail.poster_path } : {}),
+    ...(detail.backdrop_path ? { backdropPath: detail.backdrop_path } : {}),
+    ...(detail.overview ? { overview: detail.overview } : {}),
+    ...(detail.vote_average ? { tmdbRating: detail.vote_average } : {}),
+    ...(genres.length > 0 ? { genres } : {}),
+    ...(releaseDate ? { releaseDate } : {}),
+    ...(runtime ? { runtime } : {}),
+  };
+}
+
+/**
  * TMDB provider ids the owner could stream this on in their region.
  *
  * Subscription, free and ad-supported are all "included with something you
@@ -793,6 +839,7 @@ async function syncOneTitle(
       await tx.title.update({
         where: { id: candidate.id },
         data: {
+          ...titleMetadataFromDetail(detail, MediaType.TV),
           tmdbStatus: detail.status ?? null,
           nextEpisodeAirDate,
           // Only written when TMDB actually stated it: a response that omits
@@ -841,7 +888,10 @@ async function syncOneTitle(
   };
 }
 
-/** Refresh only the included/free/ad-supported provider ids for one title. */
+/**
+ * Refresh the included/free/ad-supported provider ids for one title, plus the
+ * title-level metadata that rides along on the same request.
+ */
 async function syncProviderOnly(
   userId: string,
   region: string,
@@ -849,15 +899,16 @@ async function syncProviderOnly(
   now: Date,
   deadline: number,
 ): Promise<TitleSyncOutcome> {
-  const providers = await fetchWatchProviders(
+  const detail = await fetchDetailWithProviders(
     candidate.mediaType,
     candidate.tmdbId,
     deadline,
   );
+  const providers = detail["watch/providers"];
   // A valid empty regional result is represented by a populated results map
   // without the requested region. A missing map means the response itself was
   // incomplete, so preserve the last known cache and retry on a later run.
-  if (!providers.results) throw new Error("TMDB provider response omitted results.");
+  if (!providers?.results) throw new Error("TMDB provider response omitted results.");
   const updated = await prisma.title.updateMany({
     where: {
       id: candidate.id,
@@ -867,6 +918,15 @@ async function syncProviderOnly(
       mediaType: candidate.mediaType,
     },
     data: {
+      ...titleMetadataFromDetail(detail, candidate.mediaType),
+      // Finished, watched shows only ever come through here, so this is where
+      // a revival ("Ended" back to "Returning Series") is noticed: the new
+      // status puts the show back in the metadata queue. The next air date is
+      // left alone, because without season data this path could only clear a
+      // date the metadata path derived.
+      ...(candidate.mediaType === MediaType.TV && detail.status
+        ? { tmdbStatus: detail.status }
+        : {}),
       streamProviderIds: streamProviderIdsForRegion(providers.results, region),
       providersRegion: region,
       providersSyncedAt: now,

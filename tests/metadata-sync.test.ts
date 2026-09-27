@@ -34,6 +34,7 @@ const {
   streamProviderIdsForRegion,
   summarizeScheduledRun,
   tallySyncOutcomes,
+  titleMetadataFromDetail,
 } = await import("../src/lib/metadata-sync");
 type SyncRunResult = import("../src/lib/metadata-sync").SyncRunResult;
 
@@ -242,6 +243,70 @@ describe("seasonNumbersToRefresh", () => {
   it("does not treat an omitted compact field as evidence of historical change", () => {
     const remote = stored.map((season) => ({ season_number: season.seasonNumber }));
     assert.deepEqual(seasonNumbersToRefresh(remote, stored), [5, 6]);
+  });
+});
+
+describe("titleMetadataFromDetail", () => {
+  it("refreshes a movie's title-level fields", () => {
+    assert.deepEqual(
+      titleMetadataFromDetail(
+        {
+          id: 1,
+          overview: "A new synopsis.",
+          poster_path: "/new-poster.jpg",
+          backdrop_path: "/new-backdrop.jpg",
+          vote_average: 7.4,
+          genres: [{ name: "Drama" }, { name: "Crime" }],
+          release_date: "2026-11-20",
+          runtime: 128,
+        },
+        "MOVIE",
+      ),
+      {
+        overview: "A new synopsis.",
+        posterPath: "/new-poster.jpg",
+        backdropPath: "/new-backdrop.jpg",
+        tmdbRating: 7.4,
+        genres: ["Drama", "Crime"],
+        releaseDate: new Date("2026-11-20T00:00:00.000Z"),
+        runtime: 128,
+      },
+    );
+  });
+
+  it("never blanks a stored value with a field TMDB left empty", () => {
+    const empty = {
+      id: 1,
+      overview: "",
+      poster_path: null,
+      backdrop_path: null,
+      vote_average: 0,
+      genres: [],
+      release_date: "",
+      first_air_date: null,
+      runtime: 0,
+      episode_run_time: [],
+    };
+    assert.deepEqual(titleMetadataFromDetail(empty, "MOVIE"), {});
+    assert.deepEqual(titleMetadataFromDetail(empty, "TV"), {});
+    assert.deepEqual(titleMetadataFromDetail({ id: 1 }, "TV"), {});
+  });
+
+  it("reads TV dates and runtime from the TV fields only", () => {
+    const tv = {
+      id: 1,
+      first_air_date: "2022-02-17",
+      release_date: "1999-01-01",
+      runtime: 99,
+      episode_run_time: [],
+    };
+    assert.deepEqual(titleMetadataFromDetail(tv, "TV"), {
+      releaseDate: new Date("2022-02-17T00:00:00.000Z"),
+    });
+    assert.deepEqual(
+      titleMetadataFromDetail({ ...tv, episode_run_time: [42, 50] }, "TV"),
+      { releaseDate: new Date("2022-02-17T00:00:00.000Z"), runtime: 42 },
+    );
   });
 });
 

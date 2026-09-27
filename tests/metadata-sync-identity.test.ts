@@ -76,6 +76,8 @@ async function runSyncScenario(options: {
   mutateIdentityBeforeLock?: boolean;
   failAfterIdentityChange?: boolean;
   enforceEpisodeConstraints?: boolean;
+  /** Extra fields on TMDB's show-detail response. */
+  detail?: Record<string, unknown>;
 }) {
   const title = {
     id: "title-a",
@@ -246,6 +248,7 @@ async function runSyncScenario(options: {
             air_date: "2026-01-01",
           },
         ],
+        ...options.detail,
       });
     }
     if (path === "/3/tv/100/season/1") {
@@ -402,6 +405,29 @@ describe("TMDB episode identity sync", { concurrency: false }, () => {
     assert.equal(scenario.title.tmdbId, 200);
     assert.equal(scenario.title.mediaType, "MOVIE");
     assert.equal("metadataSyncState" in scenario.title, false);
+  });
+
+  it("refreshes title-level fields without blanking the stored runtime", async () => {
+    const scenario = await runSyncScenario({
+      localEpisodes: [],
+      remoteEpisodes: [],
+      detail: {
+        poster_path: "/fresh.jpg",
+        overview: "",
+        vote_average: 8.4,
+        genres: [{ name: "Drama" }],
+        episode_run_time: [],
+      },
+    });
+
+    const titleWrite = scenario.titleWrite as Record<string, unknown> | null;
+    assert.ok(titleWrite);
+    assert.equal(titleWrite.posterPath, "/fresh.jpg");
+    assert.equal(titleWrite.tmdbRating, 8.4);
+    assert.deepEqual(titleWrite.genres, ["Drama"]);
+    assert.equal("overview" in titleWrite, false);
+    assert.equal("runtime" in titleWrite, false);
+    assert.equal("name" in titleWrite, false);
   });
 
   it("uses the active-episode marker in badge and Upcoming SQL", async () => {
