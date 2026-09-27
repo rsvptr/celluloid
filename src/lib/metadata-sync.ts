@@ -6,7 +6,13 @@ import {
   WatchStatus,
   type Prisma,
 } from "@/generated/prisma/client";
-import type { TmdbEpisode, TmdbRegionProviders, TmdbSeasonDetails } from "@/lib/tmdb";
+import {
+  TmdbError,
+  tmdbErrorCode,
+  type TmdbEpisode,
+  type TmdbRegionProviders,
+  type TmdbSeasonDetails,
+} from "@/lib/tmdb";
 import { DEFAULT_WATCH_REGION, isWatchRegion } from "@/lib/tmdb-extras";
 import { mapLimit } from "@/lib/async";
 import { env } from "@/lib/env";
@@ -163,7 +169,7 @@ async function tmdbGet<T>(
       }
       throw err;
     }
-    if ((res.status === 429 || res.status >= 500) && attempt < 1) {
+    if (isTransientStatus(res.status) && attempt < 1) {
       const retryAfter = Number(res.headers.get("retry-after"));
       const wait = Math.min(retryAfter > 0 ? retryAfter * 1000 : 800, 3000);
       // Only sleep on a retry the budget can actually pay for; otherwise fall
@@ -173,9 +179,31 @@ async function tmdbGet<T>(
         continue;
       }
     }
-    throw new Error(`TMDB ${res.status} on ${path}`);
+    const code = tmdbErrorCode(await res.text().catch(() => ""));
+    throw new TmdbError(
+      res.status,
+      code,
+      `TMDB ${res.status}${code === null ? "" : ` (code ${code})`} on ${path}`,
+    );
   }
 }
+
+/** Rate limiting and server errors: TMDB having a bad moment, not a bad title. */
+function isTransientStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+/**
+ * TMDB rejected the token itself (401: code 7 invalid key, code 10 suspended).
+ * Every request in the run fails the same way, so it is a run-level failure.
+ */
+function isAuthFailure(err: unknown): boolean {
+  return err instanceof TmdbError && err.status === 401;
+}
+
+/** Recorded for a title TMDB answers 404 for (code 34): removed or merged. */
+const REMOVED_FROM_TMDB_MESSAGE =
+  "TMDB no longer lists this title. Use Change match to pick its current entry.";
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -266,6 +294,8 @@ interface SyncCandidate {
   seasons: StoredSeasonSummary[];
   /** Region attached to provider ids before a provider-only refresh. */
   providersRegion?: string | null;
+  /** The last recorded metadata outcome; decides whether a transient failure keeps its place. */
+  metadataSyncState?: MetadataSyncState | null;
 }
 
 /** Everything the candidate query needs beyond the sync-state split below. */
@@ -298,6 +328,7 @@ const METADATA_CANDIDATE_SELECT = {
   createdAt: true,
   mediaType: true,
   metadataSyncedAt: true,
+  metadataSyncState: true,
   seasons: {
     where: { seasonNumber: { gte: 1 } },
     orderBy: { seasonNumber: "asc" },
@@ -369,6 +400,7 @@ async function selectMetadataCandidates(
             kind: "TV_METADATA" as const,
             dueAt: r.metadataSyncedAt?.getTime() ?? 0,
             seasons: r.seasons,
+            metadataSyncState: r.metadataSyncState,
           },
         ],
   );
@@ -712,6 +744,7 @@ async function recordFailure(
   candidate: SyncCandidate,
   message: string,
   now: Date,
+  keepPlace = false,
 ): Promise<boolean> {
   // A failed old request must not mark a newly rematched title FAILED. The same
   // identity boundary guards both successful writes and their failure stamps.
@@ -727,8 +760,10 @@ async function recordFailure(
       // Stamped even on failure: the queue is ordered by this column, so
       // leaving it untouched would park a permanently broken title at the head
       // of every future run and starve everything behind it. The FAILED state
-      // and the message below are what make the failure visible instead.
-      metadataSyncedAt: now,
+      // and the message below are what make the failure visible instead. The
+      // one exception is `keepPlace`: a first transient failure, which the
+      // next run should retry first rather than days later.
+      ...(keepPlace ? {} : { metadataSyncedAt: now }),
       metadataSyncState: MetadataSyncState.FAILED,
       metadataLastError: message,
     },
@@ -750,6 +785,7 @@ async function recordProviderFailure(
   region: string,
   candidate: SyncCandidate,
   now: Date,
+  removed: boolean,
 ): Promise<boolean> {
   const updated = await prisma.title.updateMany({
     where: {
@@ -759,7 +795,18 @@ async function recordProviderFailure(
       tmdbId: candidate.tmdbId,
       mediaType: candidate.mediaType,
     },
-    data: providerFailureUpdate(region, candidate.providersRegion, now),
+    data: {
+      ...providerFailureUpdate(region, candidate.providersRegion, now),
+      // This path is the only refresh movies get, so a title TMDB has removed
+      // is recorded where Settings lists failures; otherwise nothing would
+      // ever tell the owner it needs a new match.
+      ...(removed
+        ? {
+            metadataSyncState: MetadataSyncState.FAILED,
+            metadataLastError: REMOVED_FROM_TMDB_MESSAGE,
+          }
+        : {}),
+    },
   });
   return updated.count > 0;
 }
@@ -785,8 +832,9 @@ async function syncOneTitle(
       // Running out of budget is not a season that failed to load. Treating it
       // as one would write PARTIAL and stamp metadataSyncedAt, sending a title
       // to the back of the queue with half its seasons read; abandoning the
-      // whole title leaves it where it is, first in line tomorrow.
-      if (err instanceof SyncBudgetExhaustedError) throw err;
+      // whole title leaves it where it is, first in line tomorrow. A rejected
+      // token is the whole run's failure, not this season's.
+      if (err instanceof SyncBudgetExhaustedError || isAuthFailure(err)) throw err;
       return null;
     }),
   );
@@ -930,6 +978,11 @@ async function syncProviderOnly(
       streamProviderIds: streamProviderIdsForRegion(providers.results, region),
       providersRegion: region,
       providersSyncedAt: now,
+      // No other sync path writes a movie's sync state, so a success here
+      // clears a removal recorded above once TMDB lists the title again.
+      ...(candidate.mediaType === MediaType.MOVIE
+        ? { metadataSyncState: null, metadataLastError: null }
+        : {}),
     },
   });
 
@@ -1213,12 +1266,13 @@ export async function syncUserMetadata(
 
   const candidates = await selectCandidates(userId, region, limit);
   const now = new Date();
+  let authFailure: unknown = null;
 
   const outcomes = await mapLimit<SyncCandidate, TitleSyncOutcome | null>(
     candidates,
     concurrency,
     async (candidate) => {
-      if (Date.now() >= deadline) return null;
+      if (authFailure !== null || Date.now() >= deadline) return null;
       try {
         return candidate.kind === "TV_METADATA"
           ? await syncOneTitle(userId, region, candidate, now, deadline)
@@ -1229,13 +1283,31 @@ export async function syncUserMetadata(
         // metadataSyncedAt — losing its place at the head of the queue — and
         // report a problem the owner cannot act on.
         if (err instanceof SyncBudgetExhaustedError) return null;
-        const message = errorMessage(err);
+        // A rejected token fails every title the same way. Stamping each one
+        // FAILED would bury the single real cause under a list of identical
+        // rows and send the whole batch to the back of the queue, so the run
+        // stops starting titles and reports it once, below.
+        if (isAuthFailure(err)) {
+          authFailure ??= err;
+          return null;
+        }
+        const removed = err instanceof TmdbError && err.status === 404;
+        const message = removed ? REMOVED_FROM_TMDB_MESSAGE : errorMessage(err);
         console.error(
           `metadata sync failed (titleId=${candidate.id}, tmdbId=${candidate.tmdbId}, kind=${candidate.kind}):`,
           err,
         );
         let identityStillCurrent = true;
         if (candidate.kind === "TV_METADATA") {
+          // A 429 or 5xx that outlasted its retry is TMDB having a bad moment,
+          // so the first one keeps the title's place and the next run tries it
+          // first, with the failure still recorded where Settings shows it. A
+          // title that had already failed is stamped as usual, so a title TMDB
+          // keeps rejecting can't hold the head of the queue night after night.
+          const keepPlace =
+            err instanceof TmdbError &&
+            isTransientStatus(err.status) &&
+            candidate.metadataSyncState !== MetadataSyncState.FAILED;
           // Recording the failure must not itself abort the run — if the database
           // is the thing that is unwell, the next title will report it too.
           identityStillCurrent = await recordFailure(
@@ -1243,6 +1315,7 @@ export async function syncUserMetadata(
             candidate,
             message,
             new Date(),
+            keepPlace,
           ).catch((writeErr) => {
             console.error(
               `metadata sync could not record failure (titleId=${candidate.id}):`,
@@ -1251,14 +1324,18 @@ export async function syncUserMetadata(
             return true;
           });
         } else {
-          // Provider failures do not make the title metadata itself FAILED,
-          // but they still need an attempt stamp or one broken lookup pins the
-          // provider queue forever and starves every title behind it.
+          // Provider failures still need an attempt stamp or one broken lookup
+          // pins the provider queue forever and starves every title behind it.
+          // Unlike the metadata path, a transient failure is stamped too: this
+          // path has no failure state to show a waiting title by, so keeping
+          // its place would hide it at the head of the queue. Only a removal
+          // is recorded.
           identityStillCurrent = await recordProviderFailure(
             userId,
             region,
             candidate,
             new Date(),
+            removed,
           ).catch((writeErr) => {
             console.error(
               `metadata sync could not record provider failure (titleId=${candidate.id}):`,
@@ -1285,6 +1362,11 @@ export async function syncUserMetadata(
       }
     },
   );
+
+  // Rethrown only once the titles already in flight have settled, so nothing
+  // is still writing when runScheduledSync records it as this account's
+  // runError.
+  if (authFailure !== null) throw authFailure;
 
   return tallySyncOutcomes(userId, candidates.length, outcomes);
 }

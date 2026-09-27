@@ -124,6 +124,8 @@ describe("provider-path metadata refresh", { concurrency: false }, () => {
     assert.equal(data.tmdbStatus, "Returning Series");
     assert.equal("nextEpisodeAirDate" in data, false);
     assert.equal("runtime" in data, false);
+    // TV sync state belongs to the metadata path; a provider refresh leaves it.
+    assert.equal("metadataSyncState" in data, false);
     assert.deepEqual(data.streamProviderIds, []);
   });
 });

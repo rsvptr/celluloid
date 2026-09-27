@@ -31,6 +31,33 @@ function getToken(): string {
 
 type FetchInit = RequestInit & { next?: { revalidate?: number } };
 
+/**
+ * A non-2xx TMDB response. `code` is TMDB's own `status_code` from the body
+ * (7 invalid key, 34 not found, 25 rate limited, ...), or null when the body
+ * carried none, so callers can tell a bad token from a removed title from a
+ * busy server.
+ */
+export class TmdbError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: number | null,
+    message: string,
+  ) {
+    super(message);
+    this.name = "TmdbError";
+  }
+}
+
+/** TMDB's `status_code` from an error body, or null. */
+export function tmdbErrorCode(body: string): number | null {
+  try {
+    const code = (JSON.parse(body) as { status_code?: unknown }).status_code;
+    return Number.isInteger(code) ? (code as number) : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface TmdbOptions {
   /** Next.js cache revalidation seconds (ignored outside Next). */
   revalidate?: number;
@@ -126,7 +153,11 @@ async function tmdb<T>(
     }
 
     const body = await res.text().catch(() => "");
-    throw new Error(`TMDB ${res.status} on ${path}: ${body.slice(0, 200)}`);
+    throw new TmdbError(
+      res.status,
+      tmdbErrorCode(body),
+      `TMDB ${res.status} on ${path}: ${body.slice(0, 200)}`,
+    );
   }
 }
 
