@@ -382,6 +382,8 @@ export function SeasonTracker({
               className="overflow-hidden rounded-xl bg-surface ring-1 ring-line"
             >
               <div className="flex items-center gap-3 px-4 py-3">
+                {/* A season TMDB lists with no episodes yet has nothing to
+                    expand or mark: say so, and offer neither (JK-31). */}
                 <button
                   onClick={() =>
                     setOpen((o) => ({
@@ -389,12 +391,17 @@ export function SeasonTracker({
                       [season.seasonNumber]: !isOpen,
                     }))
                   }
-                  aria-expanded={isOpen}
+                  disabled={sTotal === 0}
+                  aria-expanded={sTotal > 0 ? isOpen : undefined}
                   className="flex min-h-11 flex-1 items-center gap-3 rounded-md text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 sm:min-h-0"
                 >
                   <ChevronDown
                     size={16}
-                    className={cn("text-muted transition-transform", isOpen && "rotate-180")}
+                    className={cn(
+                      "text-muted transition-transform",
+                      isOpen && "rotate-180",
+                      sTotal === 0 && "invisible",
+                    )}
                   />
                   <span className="font-medium">
                     {season.name && season.name !== `Season ${season.seasonNumber}`
@@ -402,23 +409,25 @@ export function SeasonTracker({
                       : `Season ${season.seasonNumber}`}
                   </span>
                   <span className="text-xs text-muted">
-                    {sWatched}/{sTotal}
+                    {sTotal === 0 ? "No episodes announced yet" : `${sWatched}/${sTotal}`}
                   </span>
                 </button>
-                <button
-                  onClick={() => void requestSeasonToggle(season, !sComplete)}
-                  className={cn(
-                    "focus-ring flex min-h-11 shrink-0 items-center justify-center rounded-md px-2 py-1 text-xs ring-1 press sm:min-h-0",
-                    sComplete
-                      ? "bg-status-watched-subtle text-status-watched-text ring-status-watched-border"
-                      : "bg-surface-2 text-muted ring-line hover:text-foreground",
-                  )}
-                >
-                  {sComplete ? "Mark season unwatched" : "Mark season watched"}
-                </button>
+                {sTotal > 0 && (
+                  <button
+                    onClick={() => void requestSeasonToggle(season, !sComplete)}
+                    className={cn(
+                      "focus-ring flex min-h-11 shrink-0 items-center justify-center rounded-md px-2 py-1 text-xs ring-1 press sm:min-h-0",
+                      sComplete
+                        ? "bg-status-watched-subtle text-status-watched-text ring-status-watched-border"
+                        : "bg-surface-2 text-muted ring-line hover:text-foreground",
+                    )}
+                  >
+                    {sComplete ? "Mark season unwatched" : "Mark season watched"}
+                  </button>
+                )}
               </div>
 
-              {isOpen && (
+              {isOpen && sTotal > 0 && (
                 <ul className="divide-y divide-line border-t border-line">
                   {season.episodes.map((ep) => {
                     const isWatched = watched[ep.id];

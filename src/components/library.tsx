@@ -365,8 +365,7 @@ export function Library({
     };
   }, []);
 
-  const hasFilters =
-    query !== "" ||
+  const filtersBesidesSearch =
     type !== "all" ||
     status !== "all" ||
     language !== "all" ||
@@ -375,6 +374,7 @@ export function Library({
     rating !== "all" ||
     onlyUnmatched ||
     onlyOnServices;
+  const hasFilters = query !== "" || filtersBesidesSearch;
 
   // Active advanced facets, one removable chip each. Excludes type (its own
   // quick-filter) and sort (ordering, not a filter), so the chip set and the
@@ -641,6 +641,11 @@ export function Library({
     return <TrashView trashed={trashed} onExit={() => setTrashMode(false)} />;
   }
 
+  // First run: nothing to filter, select or view, so the filter and utility
+  // rows would be clutter (JK-31). With titles in Trash the rows stay, since
+  // Trash is reached through the Filters panel.
+  const firstRun = items.length === 0 && trashedCount === 0;
+
   return (
     <div className="flex flex-col gap-5 pb-24">
       {/* Toolbar */}
@@ -682,7 +687,7 @@ export function Library({
 
         {/* Row 2 — contextual: a type quick-filter and the single entry point to
             the advanced facets, on every width. */}
-        <div className="flex flex-wrap items-center gap-2">
+        <div className={cn("flex flex-wrap items-center gap-2", firstRun && "hidden")}>
           <div
             role="group"
             aria-label="Filter by type"
@@ -931,7 +936,7 @@ export function Library({
 
         {/* Row 3 — utilities: de-emphasized selection, discovery, and view
             controls, right-aligned in one compact cluster. */}
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        <div className={cn("flex flex-wrap items-center justify-end gap-2", firstRun && "hidden")}>
           <button
             onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}
             aria-label="Select titles"
@@ -949,15 +954,18 @@ export function Library({
           </button>
           {!selectMode && items.length > 0 && (
             <>
-              <button
-                onClick={surprise}
-                title="Pick something random to watch (prefers your watchlist)"
-                aria-label="Surprise me"
-                className="focus-ring flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line press hover:text-foreground sm:min-h-8 sm:min-w-0 sm:justify-start"
-              >
-                <Dices size={15} />
-                <span className="hidden sm:inline">Surprise</span>
-              </button>
+              {/* Nothing to pick from an empty view (JK-31). */}
+              {filtered.length > 0 && (
+                <button
+                  onClick={surprise}
+                  title="Pick something random to watch (prefers your watchlist)"
+                  aria-label="Surprise me"
+                  className="focus-ring flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line press hover:text-foreground sm:min-h-8 sm:min-w-0 sm:justify-start"
+                >
+                  <Dices size={15} />
+                  <span className="hidden sm:inline">Surprise</span>
+                </button>
+              )}
               <button
                 onClick={() => openShare([])}
                 title="Share your library"
@@ -1019,6 +1027,9 @@ export function Library({
       {filtered.length === 0 ? (
         <EmptyState
           hasItems={items.length > 0}
+          query={query}
+          searchOnly={query !== "" && !filtersBesidesSearch}
+          onClearSearch={() => setQuery("")}
           onClear={clearFilters}
           onlyOnServices={onlyOnServices}
           hasConfiguredProviders={myProviders.length > 0}
@@ -1580,6 +1591,9 @@ const ListRow = memo(function ListRow({
 
 function EmptyState({
   hasItems,
+  query,
+  searchOnly,
+  onClearSearch,
   onClear,
   onlyOnServices,
   hasConfiguredProviders,
@@ -1587,6 +1601,10 @@ function EmptyState({
   uncheckedServiceCount,
 }: {
   hasItems: boolean;
+  query: string;
+  /** The search is the only thing narrowing the view. */
+  searchOnly: boolean;
+  onClearSearch: () => void;
   onClear: () => void;
   onlyOnServices: boolean;
   hasConfiguredProviders: boolean;
@@ -1630,18 +1648,31 @@ function EmptyState({
   }
 
   return (
-    <div className="flex flex-col items-center justify-center gap-3 rounded-[var(--radius-card)] border border-dashed border-line py-20 text-center">
-      <p className="text-sm text-muted">
-        {hasItems ? "No titles match your filters." : "Your library is empty."}
-      </p>
+    <div className="flex flex-col items-center justify-center gap-3 rounded-[var(--radius-card)] border border-dashed border-line px-5 py-20 text-center">
+      {/* A no-match state names the query; a first-run state says what the
+          place is for (JK-31). */}
+      {hasItems ? (
+        <p className="max-w-full break-words text-sm text-muted">
+          {query.trim()
+            ? `No titles match “${query.trim()}”${searchOnly ? "." : " with these filters."}`
+            : "No titles match your filters."}
+        </p>
+      ) : (
+        <div>
+          <p className="text-sm font-medium text-foreground">Your library is empty.</p>
+          <p className="mt-1 max-w-sm text-sm text-muted">
+            Titles you add show up here with your progress and ratings.
+          </p>
+        </div>
+      )}
       {hasItems ? (
         <div className="flex items-center gap-1">
           <button
             type="button"
-            onClick={onClear}
+            onClick={searchOnly ? onClearSearch : onClear}
             className="focus-ring flex min-h-11 items-center justify-center rounded-lg px-2 py-1.5 text-sm font-medium text-brand hover:underline sm:min-h-0"
           >
-            Try clearing filters
+            {searchOnly ? "Clear search" : "Clear filters"}
           </button>
           <span className="text-faint">·</span>
           <Link
