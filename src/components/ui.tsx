@@ -34,14 +34,18 @@ export interface ButtonProps
 }
 
 // React 19: `ref` is a regular prop — no forwardRef wrapper needed.
+// type defaults to "button" (a native <button> defaults to "submit"), so a
+// Button inside a <form> only submits it when it passes type="submit".
 export function Button({
   className,
   variant = "secondary",
   size = "md",
+  type = "button",
   ...props
 }: ButtonProps) {
   return (
     <button
+      type={type}
       className={cn(buttonBase, buttonVariants[variant], buttonSizes[size], className)}
       {...props}
     />
