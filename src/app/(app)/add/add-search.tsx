@@ -8,6 +8,7 @@ import type { SearchResult } from "@/app/api/search/route";
 import { Spinner } from "@/components/ui";
 import { TmdbSearch } from "@/components/tmdb-search";
 import { addFromTmdb } from "@/lib/actions";
+import { nameWithTypeAndYear } from "@/lib/format";
 
 type AddState =
   | { kind: "idle" }
@@ -63,7 +64,15 @@ export function AddSearch({ initialQuery }: { initialQuery?: string }) {
         renderAction={(r) => {
           const key = `${r.mediaType}:${r.tmdbId}`;
           const state = states[key] ?? { kind: "idle" };
-          return <AddButton name={r.name} state={state} onAdd={() => add(r)} />;
+          // Type and year in the accessible names: a show and a movie can
+          // share a title (JK-21).
+          return (
+            <AddButton
+              name={nameWithTypeAndYear(r.name, r.mediaType, r.year)}
+              state={state}
+              onAdd={() => add(r)}
+            />
+          );
         }}
       />
     </div>

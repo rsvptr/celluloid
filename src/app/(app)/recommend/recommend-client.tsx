@@ -27,7 +27,7 @@ import { setRecommendModel } from "@/lib/settings-actions";
 import { suppressSuggestion, unsuppressSuggestion } from "@/lib/suppression-actions";
 import { SuppressionsPanel } from "./suppressions-panel";
 import { REC_ERAS, REC_MODELS, type RecEraId } from "@/lib/models";
-import { languageName } from "@/lib/format";
+import { languageName, nameWithTypeAndYear } from "@/lib/format";
 import { undoToast } from "@/lib/undo-toast";
 import { cn } from "@/lib/utils";
 import {
@@ -1107,7 +1107,7 @@ function RecCard({
             <Link
               ref={resultRef}
               href={`/title/${state.id}`}
-              aria-label={`View ${rec.title} in your watchlist`}
+              aria-label={`View ${nameWithTypeAndYear(rec.title, rec.mediaType, rec.year)} in your watchlist`}
               className="focus-ring flex min-h-11 items-center gap-1.5 rounded-lg bg-emerald-500/15 px-3 py-2 text-sm font-medium text-emerald-300 ring-1 ring-emerald-500/30 sm:min-h-0"
             >
               <Check size={15} aria-hidden="true" /> {state.existing ? "In library" : "Added"}
@@ -1116,7 +1116,7 @@ function RecCard({
             <button
               type="button"
               disabled={state.kind === "adding"}
-              aria-label={`Add ${rec.title} to your watchlist`}
+              aria-label={`Add ${nameWithTypeAndYear(rec.title, rec.mediaType, rec.year)} to your watchlist`}
               onClick={() => {
                 focusResult.current = true;
                 start(async () => {

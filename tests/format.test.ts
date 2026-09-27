@@ -4,6 +4,7 @@ import {
   airedAgoText,
   fullDate,
   languageName,
+  nameWithTypeAndYear,
   progressPct,
   runtimeText,
   tvStatusLabel,
@@ -75,5 +76,16 @@ describe("tvStatusLabel (JK-32)", () => {
     assert.equal(tvStatusLabel("Canceled"), "Cancelled");
     assert.equal(tvStatusLabel("In Production"), "In production");
     assert.equal(tvStatusLabel("Ended"), "Ended");
+  });
+});
+
+describe("nameWithTypeAndYear (JK-21)", () => {
+  it("tells a show from a same-named movie", () => {
+    assert.equal(nameWithTypeAndYear("The Long, Hot Summer", "tv", "1965"), "The Long, Hot Summer (TV, 1965)");
+    assert.equal(nameWithTypeAndYear("The Long, Hot Summer", "movie", 1958), "The Long, Hot Summer (Movie, 1958)");
+  });
+  it("drops a missing year", () => {
+    assert.equal(nameWithTypeAndYear("Untitled", "movie", ""), "Untitled (Movie)");
+    assert.equal(nameWithTypeAndYear("Untitled", "tv", null), "Untitled (TV)");
   });
 });

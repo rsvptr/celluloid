@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Check, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Spinner } from "@/components/ui";
+import { nameWithTypeAndYear } from "@/lib/format";
 import { addFromTmdb } from "@/lib/actions";
 import { saveWatchRegionPreference, setWatchRegion } from "@/lib/region-actions";
 import { regionName, WATCH_REGIONS } from "@/lib/tmdb-extras";
@@ -14,11 +15,13 @@ export function QuickAdd({
   tmdbId,
   mediaType,
   name,
+  year,
   existingId,
 }: {
   tmdbId: number;
   mediaType: "movie" | "tv";
   name: string;
+  year?: number | null;
   existingId?: string;
 }) {
   const [state, setState] = useState<
@@ -51,7 +54,7 @@ export function QuickAdd({
     <button
       type="button"
       disabled={state.kind === "adding"}
-      aria-label={`Add ${name} to your watchlist`}
+      aria-label={`Add ${nameWithTypeAndYear(name, mediaType, year)} to your watchlist`}
       onClick={() => {
         focusResult.current = true;
         start(async () => {

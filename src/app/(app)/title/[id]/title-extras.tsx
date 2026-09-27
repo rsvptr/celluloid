@@ -289,6 +289,7 @@ export async function TitleExtras({
                     tmdbId={p.id}
                     mediaType={kind}
                     name={name}
+                    year={year}
                     existingId={existingId}
                   />
                 </div>

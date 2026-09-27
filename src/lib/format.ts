@@ -44,6 +44,20 @@ export function mediaTypeLabel(t: MediaType): string {
 }
 
 /**
+ * "The Long, Hot Summer (TV, 1965)": a TMDB result's name with its type and
+ * year, for accessible names that must tell a show from a same-named movie
+ * (JK-21).
+ */
+export function nameWithTypeAndYear(
+  name: string,
+  mediaType: "movie" | "tv",
+  year?: string | number | null,
+): string {
+  const type = mediaType === "tv" ? "TV" : "Movie";
+  return `${name} (${year ? `${type}, ${year}` : type})`;
+}
+
+/**
  * TMDB's TV lifecycle string, softened for display. "Ended" (concluded its
  * run) and "Canceled" (axed) are deliberately kept distinct — whether a show
  * got a real ending is exactly what a viewer deciding to start it wants to
