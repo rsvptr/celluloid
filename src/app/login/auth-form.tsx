@@ -159,11 +159,9 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
 
   if (isTwoFa) {
     return (
-      <motion.div
-        initial={{ opacity: 0, scale: 0.98 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
-      >
+      // CSS entrance, so the code form can't be left invisible by a failed
+      // Motion feature chunk.
+      <div className="motion-safe:animate-[enter-scale_250ms_cubic-bezier(0.16,1,0.3,1)]">
         <Card className="p-6 lg:p-7">
           <form onSubmit={onSubmit} className="flex flex-col gap-4">
             <div>
@@ -214,7 +212,7 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
             </button>
           </form>
         </Card>
-      </motion.div>
+      </div>
     );
   }
 
@@ -239,7 +237,11 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
           {isSignup ? (
             <motion.div
               key="name"
-              initial={{ opacity: 0, height: 0 }}
+              // The reveal is CSS (collapse-in), so the fields are visible even
+              // if Motion's features never load; Motion only runs the exit (and
+              // a reopen mid-exit). Without features it unmounts at once, so
+              // the closed fields are never focusable.
+              initial={false}
               animate={{ opacity: 1, height: "auto" }}
               exit={{ opacity: 0, height: 0 }}
               transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
@@ -247,8 +249,9 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
               // but that clips the Input's focus ring (a box-shadow). The inner
               // padding gives the ring room inside the clip box; the negative
               // margin cancels it in the layout, keeping field rhythm identical.
-              className="-m-1 overflow-hidden"
+              className="-m-1 grid grid-rows-[1fr] overflow-hidden motion-safe:animate-[collapse-in_220ms_cubic-bezier(0.16,1,0.3,1)]"
             >
+              <div className="min-h-0">
               <div className="flex flex-col gap-4 p-1">
                 <Field label="Name" htmlFor="login-name">
                   <Input
@@ -277,6 +280,7 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
                     Use the code you received with your invitation.
                   </p>
                 </Field>
+              </div>
               </div>
             </motion.div>
           ) : null}

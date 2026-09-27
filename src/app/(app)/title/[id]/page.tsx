@@ -18,7 +18,6 @@ import {
   mediaTypeLabel,
   runtimeText,
 } from "@/lib/format";
-import { FadeIn } from "@/components/motion";
 import { MatchControls } from "@/components/match-controls";
 import { TitleControls } from "./title-controls";
 import { SeasonTracker } from "./season-tracker";
@@ -131,7 +130,7 @@ export default async function TitlePage({
           </div>
         )}
         <div className="relative flex flex-col gap-5 p-5 sm:flex-row sm:p-6">
-          <FadeIn className="w-32 shrink-0 sm:w-44" y={12}>
+          <div className="w-32 shrink-0 sm:w-44">
             <Poster
               path={title.posterPath}
               name={title.name}
@@ -141,8 +140,8 @@ export default async function TitlePage({
               sizes="(max-width: 640px) 128px, 176px"
               priority
             />
-          </FadeIn>
-          <FadeIn className="flex flex-col gap-3" delay={0.08}>
+          </div>
+          <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-2">
               <Badge className="bg-surface-2 text-muted ring-line">
                 {mediaTypeLabel(title.mediaType)}
@@ -216,7 +215,7 @@ export default async function TitlePage({
                 name={title.name}
               />
             </div>
-          </FadeIn>
+          </div>
         </div>
       </div>
 

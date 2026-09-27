@@ -779,13 +779,20 @@ export function Library({
             <motion.div
               key="advanced-filters"
               id="library-advanced-filters"
-              initial={{ opacity: 0, height: 0 }}
+              // The reveal is CSS (collapse-in), so the open panel is visible
+              // even if Motion's features never load; Motion only runs the exit
+              // (and a reopen mid-exit). Without features it unmounts at once,
+              // so a closed panel is never focusable. -mt-4 here and mt-4 on
+              // the Card cancel the parent's gap-4, so the collapsed panel
+              // takes no space and the gap never jumps.
+              initial={false}
               animate={{ opacity: 1, height: "auto" }}
               exit={{ opacity: 0, height: 0 }}
               transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: EASE_OUT }}
-              className="overflow-hidden"
+              className="-mt-4 grid grid-rows-[1fr] overflow-hidden motion-safe:animate-[collapse-in_200ms_cubic-bezier(0.16,1,0.3,1)]"
             >
-              <Card variant="inset" className="flex flex-col gap-3 p-3">
+              <div className="min-h-0">
+              <Card variant="inset" className="mt-4 flex flex-col gap-3 p-3">
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                   <Select
                     value={status}
@@ -911,6 +918,7 @@ export function Library({
                   </div>
                 )}
               </Card>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
