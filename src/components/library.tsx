@@ -152,7 +152,7 @@ export function libraryFilterKey(filters: LibraryFilters): string {
 }
 
 const addTitleButtonClass =
-  "inline-flex min-h-11 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg brand-gradient px-4 text-sm font-semibold text-[#04121c] shadow-sm shadow-brand/20 transition-colors hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 sm:min-h-10";
+  "inline-flex min-h-11 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg brand-gradient px-4 text-sm font-semibold text-[#04121c] shadow-sm shadow-brand/20 press hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 sm:min-h-10";
 
 // Chrome moves focus to <body> the instant a focused control becomes
 // `disabled`, so every bulk and Trash action left the keyboard back at the skip
@@ -938,7 +938,7 @@ export function Library({
             aria-pressed={selectMode}
             title="Select titles"
             className={cn(
-              "focus-ring flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm ring-1 transition-colors sm:min-h-8 sm:min-w-0 sm:justify-start",
+              "focus-ring flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm ring-1 press sm:min-h-8 sm:min-w-0 sm:justify-start",
               selectMode
                 ? "bg-brand/15 text-brand ring-brand/40"
                 : "text-muted ring-line hover:text-foreground",
@@ -953,7 +953,7 @@ export function Library({
                 onClick={surprise}
                 title="Pick something random to watch (prefers your watchlist)"
                 aria-label="Surprise me"
-                className="focus-ring flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground sm:min-h-8 sm:min-w-0 sm:justify-start"
+                className="focus-ring flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line press hover:text-foreground sm:min-h-8 sm:min-w-0 sm:justify-start"
               >
                 <Dices size={15} />
                 <span className="hidden sm:inline">Surprise</span>
@@ -962,7 +962,7 @@ export function Library({
                 onClick={() => openShare([])}
                 title="Share your library"
                 aria-label="Share your library"
-                className="focus-ring flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground sm:min-h-8 sm:min-w-0 sm:justify-start"
+                className="focus-ring flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line press hover:text-foreground sm:min-h-8 sm:min-w-0 sm:justify-start"
               >
                 <Share2 size={15} />
                 <span className="hidden sm:inline">Share</span>
@@ -1266,7 +1266,7 @@ function BulkBar({
               onClick={() => setShowMore((v) => !v)}
               aria-expanded={showMore}
               aria-controls="bulk-more-actions"
-              className="focus-ring flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground sm:hidden"
+              className="focus-ring flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-sm text-muted ring-1 ring-line press hover:text-foreground sm:hidden"
             >
               More
               <ChevronDown
@@ -1446,7 +1446,7 @@ function ViewToggle({
       title={label}
       aria-pressed={active}
       className={cn(
-        "focus-ring flex h-11 w-11 items-center justify-center rounded-md transition-colors sm:h-7 sm:w-7",
+        "focus-ring flex h-11 w-11 items-center justify-center rounded-md press sm:h-7 sm:w-7",
         active ? "bg-surface text-foreground" : "text-muted hover:text-foreground",
       )}
     >
@@ -1551,7 +1551,7 @@ const ListRow = memo(function ListRow({
         onClick={() => onToggle(item.id)}
         aria-pressed={selected}
         className={cn(
-          "cv-auto focus-ring flex items-center gap-3 px-3 py-2.5 text-left transition-colors",
+          "cv-auto focus-ring flex items-center gap-3 px-3 py-2.5 text-left transition-colors active:bg-surface-2/60 active:transition-none",
           selected ? "bg-brand/10" : "bg-surface hover:bg-surface-2/50",
         )}
       >
@@ -1571,7 +1571,7 @@ const ListRow = memo(function ListRow({
   return (
     <IntentLink
       href={`/title/${item.id}`}
-      className="cv-auto focus-ring flex items-center gap-3 bg-surface px-3 py-2.5 transition-colors hover:bg-surface-2/50"
+      className="cv-auto focus-ring flex items-center gap-3 bg-surface px-3 py-2.5 transition-colors hover:bg-surface-2/50 active:bg-surface-2/60 active:transition-none"
     >
       {inner}
     </IntentLink>

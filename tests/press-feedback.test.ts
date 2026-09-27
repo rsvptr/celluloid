@@ -74,4 +74,35 @@ describe("press feedback (EM-01)", () => {
     assert.match(row, /(^| )active:bg-surface-2\/60( |$)/);
     assert.doesNotMatch(row, /(^| )press( |$)/);
   });
+
+  it("presses the rest of the library toolbar and Add title", async () => {
+    const library = await source("components/library.tsx");
+    const classOf = (anchor: string) => {
+      const at = library.indexOf(anchor);
+      assert.notEqual(at, -1, anchor);
+      return library.slice(at).match(/"(focus-ring [^"]*|inline-flex [^"]*)"/)?.[1] ?? "";
+    };
+    for (const anchor of [
+      "const addTitleButtonClass",
+      'aria-label="Select titles"',
+      'aria-label="Surprise me"',
+      'aria-label="Share your library"',
+      'aria-controls="bulk-more-actions"',
+      "function ViewToggle(",
+    ]) {
+      const classes = classOf(anchor);
+      assert.match(classes, /(^| )press( |$)/, anchor);
+      assert.doesNotMatch(classes, /(^| )transition-colors( |$)/, anchor);
+    }
+  });
+
+  it("tints library list rows instantly instead of scaling them", async () => {
+    const library = await source("components/library.tsx");
+    const rows = [...library.matchAll(/"(cv-auto focus-ring flex items-center gap-3 [^"]*)"/g)];
+    assert.equal(rows.length, 2);
+    for (const [, row] of rows) {
+      assert.match(row, /(^| )active:bg-surface-2\/60 active:transition-none( |$)/);
+      assert.doesNotMatch(row, /(^| )press( |$)/);
+    }
+  });
 });
