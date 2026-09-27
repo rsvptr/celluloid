@@ -446,7 +446,7 @@ export function SeasonTracker({
                               "flex h-5 w-5 shrink-0 items-center justify-center rounded-md ring-1 transition-colors",
                               isWatched
                                 ? "brand-gradient ring-transparent"
-                                : "bg-surface-2 ring-line",
+                                : "bg-surface-2 ring-line-strong",
                             )}
                           >
                             {isWatched && (

@@ -118,6 +118,11 @@ export function TitleControls({
   // This transient flag distinguishes that navigation from a pointer/native-
   // picker choice, which should retain immediate-save behaviour.
   const statusNavigationRef = useRef(false);
+  // True while an arrow-key pick is only staged: it shows in the select but
+  // stays out of latestImmediateRef until Enter or blur commits it. Written
+  // straight into the queue, a save already in flight (a rating click, say)
+  // sent it on its next pass without that confirmation.
+  const statusStagedRef = useRef(false);
   const [localStatus, setLocalStatus] = useState(status);
   const [localRating, setLocalRating] = useState(rating);
   const [localFav, setLocalFav] = useState(favorite);
@@ -173,7 +178,8 @@ export function TitleControls({
     }
     lastSyncedRef.current = { status, rating, favorite, watchedAt };
     const wa = dayInZone(watchedAt, timeZone);
-    setLocalStatus(status);
+    // Keep a staged arrow-key pick on screen; Enter or blur still commits it.
+    if (!statusStagedRef.current) setLocalStatus(status);
     setLocalRating(rating);
     setLocalFav(favorite);
     setLocalWatchedAt(wa);
@@ -440,7 +446,15 @@ export function TitleControls({
               Record a viewing. Logging again on a watched title counts as a
               rewatch.
             </Dialog.Description>
-            <div className="mt-4 flex flex-col gap-3">
+            <form
+              method="post"
+              className="mt-4 flex flex-col gap-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (isLogging) return;
+                submitLog();
+              }}
+            >
               <div className="flex flex-col gap-1.5">
                 <label
                   htmlFor={logDateId}
@@ -478,15 +492,15 @@ export function TitleControls({
                   </Button>
                 </Dialog.Close>
                 <Button
+                  type="submit"
                   variant="primary"
                   size="sm"
                   disabled={isLogging || !logDate}
-                  onClick={submitLog}
                 >
                   {isLogging ? "Logging…" : "Log watch"}
                 </Button>
               </div>
-            </div>
+            </form>
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
@@ -498,15 +512,19 @@ export function TitleControls({
           onChange={(e) => {
             const v = e.target.value as WatchStatus;
             setLocalStatus(v);
-            latestImmediateRef.current.status = v;
             if (statusNavigationRef.current) {
               statusNavigationRef.current = false;
+              statusStagedRef.current = true;
               return;
             }
+            statusStagedRef.current = false;
+            latestImmediateRef.current.status = v;
             commitImmediate();
           }}
-          onBlur={() => {
+          onBlur={(e) => {
             statusNavigationRef.current = false;
+            statusStagedRef.current = false;
+            latestImmediateRef.current.status = e.currentTarget.value as WatchStatus;
             commitImmediate();
           }}
           onKeyDown={(e) => {
@@ -516,6 +534,8 @@ export function TitleControls({
             }
             if (e.key === "Enter") {
               statusNavigationRef.current = false;
+              statusStagedRef.current = false;
+              latestImmediateRef.current.status = e.currentTarget.value as WatchStatus;
               commitImmediate();
             }
           }}

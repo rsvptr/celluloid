@@ -316,10 +316,14 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
               onKeyDown={(e) => setCapsLockOn(e.getModifierState("CapsLock"))}
               onKeyUp={(e) => setCapsLockOn(e.getModifierState("CapsLock"))}
               onBlur={() => setCapsLockOn(false)}
-              placeholder={isSignup ? "At least 10 characters" : "••••••••"}
+              placeholder={isSignup ? undefined : "••••••••"}
               autoComplete={isSignup ? "new-password" : "current-password"}
               autoCapitalize="none"
-              aria-describedby={capsLockOn ? "login-caps-lock" : undefined}
+              aria-describedby={
+                [isSignup && "login-password-help", capsLockOn && "login-caps-lock"]
+                  .filter(Boolean)
+                  .join(" ") || undefined
+              }
               className="h-11 pr-12 sm:h-11"
               required
             />
@@ -337,6 +341,11 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
               )}
             </button>
           </div>
+          {isSignup ? (
+            <p id="login-password-help" className="text-xs text-faint">
+              Use at least 10 characters.
+            </p>
+          ) : null}
           {capsLockOn ? (
             <p id="login-caps-lock" role="status" className="text-xs text-warning">
               Caps Lock is on.
