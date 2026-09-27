@@ -52,3 +52,53 @@ jobs:
           ENCRYPTION_KEY: ci-placeholder-encryption-key-not-real-0000
           NEXT_PUBLIC_SITE_URL: http://localhost:3000
           TMDB_ACCESS_TOKEN: ci-placeholder-tmdb-token-not-real-0000
+
+  # Fails when prisma/migrations and schema.prisma disagree, e.g. a schema edit
+  # without its migration or a hand-edited migration. Replays the migration
+  # history into a throwaway Postgres, then diffs that database against the
+  # schema. No shadow database is involved.
+  schema-drift:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: celluloid
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d celluloid"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Both names point at the service container, so prisma.config.ts resolves
+      # to it whatever else is set.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/celluloid
+      DIRECT_URL: postgresql://postgres:postgres@localhost:5432/celluloid
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply every migration to an empty database
+        run: npx prisma migrate deploy
+
+      # --exit-code: 0 when identical, 2 when they differ, 1 on error. The Tag
+      # (userId, lower(name)) index and the nine CHECK constraints exist only in
+      # migration SQL. They are not drift: Prisma's schema engine flags
+      # expression indexes and CHECK constraints as needing "additional setup"
+      # and leaves them out of the comparison, which is also why no migration
+      # generated since they were added has tried to drop them.
+      - name: Fail on drift between the migrated database and schema.prisma
+        run: npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
