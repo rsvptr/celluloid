@@ -473,6 +473,7 @@ export function SeasonTracker({
                               "min-w-0 flex-1 truncate text-sm",
                               isWatched ? "text-muted" : "text-foreground",
                             )}
+                            title={ep.name ?? undefined}
                           >
                             {ep.name ?? `Episode ${ep.episodeNumber}`}
                           </span>

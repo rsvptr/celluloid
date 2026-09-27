@@ -1018,7 +1018,9 @@ function ShareRow({
       <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center">
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            <p className="truncate text-sm font-medium">{s.name ?? "Untitled list"}</p>
+            <p className="truncate text-sm font-medium" title={s.name ?? undefined}>
+              {s.name ?? "Untitled list"}
+            </p>
             <span
               className={
                 active
@@ -1167,7 +1169,7 @@ function ShareRow({
                         key={t.id}
                         className="flex items-center gap-2 px-2.5 py-1.5 text-xs"
                       >
-                        <span className="min-w-0 flex-1 truncate text-foreground/90">
+                        <span className="min-w-0 flex-1 truncate text-foreground/90" title={t.name}>
                           {t.name}
                         </span>
                         <span className="shrink-0 text-faint">

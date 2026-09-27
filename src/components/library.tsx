@@ -1512,7 +1512,9 @@ const ListRow = memo(function ListRow({
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="truncate text-sm font-medium">{item.name}</span>
+          <span className="truncate text-sm font-medium" title={item.name}>
+            {item.name}
+          </span>
           {item.favorite && (
             <span>
               <Heart size={12} aria-hidden="true" className="fill-rose-400 text-rose-400" />
@@ -1531,6 +1533,7 @@ const ListRow = memo(function ListRow({
             {shownTags.map((t) => (
               <span
                 key={t}
+                title={t}
                 className={cn(
                   // inline-block, not inline-flex: `truncate` needs a block
                   // formatting context for its ellipsis to actually render.
@@ -1899,7 +1902,9 @@ function TrashRow({
         />
       </div>
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-medium">{item.name}</div>
+        <div className="truncate text-sm font-medium" title={item.name}>
+          {item.name}
+        </div>
         <div className="truncate text-xs text-muted">
           {item.mediaType === "TV" ? "TV" : "Movie"} · Deleted {fullDate(item.deletedAt)}
         </div>
