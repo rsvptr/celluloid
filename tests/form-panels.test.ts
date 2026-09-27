@@ -55,7 +55,7 @@ describe("panels submit as forms (JK-11)", () => {
 
   it("Log watch, share and watch history edit", async () => {
     const controls = await source("../src/app/(app)/title/[id]/title-controls.tsx");
-    assertSubmits(controls, '{isLogging ? "Logging…" : "Log watch"}');
+    assertSubmits(controls, '{logBusy ? "Logging…" : "Log watch"}');
 
     const history = await source("../src/app/(app)/title/[id]/watch-history-client.tsx");
     assertSubmits(history, "<Check size={16} /> Save");

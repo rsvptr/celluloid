@@ -66,6 +66,15 @@ describe("dialog motion (EM-03)", () => {
     const match = await source("components/match-controls.tsx");
     const content = match.slice(match.indexOf("<Dialog.Content"), match.indexOf("</Dialog.Content>"));
     assert.doesNotMatch(content, /[{ (!]unmatched\b|\{name\}|\bpending\b/, "match dialog reads the held copy");
-    assert.match(match, /setShown\(\(s\) => \(\{ \.\.\.s, saved: true \}\)\);\s*setOpen\(false\);/);
+    // Both closing paths hold the saving row: a saved pick, and a pick
+    // that's already in the library.
+    assert.equal(match.match(/setShown\(\(s\) => \(\{ \.\.\.s, saved: true \}\)\);\s*setOpen\(false\);/g)?.length, 2);
+
+    const title = await source("app/(app)/title/[id]/title-controls.tsx");
+    assert.match(title, /setLogDone\(true\);\s*setLogOpen\(false\);/);
+    assert.match(title, /setLogDone\(false\);\s*setLogOpen\(true\);/);
+    const log = title.slice(title.indexOf("Log a watch</Dialog.Title>"), title.indexOf("</Dialog.Content>", title.indexOf("Log a watch</Dialog.Title>")));
+    assert.doesNotMatch(log, /\bisLogging\b/, "log dialog reads the held busy flag");
+    assert.match(log, /\{logBusy \? "Logging…" : "Log watch"\}/);
   });
 });

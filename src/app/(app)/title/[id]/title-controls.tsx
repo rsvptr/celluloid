@@ -81,6 +81,11 @@ export function TitleControls({
   const [logDate, setLogDate] = useState("");
   const [logNote, setLogNote] = useState("");
   const [isLogging, startLog] = useTransition();
+  // Holds the submit button through the exit fade (EM-03): a successful log
+  // closes the dialog in the same commit that ends isLogging, which would
+  // flip it back to an enabled "Log watch" mid-fade. Reset on every open.
+  const [logDone, setLogDone] = useState(false);
+  const logBusy = isLogging || logDone;
   const logDateId = useId();
   const logNoteId = useId();
   const logContentRef = useRef<HTMLDivElement>(null);
@@ -90,6 +95,7 @@ export function TitleControls({
     logTriggerRef.current = e.currentTarget;
     setLogDate(todayLocalDate());
     setLogNote("");
+    setLogDone(false);
     setLogOpen(true);
   }
 
@@ -107,6 +113,7 @@ export function TitleControls({
       // Prefer the server's fresh count; fall back to an optimistic +1.
       const n = res?.watchCount ?? watchCount + 1;
       toast.success(`Logged. Watched ${n} ${n === 1 ? "time" : "times"}.`);
+      setLogDone(true);
       setLogOpen(false);
     });
   }
@@ -457,7 +464,7 @@ export function TitleControls({
               className="mt-4 flex flex-col gap-3"
               onSubmit={(e) => {
                 e.preventDefault();
-                if (isLogging) return;
+                if (logBusy) return;
                 submitLog();
               }}
             >
@@ -501,9 +508,9 @@ export function TitleControls({
                   type="submit"
                   variant="primary"
                   size="sm"
-                  disabled={isLogging || !logDate}
+                  disabled={logBusy || !logDate}
                 >
-                  {isLogging ? "Logging…" : "Log watch"}
+                  {logBusy ? "Logging…" : "Log watch"}
                 </Button>
               </div>
             </form>

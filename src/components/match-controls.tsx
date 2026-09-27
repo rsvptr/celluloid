@@ -32,10 +32,11 @@ export function MatchControls({
   // A title with no tmdbId has never been matched, so every string here has to
   // read as a first match rather than a correction.
   const unmatched = tmdbId == null;
-  // What the dialog shows, held while it plays its exit (EM-03). A successful
-  // pick closes it in the same commit that ends `pending` and brings the
-  // rematched title's props, which would swap the heading and drop the saving
-  // row mid-fade. Taken afresh on every open.
+  // What the dialog shows, held while it plays its exit (EM-03). A pick that
+  // closes it, saved or already in the library, does so in the same commit
+  // that ends `pending` (and a save brings the rematched title's props), which
+  // would swap the heading and drop the saving row mid-fade. `saved` means
+  // "closing after a pick". Taken afresh on every open.
   const [shown, setShown] = useState({ name, unmatched, saved: false });
   const busy = pending || shown.saved;
 
@@ -61,6 +62,7 @@ export function MatchControls({
             closeButton: true,
             action: { label: "Open", onClick: () => router.push(`/title/${existingId}`) },
           });
+        setShown((s) => ({ ...s, saved: true }));
         setOpen(false);
         return;
       }
