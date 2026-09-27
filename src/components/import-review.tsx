@@ -429,7 +429,8 @@ export function ImportReview({
               <button
                 type="button"
                 onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}
-                aria-pressed={selectMode}
+                // No aria-pressed: the label names the action and already
+                // changes with the state (JK-06).
                 disabled={committing || closed}
                 className={cn(
                   "focus-ring flex min-h-11 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm ring-1 transition-colors disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-8",

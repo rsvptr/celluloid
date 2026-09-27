@@ -663,8 +663,10 @@ export function TitleControls({
             commitImmediate();
           }}
         >
+          {/* A toggle keeps one label; aria-pressed, the fill and the heart
+              carry the state (APG button pattern, JK-06). */}
           <Heart size={15} className={cn(localFav && "fill-current")} />
-          {localFav ? "Favorited" : "Favorite"}
+          Favorite
         </Button>
         <Button
           variant="danger"

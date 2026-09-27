@@ -380,7 +380,9 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
             <button
               type="button"
               onClick={() => setShowPassword((visible) => !visible)}
-              aria-label={showPassword ? "Hide password" : "Show password"}
+              // A toggle keeps one name and lets aria-pressed carry the state
+              // ("Hide password, pressed" contradicted itself, JK-06).
+              aria-label="Show password"
               aria-pressed={showPassword}
               className="focus-ring absolute inset-y-0 right-0 flex min-w-11 items-center justify-center rounded-r-lg text-faint transition-colors hover:text-foreground"
             >

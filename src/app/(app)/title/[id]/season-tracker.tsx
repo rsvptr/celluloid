@@ -346,14 +346,15 @@ export function SeasonTracker({
                 like a status badge: the button is a toggle, so in that state its
                 press unwatches the whole show — which is the last thing someone
                 tapping the words "Caught up" expects. The button always names
-                the action it performs. */}
+                the action it performs, so it is an action button with no
+                aria-pressed: "Mark all unwatched, pressed" contradicted
+                itself (APG button pattern, JK-06). */}
             {caughtUp && " · caught up on everything aired"}
           </p>
         </div>
         <Button
           size="sm"
           variant={allWatched || caughtUp ? "secondary" : "primary"}
-          aria-pressed={allWatched || caughtUp}
           onClick={() => void requestAllToggle(!(allWatched || caughtUp))}
         >
           {allWatched || caughtUp ? "Mark all unwatched" : "Mark show watched"}
@@ -406,7 +407,6 @@ export function SeasonTracker({
                 </button>
                 <button
                   onClick={() => void requestSeasonToggle(season, !sComplete)}
-                  aria-pressed={sComplete}
                   className={cn(
                     "focus-ring flex min-h-11 shrink-0 items-center justify-center rounded-md px-2 py-1 text-xs ring-1 press sm:min-h-0",
                     sComplete
