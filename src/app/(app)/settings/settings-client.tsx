@@ -31,7 +31,15 @@ import {
 } from "lucide-react";
 import type { AccountInfo, ShareSummary } from "@/lib/data";
 import { authClient } from "@/lib/auth-client";
-import { Badge, Button, Card, Input, Select, Spinner } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  Input,
+  Select,
+  Spinner,
+  softDisabledClass,
+} from "@/components/ui";
 import { useConfirm } from "@/components/confirm-dialog";
 import { TmdbAttribution } from "@/components/tmdb-attribution";
 import { fullDate } from "@/lib/format";
@@ -86,12 +94,6 @@ export interface MetadataFailureSummary {
   mediaType: "MOVIE" | "TV";
   metadataLastError: string | null;
 }
-
-// Chrome moves focus to <body> the instant a focused control becomes
-// `disabled`. The buttons that open a confirm and then go busy carry
-// `aria-disabled` and return early instead, so focus is still on them after
-// confirming (JK-03). These classes reproduce Button's `disabled:` styling.
-const softDisabledClass = "aria-disabled:cursor-not-allowed aria-disabled:opacity-50";
 
 export function SettingsClient({
   info,

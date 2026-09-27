@@ -41,7 +41,7 @@ import {
 import { toast } from "sonner";
 import type { LibraryItem, TrashedTitle } from "@/lib/data";
 import type { WatchStatus } from "@/generated/prisma/client";
-import { Badge, Button, Card, Input, Select } from "./ui";
+import { Badge, Button, Card, Input, Select, softDisabledClass } from "./ui";
 import { TitleCard } from "./title-card";
 import { IntentLink } from "./intent-link";
 import { Poster } from "./poster";
@@ -153,13 +153,6 @@ export function libraryFilterKey(filters: LibraryFilters): string {
 
 const addTitleButtonClass =
   "inline-flex min-h-11 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg brand-gradient px-4 text-sm font-semibold text-[#04121c] shadow-sm shadow-brand/20 press hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 sm:min-h-10";
-
-// Chrome moves focus to <body> the instant a focused control becomes
-// `disabled`, so every bulk and Trash action left the keyboard back at the skip
-// link. Those controls carry `aria-disabled` and return early instead, and
-// these classes reproduce the `disabled:` styling ui.tsx applies through the
-// native attribute.
-const softDisabledClass = "aria-disabled:cursor-not-allowed aria-disabled:opacity-50";
 
 export function Library({
   items,

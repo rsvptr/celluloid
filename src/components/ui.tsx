@@ -52,6 +52,15 @@ export function Button({
   );
 }
 
+/**
+ * Button's `disabled:` styling, keyed on `aria-disabled` instead. Chrome moves
+ * focus to <body> the instant a focused control becomes `disabled`, so a
+ * control that must keep focus while unavailable or busy (a confirm opener,
+ * a bulk or Trash action) carries `aria-disabled`, returns early from its
+ * handler, and takes these classes.
+ */
+export const softDisabledClass = "aria-disabled:cursor-not-allowed aria-disabled:opacity-50";
+
 // --- Inputs ----------------------------------------------------------------
 
 // outline-hidden (not `outline: none`) and forced-colors:border: the ring focus
