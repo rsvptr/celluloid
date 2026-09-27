@@ -83,6 +83,8 @@ export async function resolve(specifier, context, nextResolve) {
 register(`data:text/javascript,${encodeURIComponent(loader)}`, import.meta.url);
 
 const { auth } = await import("../src/lib/auth");
+const { createAuthClient } = await import("better-auth/react");
+const { twoFactorClient } = await import("better-auth/client/plugins");
 Object.assign(globalThis, { __CELLULOID_AUTH_INSTANCE__: auth });
 const { getOptionalUser, getSession, requireUser, requireUserId } = await import(
   "../src/lib/session"
@@ -175,5 +177,69 @@ describe("session refresh happens only where cookies can be written (BA-03)", { 
     cookieWrites = [];
     await requireUserId();
     await assertSlid(before, "action after render");
+  });
+});
+
+describe("the app shell's daily slide (SessionSlide) over HTTP", { concurrency: false }, () => {
+  // The browser's side: a Better Auth client like src/lib/auth-client.ts, whose
+  // requests go to the real handler with the jar's cookies, as fetch would.
+  let setCookies: string[] = [];
+  const client = createAuthClient({
+    baseURL: origin,
+    plugins: [twoFactorClient()],
+    fetchOptions: {
+      customFetchImpl: async (input, init) => {
+        const request = new Request(input, init);
+        const headers = new Headers(request.headers);
+        headers.set("cookie", cookieHeader());
+        const response = await auth.handler(
+          new Request(request.url, { method: request.method, headers }),
+        );
+        setCookies = response.headers.getSetCookie();
+        for (const raw of setCookies) {
+          const [pair, ...attributes] = raw.split(";");
+          const separator = pair.indexOf("=");
+          const name = pair.slice(0, separator).trim();
+          const value = pair.slice(separator + 1);
+          if (value === "" || attributes.some((a) => /max-age=0/i.test(a.trim()))) jar.delete(name);
+          else jar.set(name, value);
+        }
+        return response;
+      },
+    },
+  });
+
+  it("reads the row past a fresh cookie cache, so a due session slides and gets a new cookie", async () => {
+    // A current session with a fresh 60-second cookie cache, as a route call leaves it.
+    await internalAdapter.updateSession(token, { expiresAt: new Date(Date.now() + 30 * DAY_MS) });
+    jar.delete("better-auth.session_data");
+    assert.ok((await client.getSession()).data?.session);
+    assert.ok(jar.has("better-auth.session_data"), "cookie cache not set");
+
+    // Two days into its 30: past the daily updateAge.
+    const before = Date.now() + 28 * DAY_MS;
+    await internalAdapter.updateSession(token, { expiresAt: new Date(before) });
+
+    // A plain get-session is answered from the cookie cache, and nothing slides.
+    assert.ok((await client.getSession()).data?.session);
+    assert.equal(await storedExpiry(), before);
+    assert.ok(!setCookies.some((raw) => raw.startsWith("better-auth.session_token=")));
+
+    // SessionSlide's call bypasses the cache.
+    const slid = await client.getSession({ query: { disableCookieCache: true } });
+    assert.equal(slid.error, null);
+    assert.ok(slid.data?.session);
+    assert.ok((await storedExpiry()) > before + DAY_MS, "row not extended");
+    const cookie = setCookies.find((raw) => raw.startsWith("better-auth.session_token="));
+    assert.ok(cookie, "session cookie not re-issued");
+    assert.match(cookie, new RegExp(`Max-Age=${EXPIRES_IN_S}(;|$)`, "i"));
+  });
+
+  it("leaves a session that isn't due alone", async () => {
+    const before = await storedExpiry();
+    const again = await client.getSession({ query: { disableCookieCache: true } });
+    assert.ok(again.data?.session);
+    assert.equal(await storedExpiry(), before);
+    assert.ok(!setCookies.some((raw) => raw.startsWith("better-auth.session_token=")));
   });
 });
