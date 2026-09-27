@@ -1,6 +1,14 @@
 "use client";
 
-import { memo, useCallback, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  memo,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import Link from "next/link";
 import { windowActivity } from "@/components/charts";
 import type { ActivityDay } from "@/lib/data";
@@ -64,6 +72,14 @@ export function ActivityCalendar({
   const [selected, setSelected] = useState<string | null>(null);
   const [focused, setFocused] = useState<string | null>(null);
   const cellRefs = useRef(new Map<string, HTMLButtonElement | null>());
+  const scrollerRef = useRef<HTMLDivElement>(null);
+
+  // Below sm the grid is wider than its row, so open on the current week
+  // rather than last year's; before paint, so the oldest weeks never flash.
+  useLayoutEffect(() => {
+    const el = scrollerRef.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, []);
   const tabStop = focused ?? reachable[reachable.length - 1] ?? null;
 
   const moveTo = useCallback(
@@ -125,7 +141,7 @@ export function ActivityCalendar({
       {/* Below sm the day cells are 20px on a 24px pitch, which meets WCAG
           2.5.8's spacing exception for touch targets (JK-10). From sm they
           keep the compact 11px cells with 3px gaps. */}
-      <div className="overflow-x-auto pb-1">
+      <div ref={scrollerRef} className="overflow-x-auto pb-1">
         <div className="flex gap-1 sm:gap-[3px]" role="group" aria-label="Watch activity by day">
           {cols.map((col, ci) => (
             <div key={ci} className="flex flex-col gap-1 sm:gap-[3px]">
