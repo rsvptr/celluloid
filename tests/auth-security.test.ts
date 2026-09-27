@@ -175,3 +175,42 @@ describe("Celluloid auth write boundaries", { concurrency: false }, () => {
     assert.equal((correct.json as { success: boolean }).success, true);
   });
 });
+
+/** POSTs from a given client IP. The limiter keys on IP and path and runs
+ * before routing, so a signed-out request spends the same budget. */
+async function statusFrom(ip: string, path: string) {
+  const response = await auth.handler(
+    new Request(`${origin}/api/auth${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin, "x-forwarded-for": ip },
+      body: "{}",
+    }),
+  );
+  await response.body?.cancel();
+  return response.status;
+}
+
+describe("auth rate limits", { concurrency: false }, () => {
+  it("caps every endpoint that checks a password or a 2FA code (BA-02)", async () => {
+    const budgets: Array<[path: string, max: number]> = [
+      ["/sign-in/email", 10],
+      ["/change-password", 5],
+      ["/verify-password", 5],
+      ["/delete-user", 5],
+      ["/two-factor/enable", 5],
+      ["/two-factor/disable", 5],
+      ["/two-factor/generate-backup-codes", 5],
+      ["/two-factor/get-totp-uri", 5],
+      ["/two-factor/verify-totp", 10],
+      ["/two-factor/verify-backup-code", 5],
+      ["/two-factor/verify-otp", 5],
+    ];
+    for (const [index, [path, max]] of budgets.entries()) {
+      const ip = `203.0.113.${index + 1}`;
+      for (let attempt = 1; attempt <= max; attempt++) {
+        assert.notEqual(await statusFrom(ip, path), 429, `${path} attempt ${attempt}`);
+      }
+      assert.equal(await statusFrom(ip, path), 429, `${path} attempt ${max + 1}`);
+    }
+  });
+});
