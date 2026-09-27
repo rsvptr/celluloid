@@ -139,3 +139,59 @@ describe("Undo keeps keyboard focus in the toast", () => {
     assert.equal(button.toastElement.focused, 0);
   });
 });
+
+describe("undo toast edge cases", () => {
+  it("runs the undo once when Undo is pressed twice before Sonner re-renders", async () => {
+    let calls = 0;
+    const id = undoToast("Marked watched", {
+      undo: async () => {
+        calls += 1;
+        return calls === 1
+          ? {}
+          : { error: "That watched change is no longer available to undo" };
+      },
+      success: "Watched change undone",
+      failure: "Couldn't undo that watched change. Try again.",
+    });
+    // The rendered button keeps the original action until Sonner's next tick.
+    const staleAction = current(id).action!;
+    const event = {
+      currentTarget: fakeButton(),
+      preventDefault: () => {},
+    } as unknown as MouseEvent<HTMLButtonElement>;
+    staleAction.onClick(event);
+    staleAction.onClick(event);
+    await settle();
+    assert.equal(calls, 1);
+    assert.equal(current(id).type, "success");
+    assert.equal(current(id).title, "Watched change undone");
+  });
+
+  it("dismisses the toast and runs onSuccess when there's no confirmation copy (recommend)", async () => {
+    // toast.dismiss() schedules its update with requestAnimationFrame.
+    const g = globalThis as { requestAnimationFrame?: (cb: () => void) => number };
+    const raf = g.requestAnimationFrame;
+    g.requestAnimationFrame = (cb) => {
+      cb();
+      return 0;
+    };
+    try {
+      let restored = 0;
+      const id = undoToast("Barbie won't be suggested again", {
+        undo: async () => ({}),
+        failure: "Celluloid couldn't undo that. Check your connection and retry.",
+        onSuccess: () => (restored += 1),
+      });
+      clickUndo(id);
+      await settle();
+      assert.equal(restored, 1);
+      assert.equal(current(id).type, "loading", "no confirmation replaces it");
+      assert.ok(
+        !toast.getToasts().some((t) => t.id === id),
+        "the toast is dismissed",
+      );
+    } finally {
+      g.requestAnimationFrame = raf;
+    }
+  });
+});

@@ -28,6 +28,9 @@ type UndoToastOptions = {
  */
 export function undoToast(message: string, options: UndoToastOptions) {
   const { undo, success, failure, onSuccess, onError } = options;
+  // Sonner re-renders on its next tick, so a second press (a held Enter, a
+  // double click) can still reach this handler; run the undo only once.
+  let started = false;
   const id = toast.success(message, {
     duration: UNDO_TOAST_DURATION,
     closeButton: true,
@@ -35,6 +38,8 @@ export function undoToast(message: string, options: UndoToastOptions) {
       label: "Undo",
       onClick: (event) => {
         event.preventDefault();
+        if (started) return;
+        started = true;
         // The update below removes this button. If it had focus, park focus on
         // the toast itself (Sonner makes it focusable) so it doesn't fall to
         // <body>; the text changes are still announced by Sonner's live region.
