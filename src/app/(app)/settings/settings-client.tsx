@@ -1532,7 +1532,7 @@ function PasswordSection() {
             aria-atomic="true"
             className={cn("text-xs", invalid === "new" ? "text-rose-300" : "text-faint")}
           >
-            {invalid === "new" ? "Too short. " : null}Use at least 10 characters.
+            {invalid === "new" ? (next ? "Too short. " : "Enter a new password. ") : null}Use at least 10 characters.
           </p>
         </div>
         {msg && <Notice kind={msg.kind}>{msg.text}</Notice>}
