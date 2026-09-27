@@ -196,12 +196,10 @@ describe("auth rate limits", { concurrency: false }, () => {
     const budgets: Array<[path: string, max: number]> = [
       ["/sign-in/email", 10],
       ["/change-password", 5],
-      ["/verify-password", 5],
       ["/delete-user", 5],
       ["/two-factor/enable", 5],
       ["/two-factor/disable", 5],
       ["/two-factor/generate-backup-codes", 5],
-      ["/two-factor/get-totp-uri", 5],
       ["/two-factor/verify-totp", 10],
       ["/two-factor/verify-backup-code", 5],
       ["/two-factor/verify-otp", 5],
@@ -212,6 +210,16 @@ describe("auth rate limits", { concurrency: false }, () => {
         assert.notEqual(await statusFrom(ip, path), 429, `${path} attempt ${attempt}`);
       }
       assert.equal(await statusFrom(ip, path), 429, `${path} attempt ${max + 1}`);
+    }
+  });
+
+  it("disables the password checks nothing calls, ahead of the limiter", async () => {
+    const paths = ["/verify-password", "/verify-password?x=1", "/two-factor/get-totp-uri"];
+    for (const [index, path] of paths.entries()) {
+      const ip = `203.0.113.${index + 101}`;
+      for (let attempt = 1; attempt <= 6; attempt++) {
+        assert.equal(await statusFrom(ip, path), 404, `${path} attempt ${attempt}`);
+      }
     }
   });
 

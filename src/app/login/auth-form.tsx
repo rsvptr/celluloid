@@ -135,6 +135,13 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
           backToSignIn("Too many wrong codes for that sign-in. Enter your password to try again.");
           return;
         }
+        // The per-IP limit (5 backup codes a minute) trips on the sixth code,
+        // before the cap above can fire, and holds for a minute. The account
+        // lock is a 429 too, but keeps Better Auth's own message.
+        if (error?.status === 429 && error.code !== "ACCOUNT_TEMPORARILY_LOCKED") {
+          setError("Too many attempts. Wait a minute, then try again.");
+          return;
+        }
         if (error) {
           setError(
             friendlyAuthError(
