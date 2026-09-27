@@ -117,12 +117,12 @@ export function ShareDialog({
             className="absolute right-3 top-3 -m-3 flex min-h-11 min-w-11 items-center justify-center rounded text-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 sm:m-0 sm:min-h-0 sm:min-w-0"
             aria-label="Close"
           >
-            <X size={18} />
+            <X size={20} />
           </Dialog.Close>
 
           <div className="mb-4 flex items-center gap-2.5">
             <span className="text-brand">
-              <Link2 size={18} />
+              <Link2 size={20} />
             </span>
             <Dialog.Title className="text-sm font-semibold">
               {wholeLibrary
@@ -148,7 +148,7 @@ export function ShareDialog({
               </Dialog.Description>
               <label className="flex flex-col gap-1.5">
                 <span className="text-xs font-medium text-muted">
-                  Title (optional)
+                  List name (optional)
                 </span>
                 <Input
                   ref={titleInputRef}
@@ -195,7 +195,7 @@ export function ShareDialog({
                   Include my ratings and notes
                 </label>
                 <p className="pl-6 text-xs text-faint">
-                  Your star rating and favorite stay private unless this is checked.
+                  Your ratings, notes and favorites stay private unless this is checked.
                 </p>
               </div>
               {wholeLibrary && (
@@ -266,7 +266,7 @@ export function ShareDialog({
                   rel="noreferrer"
                   className="focus-ring inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-muted hover:text-foreground"
                 >
-                  <ExternalLink size={14} /> Open
+                  <ExternalLink size={16} /> Open
                 </a>
                 <Dialog.Close asChild>
                   <Button variant="primary" size="sm">

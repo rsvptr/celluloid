@@ -302,6 +302,8 @@ export function ImportReview({
       title: "Cancel this import?",
       body: "Rows already committed stay in your library. Uncommitted rows will be abandoned.",
       confirmLabel: "Cancel import",
+      // "Cancel" beside "Cancel import" read as the same action (JK-32).
+      cancelLabel: "Keep importing",
       destructive: true,
     });
     if (!approved) return;
@@ -438,7 +440,8 @@ export function ImportReview({
               <button
                 type="button"
                 onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}
-                aria-pressed={selectMode}
+                // No aria-pressed: the label names the action and already
+                // changes with the state (JK-06).
                 disabled={committing || closed}
                 className={cn(
                   "focus-ring flex min-h-11 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm ring-1 transition-colors disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-8",
@@ -447,7 +450,7 @@ export function ImportReview({
                     : "text-muted ring-line hover:text-foreground",
                 )}
               >
-                <CheckSquare size={15} aria-hidden="true" />
+                <CheckSquare size={16} aria-hidden="true" />
                 {selectMode ? "Done selecting" : "Select rows"}
               </button>
             </div>
@@ -663,7 +666,7 @@ export function ImportReview({
               disabled={committing || !canCommit || closed}
               onClick={commit}
             >
-              {committing ? <Spinner /> : <Check size={14} aria-hidden="true" />}
+              {committing ? <Spinner /> : <Check size={16} aria-hidden="true" />}
               {committing
                 ? "Saving batches…"
                 : actionableCount > 0
@@ -687,7 +690,7 @@ export function ImportReview({
             className="dialog-content fixed left-1/2 top-1/2 z-50 flex max-h-[85dvh] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col rounded-[var(--radius-card)] bg-surface p-5 ring-1 ring-line focus:outline-none"
           >
             <Dialog.Close className="absolute right-3 top-3 flex min-h-11 min-w-11 items-center justify-center rounded text-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-brand/60" aria-label="Close match search">
-              <X size={18} aria-hidden="true" />
+              <X size={20} aria-hidden="true" />
             </Dialog.Close>
             <Dialog.Title className="pr-10 text-sm font-semibold">
               Match “{matchingItem?.parsed.name ?? "import row"}”

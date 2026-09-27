@@ -40,10 +40,10 @@ describe("panels submit as forms (JK-11)", () => {
       "Save\n        </Button>",
       '{saved ? "Replace key" : "Save key"}',
       '{pending ? "Updating…" : "Change password"}',
-      ": null} Disable 2FA",
-      "<ShieldCheck size={15} />} Enable 2FA",
+      ": null} Turn off 2FA",
+      "<ShieldCheck size={16} />} Enable 2FA",
       ": null} Verify & turn on",
-      "<Trash2 size={15} /> Delete my account",
+      "<Trash2 size={16} /> Delete my account",
     ]) {
       assertSubmits(settings, label);
     }
@@ -58,7 +58,7 @@ describe("panels submit as forms (JK-11)", () => {
     assertSubmits(controls, '{isLogging ? "Logging…" : "Log watch"}');
 
     const history = await source("../src/app/(app)/title/[id]/watch-history-client.tsx");
-    assertSubmits(history, "<Check size={14} /> Save");
+    assertSubmits(history, "<Check size={16} /> Save");
 
     const share = await source("../src/components/share-dialog.tsx");
     assertSubmits(share, '{pending ? "Creating…" : "Create link"}');

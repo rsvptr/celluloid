@@ -85,12 +85,12 @@ export function MatchControls({
           setOpen(true);
         }}
       >
-        <Replace size={14} />
+        <Replace size={16} />
         {unmatched ? "Match to TMDB" : "Change match"}
       </Button>
       {!unmatched && (
         <Button variant="ghost" size="sm" disabled={refreshing} onClick={refresh}>
-          {refreshing ? <Spinner /> : <RefreshCw size={14} />}
+          {refreshing ? <Spinner /> : <RefreshCw size={16} />}
           Refresh metadata
         </Button>
       )}
@@ -121,7 +121,7 @@ export function MatchControls({
               className="absolute right-3 top-3 -m-3 flex min-h-11 min-w-11 items-center justify-center rounded text-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 sm:m-0 sm:min-h-0 sm:min-w-0"
               aria-label="Close"
             >
-              <X size={18} />
+              <X size={20} />
             </Dialog.Close>
             <Dialog.Title className="text-sm font-semibold">
               {shown.unmatched ? "Find a match for" : "Change match for"} “{shown.name}”

@@ -58,6 +58,7 @@ import {
   TAG_COLOR_DEFAULT_SWATCH,
   TAG_COLOR_META,
   tagChipClass,
+  tagColorKey,
 } from "@/lib/tag-colors";
 import { isWatchRegion, regionName, WATCH_REGIONS } from "@/lib/tmdb-extras";
 import { TMDB_IMAGE_BASE } from "@/lib/images";
@@ -173,7 +174,7 @@ function Section({
     <Card className="h-full p-5">
       <div className="mb-4 flex items-start gap-3">
         <span aria-hidden="true" className="mt-0.5 text-brand">
-          <Icon size={18} />
+          <Icon size={20} />
         </span>
         <div>
           <h2 className="text-sm font-semibold">{title}</h2>
@@ -465,7 +466,9 @@ function RememberFiltersSection({ initialEnabled }: { initialEnabled: boolean })
       title="Remember filters on this device"
       description="Keep each page's viewing preferences between visits."
     >
-      <div className="flex items-center justify-between gap-4 rounded-xl bg-surface-2/45 p-3 ring-1 ring-line">
+      {/* rounded-lg like an inset Card: the section card's 14.4px corner sits
+          20px out, so an inner 12px corner looked swollen (JK-34). */}
+      <div className="flex items-center justify-between gap-4 rounded-lg bg-surface-2/45 p-3 ring-1 ring-line">
         <div>
           <p className="text-sm font-medium">Remember filters</p>
           <p className="mt-0.5 text-xs text-faint">
@@ -571,7 +574,7 @@ function MyServicesSection({
             <div className="relative min-w-0 sm:max-w-sm sm:flex-1">
               <Search
                 aria-hidden="true"
-                size={15}
+                size={16}
                 className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-faint"
               />
               <Input
@@ -610,7 +613,10 @@ function MyServicesSection({
             </p>
           ) : null}
 
-          <div className="max-h-80 overflow-y-auto rounded-lg bg-surface-2/50 p-2 ring-1 ring-line">
+          {/* Concentric corners, 8px apart at each level: logo rounded-lg (8px),
+              tile rounded-2xl (8 + p-2 = 16px), list rounded-3xl (16 + p-2 =
+              24px). All three were rounded-lg (JK-34). */}
+          <div className="max-h-80 overflow-y-auto rounded-3xl bg-surface-2/50 p-2 ring-1 ring-line">
             {visibleProviders.length > 0 ? (
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
                 {visibleProviders.map((provider) => {
@@ -625,7 +631,7 @@ function MyServicesSection({
                       onClick={() => toggleProvider(provider.id)}
                       title={atLimit ? "You can choose up to 100 services" : provider.name}
                       className={cn(
-                        "focus-ring flex min-h-14 min-w-0 items-center gap-2 rounded-lg p-2 text-left text-xs ring-1 transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+                        "focus-ring flex min-h-14 min-w-0 items-center gap-2 rounded-2xl p-2 text-left text-xs ring-1 transition-colors disabled:cursor-not-allowed disabled:opacity-40",
                         isSelected
                           ? "bg-brand/15 text-foreground ring-brand/40"
                           : "bg-surface text-muted ring-line hover:text-foreground hover:ring-line-strong",
@@ -648,7 +654,7 @@ function MyServicesSection({
                       </span>
                       <span className="min-w-0 flex-1 truncate">{provider.name}</span>
                       {isSelected ? (
-                        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand text-[#04121c]">
+                        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand text-on-accent">
                           <Check aria-hidden="true" size={13} strokeWidth={3} />
                         </span>
                       ) : null}
@@ -1017,12 +1023,14 @@ function ShareRow({
       <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center">
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            <p className="truncate text-sm font-medium">{s.name ?? "Untitled list"}</p>
+            <p className="truncate text-sm font-medium" title={s.name ?? undefined}>
+              {s.name ?? "Untitled list"}
+            </p>
             <span
               className={
                 active
-                  ? "shrink-0 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-300 ring-1 ring-emerald-500/20"
-                  : "shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-[11px] font-medium text-muted ring-1 ring-line"
+                  ? "shrink-0 rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-300 ring-1 ring-emerald-500/20"
+                  : "shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-xs font-medium text-muted ring-1 ring-line"
               }
             >
               {stateLabel}
@@ -1045,7 +1053,7 @@ function ShareRow({
             disabled={!active || busy}
             className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2/60 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35 sm:h-8 sm:min-h-0 sm:w-8 sm:min-w-0"
           >
-            <Copy aria-hidden="true" size={15} />
+            <Copy aria-hidden="true" size={16} />
           </button>
           <Button
             variant="ghost"
@@ -1056,7 +1064,7 @@ function ShareRow({
           >
             <ChevronDown
               aria-hidden="true"
-              size={14}
+              size={16}
               className={cn("transition-transform", manageOpen && "rotate-180")}
             />
             Manage
@@ -1166,7 +1174,7 @@ function ShareRow({
                         key={t.id}
                         className="flex items-center gap-2 px-2.5 py-1.5 text-xs"
                       >
-                        <span className="min-w-0 flex-1 truncate text-foreground/90">
+                        <span className="min-w-0 flex-1 truncate text-foreground/90" title={t.name}>
                           {t.name}
                         </span>
                         <span className="shrink-0 text-faint">
@@ -1261,16 +1269,18 @@ function TagRow({
 }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(tag.name);
-  const [color, setColor] = useState<string | null>(tag.color);
+  // A colour from the first palette shows as the palette colour it renders as.
+  const storedColor = tagColorKey(tag.color);
+  const [color, setColor] = useState<string | null>(storedColor);
   const [error, setError] = useState<string | null>(null);
   const [busy, start] = useTransition();
 
-  const dirty = name.trim() !== tag.name || color !== tag.color;
+  const dirty = name.trim() !== tag.name || color !== storedColor;
 
   function cancel() {
     setEditing(false);
     setName(tag.name);
-    setColor(tag.color);
+    setColor(storedColor);
     setError(null);
   }
 
@@ -1288,7 +1298,7 @@ function TagRow({
             return;
           }
         }
-        if (color !== tag.color) {
+        if (color !== storedColor) {
           const res = await setTagColor(tag.id, color);
           if (res.error) {
             setError(res.error);
@@ -1320,7 +1330,7 @@ function TagRow({
             disabled={busy || deleting}
             onClick={() => (editing ? cancel() : setEditing(true))}
           >
-            <Pencil aria-hidden="true" size={14} />
+            <Pencil aria-hidden="true" size={16} />
             {editing ? "Cancel" : "Edit"}
           </Button>
           <Button
@@ -1931,7 +1941,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
       !(await confirm({
         title: "Turn off two-factor authentication?",
         body: "Your account will only need a password to sign in.",
-        confirmLabel: "Disable 2FA",
+        confirmLabel: "Turn off 2FA",
         destructive: true,
       }))
     )
@@ -2084,7 +2094,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
               className={cn("self-start", softDisabledClass)}
               aria-disabled={busy || !password}
             >
-              {busy ? <Spinner /> : null} Disable 2FA
+              {busy ? <Spinner /> : null} Turn off 2FA
             </Button>
           </form>
         </div>
@@ -2118,7 +2128,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
             className="self-start"
             disabled={busy || !password}
           >
-            {busy ? <Spinner /> : <ShieldCheck size={15} />} Enable 2FA
+            {busy ? <Spinner /> : <ShieldCheck size={16} />} Enable 2FA
           </Button>
         </form>
       ) : (
@@ -2515,7 +2525,7 @@ function BackupSection({
               disabled={busy !== null}
               onClick={downloadBackup}
             >
-              {busy === "download" ? <Spinner /> : <Download aria-hidden="true" size={15} />}
+              {busy === "download" ? <Spinner /> : <Download aria-hidden="true" size={16} />}
               {busy === "download" ? "Preparing backup\u2026" : "Download backup"}
             </Button>
             <div className="mt-2">
@@ -2575,7 +2585,7 @@ function BackupSection({
                 disabled={!file || busy !== null}
                 onClick={previewRestore}
               >
-                {busy === "preview" ? <Spinner /> : <Upload aria-hidden="true" size={15} />}
+                {busy === "preview" ? <Spinner /> : <Upload aria-hidden="true" size={16} />}
                 {busy === "preview" ? "Checking backup\u2026" : "Preview restore"}
               </Button>
             </div>
@@ -2646,7 +2656,7 @@ function BackupSection({
                   void commitRestore();
                 }}
               >
-                {busy === "restore" ? <Spinner /> : <ArchiveRestore aria-hidden="true" size={15} />}
+                {busy === "restore" ? <Spinner /> : <ArchiveRestore aria-hidden="true" size={16} />}
                 {busy === "restore" ? "Restoring\u2026" : "Restore backup"}
               </Button>
             </div>
@@ -2761,7 +2771,7 @@ function DangerSection() {
           className={cn("mt-4", softDisabledClass)}
           aria-disabled={pending || !password}
         >
-          <Trash2 size={15} /> Delete my account
+          <Trash2 size={16} /> Delete my account
         </Button>
       </form>
       </Section>

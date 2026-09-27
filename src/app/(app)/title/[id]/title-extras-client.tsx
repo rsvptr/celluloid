@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Check, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Spinner } from "@/components/ui";
+import { nameWithTypeAndYear } from "@/lib/format";
 import { addFromTmdb } from "@/lib/actions";
 import { saveWatchRegionPreference, setWatchRegion } from "@/lib/region-actions";
 import { regionName, WATCH_REGIONS } from "@/lib/tmdb-extras";
@@ -14,11 +15,13 @@ export function QuickAdd({
   tmdbId,
   mediaType,
   name,
+  year,
   existingId,
 }: {
   tmdbId: number;
   mediaType: "movie" | "tv";
   name: string;
+  year?: number | null;
   existingId?: string;
 }) {
   const [state, setState] = useState<
@@ -40,7 +43,7 @@ export function QuickAdd({
       <Link
         ref={resultRef}
         href={`/title/${state.id}`}
-        className="focus-ring inline-flex w-fit items-center gap-1 rounded-md bg-emerald-500/15 px-2 py-1 text-[11px] font-medium text-emerald-300 ring-1 ring-emerald-500/30"
+        className="focus-ring inline-flex w-fit items-center gap-1 rounded-md bg-emerald-500/15 px-2 py-1 text-xs font-medium text-emerald-300 ring-1 ring-emerald-500/30"
       >
         <Check size={11} /> In library
       </Link>
@@ -51,7 +54,7 @@ export function QuickAdd({
     <button
       type="button"
       disabled={state.kind === "adding"}
-      aria-label={`Add ${name} to your watchlist`}
+      aria-label={`Add ${nameWithTypeAndYear(name, mediaType, year)} to your watchlist`}
       onClick={() => {
         focusResult.current = true;
         start(async () => {
@@ -68,7 +71,7 @@ export function QuickAdd({
           }
         })
       }}
-      className="focus-ring inline-flex min-h-11 w-fit items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-muted ring-1 ring-line transition-colors hover:text-foreground disabled:opacity-60 sm:min-h-0"
+      className="focus-ring inline-flex min-h-11 w-fit items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-muted ring-1 ring-line transition-colors hover:text-foreground disabled:opacity-60 sm:min-h-0"
     >
       {state.kind === "adding" ? <Spinner className="h-3 w-3" /> : <Plus size={11} />}
       Watchlist

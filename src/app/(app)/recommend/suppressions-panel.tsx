@@ -162,7 +162,7 @@ export function SuppressionsPanel({ refreshKey }: { refreshKey: number }) {
           <label className="relative block">
             <span className="sr-only">Search hidden titles</span>
             <Search
-              size={14}
+              size={16}
               aria-hidden="true"
               className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-faint"
             />
@@ -233,7 +233,7 @@ export function SuppressionsPanel({ refreshKey }: { refreshKey: number }) {
                       key={entry.id}
                       className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm"
                     >
-                      <Icon size={14} aria-hidden="true" className="shrink-0 text-muted" />
+                      <Icon size={16} aria-hidden="true" className="shrink-0 text-muted" />
                       <span className="min-w-0 flex-1 truncate">
                         {entry.name}
                         {entry.year ? (

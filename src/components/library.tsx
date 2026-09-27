@@ -47,8 +47,14 @@ import { IntentLink } from "./intent-link";
 import { Poster } from "./poster";
 import { ShareDialog } from "./share-dialog";
 import { useConfirm } from "./confirm-dialog";
-import { AnimatePresence, EASE_DRAWER, EASE_OUT, InertOnExit, motion } from "./motion";
-import { STATUS_META, STATUS_ORDER, fullDate, languageName, progressPct } from "@/lib/format";
+import {
+  AnimatePresence,
+  EASE_DRAWER,
+  EASE_OUT,
+  InertOnExit,
+  motion,
+} from "./motion";
+import { STATUS_META, STATUS_ORDER, formatCount, fullDate, languageName, progressPct } from "@/lib/format";
 import {
   bulkAddTag,
   bulkRemoveTag,
@@ -73,7 +79,7 @@ import {
 const SORTS: { key: SortKey; label: string }[] = [
   { key: "added", label: "Recently added" },
   { key: "watched", label: "Recently watched" },
-  { key: "name", label: "Name (A-Z)" },
+  { key: "name", label: "Name (A–Z)" },
   { key: "release", label: "Release (newest)" },
   { key: "myrating", label: "Your rating" },
   { key: "tmdb", label: "TMDB rating" },
@@ -146,7 +152,7 @@ export function libraryFilterKey(filters: LibraryFilters): string {
 }
 
 const addTitleButtonClass =
-  "inline-flex min-h-11 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg brand-gradient px-4 text-sm font-semibold text-[#04121c] shadow-sm shadow-brand/20 press hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 sm:min-h-10";
+  "inline-flex min-h-11 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg brand-gradient px-4 text-sm font-semibold text-on-accent shadow-sm shadow-brand/20 press hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 sm:min-h-10";
 
 // Chrome moves focus to <body> the instant a focused control becomes
 // `disabled`, so every bulk and Trash action left the keyboard back at the skip
@@ -358,8 +364,7 @@ export function Library({
     };
   }, []);
 
-  const hasFilters =
-    query !== "" ||
+  const filtersBesidesSearch =
     type !== "all" ||
     status !== "all" ||
     language !== "all" ||
@@ -368,6 +373,7 @@ export function Library({
     rating !== "all" ||
     onlyUnmatched ||
     onlyOnServices;
+  const hasFilters = query !== "" || filtersBesidesSearch;
 
   // Active advanced facets, one removable chip each. Excludes type (its own
   // quick-filter) and sort (ordering, not a filter), so the chip set and the
@@ -634,6 +640,11 @@ export function Library({
     return <TrashView trashed={trashed} onExit={() => setTrashMode(false)} />;
   }
 
+  // First run: nothing to filter, select or view, so the filter and utility
+  // rows would be clutter (JK-31). With titles in Trash the rows stay, since
+  // Trash is reached through the Filters panel.
+  const firstRun = items.length === 0 && trashedCount === 0;
+
   return (
     <div className="flex flex-col gap-5 pb-24">
       {/* Toolbar */}
@@ -664,8 +675,8 @@ export function Library({
               aria-live="polite"
               className="shrink-0 text-xs tabular-nums text-muted"
             >
-              {filtered.length} {filtered.length === 1 ? "title" : "titles"}
-              {hasFilters ? ` of ${items.length}` : ""}
+              {formatCount(filtered.length)} {filtered.length === 1 ? "title" : "titles"}
+              {hasFilters ? ` of ${formatCount(items.length)}` : ""}
             </p>
             <Link href="/add" className={addTitleButtonClass}>
               <Plus size={16} /> Add title
@@ -675,7 +686,7 @@ export function Library({
 
         {/* Row 2 — contextual: a type quick-filter and the single entry point to
             the advanced facets, on every width. */}
-        <div className="flex flex-wrap items-center gap-2">
+        <div className={cn("flex flex-wrap items-center gap-2", firstRun && "hidden")}>
           <div
             role="group"
             aria-label="Filter by type"
@@ -714,7 +725,7 @@ export function Library({
                 : "text-muted ring-line hover:text-foreground",
             )}
           >
-            <Clapperboard aria-hidden="true" size={15} />
+            <Clapperboard aria-hidden="true" size={16} />
             On my services
           </button>
           <button
@@ -731,7 +742,7 @@ export function Library({
                 : "text-muted ring-line hover:text-foreground",
             )}
           >
-            <SlidersHorizontal size={15} />
+            <SlidersHorizontal size={16} />
             Filters
             {advancedCount > 0 && (
               <span
@@ -900,7 +911,7 @@ export function Library({
                         onClick={() => setTrashMode(true)}
                         className="focus-ring flex min-h-11 items-center gap-1.5 rounded-lg px-2 text-sm text-muted transition-colors hover:text-foreground sm:min-h-0"
                       >
-                        <Trash2 size={14} /> Trash ({trashedCount})
+                        <Trash2 size={16} /> Trash ({trashedCount})
                       </button>
                     ) : (
                       <span />
@@ -911,7 +922,7 @@ export function Library({
                         title="Open Export with these filters applied"
                         className="focus-ring flex min-h-11 items-center gap-1.5 rounded-lg px-2 text-sm text-muted transition-colors hover:text-foreground sm:min-h-0"
                       >
-                        <Download size={14} /> Export these
+                        <Download size={16} /> Export these
                       </Link>
                     )}
                   </div>
@@ -924,7 +935,7 @@ export function Library({
 
         {/* Row 3 — utilities: de-emphasized selection, discovery, and view
             controls, right-aligned in one compact cluster. */}
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        <div className={cn("flex flex-wrap items-center justify-end gap-2", firstRun && "hidden")}>
           <button
             onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}
             aria-label="Select titles"
@@ -937,27 +948,30 @@ export function Library({
                 : "text-muted ring-line hover:text-foreground",
             )}
           >
-            <CheckSquare size={15} />
+            <CheckSquare size={16} />
             <span className="hidden sm:inline">Select</span>
           </button>
           {!selectMode && items.length > 0 && (
             <>
-              <button
-                onClick={surprise}
-                title="Pick something random to watch (prefers your watchlist)"
-                aria-label="Surprise me"
-                className="focus-ring flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line press hover:text-foreground sm:min-h-8 sm:min-w-0 sm:justify-start"
-              >
-                <Dices size={15} />
-                <span className="hidden sm:inline">Surprise</span>
-              </button>
+              {/* Nothing to pick from an empty view (JK-31). */}
+              {filtered.length > 0 && (
+                <button
+                  onClick={surprise}
+                  title="Pick something random to watch (prefers your watchlist)"
+                  aria-label="Surprise me"
+                  className="focus-ring flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line press hover:text-foreground sm:min-h-8 sm:min-w-0 sm:justify-start"
+                >
+                  <Dices size={16} />
+                  <span className="hidden sm:inline">Surprise</span>
+                </button>
+              )}
               <button
                 onClick={() => openShare([])}
                 title="Share your library"
                 aria-label="Share your library"
                 className="focus-ring flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line press hover:text-foreground sm:min-h-8 sm:min-w-0 sm:justify-start"
               >
-                <Share2 size={15} />
+                <Share2 size={16} />
                 <span className="hidden sm:inline">Share</span>
               </button>
             </>
@@ -1012,6 +1026,9 @@ export function Library({
       {filtered.length === 0 ? (
         <EmptyState
           hasItems={items.length > 0}
+          query={query}
+          searchOnly={query !== "" && !filtersBesidesSearch}
+          onClearSearch={() => setQuery("")}
           onClear={clearFilters}
           onlyOnServices={onlyOnServices}
           hasConfiguredProviders={myProviders.length > 0}
@@ -1264,7 +1281,7 @@ function BulkBar({
             >
               More
               <ChevronDown
-                size={14}
+                size={16}
                 aria-hidden
                 className={cn("transition-transform", showMore && "rotate-180")}
               />
@@ -1322,7 +1339,7 @@ function BulkBar({
                   aria-label="Add this tag to selected"
                   className={cn("min-h-11 min-w-11 sm:min-w-0", softDisabledClass)}
                 >
-                  <TagIcon size={14} />
+                  <TagIcon size={16} />
                 </Button>
                 <Button
                   size="sm"
@@ -1337,7 +1354,7 @@ function BulkBar({
                   aria-label="Remove this tag from selected"
                   className={cn("min-h-11 min-w-11 sm:min-w-0", softDisabledClass)}
                 >
-                  <Minus size={14} />
+                  <Minus size={16} />
                 </Button>
               </div>
 
@@ -1351,7 +1368,7 @@ function BulkBar({
                 }}
                 className={cn("min-h-11", softDisabledClass)}
               >
-                <Heart size={14} /> Favorite
+                <Heart size={16} /> Favorite
               </Button>
 
               <Button
@@ -1364,7 +1381,7 @@ function BulkBar({
                 }}
                 className={cn("min-h-11", softDisabledClass)}
               >
-                <Heart size={14} className="text-faint" /> Unfavorite
+                <Heart size={16} className="text-faint" /> Unfavorite
               </Button>
 
               <Button
@@ -1377,7 +1394,7 @@ function BulkBar({
                 }}
                 className={cn("min-h-11", softDisabledClass)}
               >
-                <Share2 size={14} /> Share
+                <Share2 size={16} /> Share
               </Button>
             </div>
 
@@ -1404,7 +1421,7 @@ function BulkBar({
                 }}
                 className={cn("min-h-11", softDisabledClass)}
               >
-                <Trash2 size={14} /> Remove
+                <Trash2 size={16} /> Remove
               </Button>
 
               <button
@@ -1495,7 +1512,9 @@ const ListRow = memo(function ListRow({
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="truncate text-sm font-medium">{item.name}</span>
+          <span className="truncate text-sm font-medium" title={item.name}>
+            {item.name}
+          </span>
           {item.favorite && (
             <span>
               <Heart size={12} aria-hidden="true" className="fill-rose-400 text-rose-400" />
@@ -1514,10 +1533,11 @@ const ListRow = memo(function ListRow({
             {shownTags.map((t) => (
               <span
                 key={t}
+                title={t}
                 className={cn(
                   // inline-block, not inline-flex: `truncate` needs a block
                   // formatting context for its ellipsis to actually render.
-                  "inline-block max-w-32 truncate rounded-full px-2 py-0.5 align-middle text-[11px] font-medium ring-1 ring-inset",
+                  "inline-block max-w-32 truncate rounded-full px-2 py-0.5 align-middle text-xs font-medium ring-1 ring-inset",
                   tagChipClass(tagColors?.[t]),
                 )}
               >
@@ -1525,7 +1545,7 @@ const ListRow = memo(function ListRow({
               </span>
             ))}
             {hiddenTagCount > 0 && (
-              <span className="text-[11px] tabular-nums text-faint">
+              <span className="text-xs tabular-nums text-faint">
                 +{hiddenTagCount}
               </span>
             )}
@@ -1545,14 +1565,14 @@ const ListRow = memo(function ListRow({
         onClick={() => onToggle(item.id)}
         aria-pressed={selected}
         className={cn(
-          "cv-auto focus-ring flex items-center gap-3 px-3 py-2.5 text-left transition-colors active:bg-surface-2/60 active:duration-0",
+          "cv-auto focus-ring focus-ring-inset flex items-center gap-3 px-3 py-2.5 text-left transition-colors active:bg-surface-2/60 active:duration-0",
           selected ? "bg-brand/10" : "bg-surface hover:bg-surface-2/50",
         )}
       >
         <span
           className={cn(
             "flex h-5 w-5 shrink-0 items-center justify-center rounded ring-1",
-            selected ? "bg-brand text-[#04121c] ring-brand" : "ring-line-strong",
+            selected ? "bg-brand text-on-accent ring-brand" : "ring-line-strong",
           )}
         >
           {selected && <CheckSquare size={13} />}
@@ -1565,7 +1585,7 @@ const ListRow = memo(function ListRow({
   return (
     <IntentLink
       href={`/title/${item.id}`}
-      className="cv-auto focus-ring flex items-center gap-3 bg-surface px-3 py-2.5 transition-colors hover:bg-surface-2/50 active:bg-surface-2/60 active:duration-0"
+      className="cv-auto focus-ring focus-ring-inset flex items-center gap-3 bg-surface px-3 py-2.5 transition-colors hover:bg-surface-2/50 active:bg-surface-2/60 active:duration-0"
     >
       {inner}
     </IntentLink>
@@ -1574,6 +1594,9 @@ const ListRow = memo(function ListRow({
 
 function EmptyState({
   hasItems,
+  query,
+  searchOnly,
+  onClearSearch,
   onClear,
   onlyOnServices,
   hasConfiguredProviders,
@@ -1581,6 +1604,10 @@ function EmptyState({
   uncheckedServiceCount,
 }: {
   hasItems: boolean;
+  query: string;
+  /** The search is the only thing narrowing the view. */
+  searchOnly: boolean;
+  onClearSearch: () => void;
   onClear: () => void;
   onlyOnServices: boolean;
   hasConfiguredProviders: boolean;
@@ -1624,18 +1651,31 @@ function EmptyState({
   }
 
   return (
-    <div className="flex flex-col items-center justify-center gap-3 rounded-[var(--radius-card)] border border-dashed border-line py-20 text-center">
-      <p className="text-sm text-muted">
-        {hasItems ? "No titles match your filters." : "Your library is empty."}
-      </p>
+    <div className="flex flex-col items-center justify-center gap-3 rounded-[var(--radius-card)] border border-dashed border-line px-5 py-20 text-center">
+      {/* A no-match state names the query; a first-run state says what the
+          place is for (JK-31). */}
+      {hasItems ? (
+        <p className="max-w-full break-words text-sm text-muted">
+          {query.trim()
+            ? `No titles match “${query.trim()}”${searchOnly ? "." : " with these filters."}`
+            : "No titles match your filters."}
+        </p>
+      ) : (
+        <div>
+          <p className="text-sm font-medium text-foreground">Your library is empty.</p>
+          <p className="mt-1 max-w-sm text-sm text-muted">
+            Titles you add show up here with your progress and ratings.
+          </p>
+        </div>
+      )}
       {hasItems ? (
         <div className="flex items-center gap-1">
           <button
             type="button"
-            onClick={onClear}
+            onClick={searchOnly ? onClearSearch : onClear}
             className="focus-ring flex min-h-11 items-center justify-center rounded-lg px-2 py-1.5 text-sm font-medium text-brand hover:underline sm:min-h-0"
           >
-            Try clearing filters
+            {searchOnly ? "Clear search" : "Clear filters"}
           </button>
           <span className="text-faint">·</span>
           <Link
@@ -1785,7 +1825,7 @@ function TrashView({
             onClick={onExit}
             className="focus-ring flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground sm:min-h-8"
           >
-            <ArrowLeft size={15} /> Back to library
+            <ArrowLeft size={16} /> Back to library
           </button>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1803,7 +1843,7 @@ function TrashView({
               }}
               className={cn("shrink-0", softDisabledClass)}
             >
-              <Trash2 size={14} /> Empty trash
+              <Trash2 size={16} /> Empty trash
             </Button>
           )}
         </div>
@@ -1862,7 +1902,9 @@ function TrashRow({
         />
       </div>
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-medium">{item.name}</div>
+        <div className="truncate text-sm font-medium" title={item.name}>
+          {item.name}
+        </div>
         <div className="truncate text-xs text-muted">
           {item.mediaType === "TV" ? "TV" : "Movie"} · Deleted {fullDate(item.deletedAt)}
         </div>
@@ -1878,7 +1920,7 @@ function TrashRow({
           }}
           className={softDisabledClass}
         >
-          <RotateCcw size={14} /> Restore
+          <RotateCcw size={16} /> Restore
         </Button>
         <Button
           size="sm"
@@ -1890,7 +1932,7 @@ function TrashRow({
           }}
           className={softDisabledClass}
         >
-          <Trash2 size={14} />
+          <Trash2 size={16} />
           <span className="hidden sm:inline">Delete forever</span>
           <span className="sm:hidden">Delete</span>
         </Button>

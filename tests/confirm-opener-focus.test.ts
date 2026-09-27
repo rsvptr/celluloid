@@ -43,7 +43,7 @@ describe("confirm openers keep focus after confirming (JK-03)", () => {
       '{deleting ? "Deleting…"',
       "void revokeSession(session)",
       "void revokeOtherSessions()",
-      ": null} Disable 2FA",
+      ": null} Turn off 2FA",
       "void commitRestore()",
       "Delete my account",
     ]) {

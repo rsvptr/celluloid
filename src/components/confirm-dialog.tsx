@@ -8,6 +8,8 @@ interface ConfirmOptions {
   title: string;
   body?: string;
   confirmLabel?: string;
+  /** Names what staying put means when "Cancel" would be ambiguous. */
+  cancelLabel?: string;
   destructive?: boolean;
 }
 
@@ -75,7 +77,7 @@ export function useConfirm() {
           <div className="mt-4 flex justify-end gap-2">
             <AlertDialog.Cancel asChild>
               <Button variant="ghost" size="sm">
-                Cancel
+                {opts.cancelLabel ?? "Cancel"}
               </Button>
             </AlertDialog.Cancel>
             <AlertDialog.Action asChild>

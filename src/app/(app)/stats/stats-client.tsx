@@ -5,7 +5,7 @@ import { ESTIMATED_EPISODE_MINUTES, ESTIMATED_MOVIE_MINUTES } from "@/lib/data";
 import { Card } from "@/components/ui";
 import { BarRow, ColumnChart, Sparkline } from "@/components/charts";
 import { ActivityCalendar } from "./activity-calendar";
-import { STATUS_META, STATUS_ORDER, languageName } from "@/lib/format";
+import { STATUS_META, STATUS_ORDER, formatCount, languageName } from "@/lib/format";
 import type { WatchStatus } from "@/generated/prisma/client";
 
 export function StatsClient({
@@ -17,7 +17,7 @@ export function StatsClient({
 }) {
   const hours = Math.round(stats.watchTimeMinutes / 60);
   const days = Math.floor(hours / 24);
-  const watchTime = days > 0 ? `${days}d ${hours % 24}h` : `${hours}h`;
+  const watchTime = days > 0 ? `${formatCount(days)}d ${hours % 24}h` : `${formatCount(hours)}h`;
 
   // "Any watch activity" gates the activity heatmap specifically (it needs
   // dated events). Sparse/rich is broader: a library that's been rated or
@@ -65,7 +65,9 @@ export function StatsClient({
         </Card>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          {/* Seven KPIs: seven columns at lg, so Rewatches isn't orphaned
+              on a second row (JK-36). */}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
             <Kpi label="Titles" value={stats.total} />
             <Kpi label="Movies" value={stats.movies} />
             <Kpi label="TV shows" value={stats.tv} />
@@ -75,7 +77,7 @@ export function StatsClient({
               value={stats.watchedEpisodes}
               hint={
                 stats.episodesTotal > 0
-                  ? `of ${stats.episodesTotal} tracked`
+                  ? `of ${formatCount(stats.episodesTotal)} tracked`
                   : undefined
               }
             />
@@ -107,7 +109,7 @@ export function StatsClient({
               {stats.watchTimeEstimatedEpisodes > 0 && (
                 <>
                   <span className="tabular-nums">
-                    {stats.watchTimeEstimatedEpisodes}
+                    {formatCount(stats.watchTimeEstimatedEpisodes)}
                   </span>{" "}
                   watched episode{stats.watchTimeEstimatedEpisodes === 1 ? "" : "s"}{" "}
                   with no known runtime at about {ESTIMATED_EPISODE_MINUTES}{" "}
@@ -120,7 +122,7 @@ export function StatsClient({
               {stats.watchTimeEstimatedMovies > 0 && (
                 <>
                   <span className="tabular-nums">
-                    {stats.watchTimeEstimatedMovies}
+                    {formatCount(stats.watchTimeEstimatedMovies)}
                   </span>{" "}
                   watched movie{stats.watchTimeEstimatedMovies === 1 ? "" : "s"}{" "}
                   with no known runtime at about {ESTIMATED_MOVIE_MINUTES}{" "}
@@ -140,18 +142,21 @@ export function StatsClient({
                     <h2 className="text-sm font-semibold">Watch activity</h2>
                     <div className="mt-1 flex items-baseline gap-2">
                       <span className="text-2xl font-bold tracking-tight tabular-nums text-gradient">
-                        {stats.currentStreak}
+                        {formatCount(stats.currentStreak)}
                       </span>
                       <span className="text-sm text-muted">day streak</span>
                     </div>
                   </div>
                   <div className="flex items-center gap-4 text-xs text-muted">
                     <span className="flex items-center gap-1.5">
-                      <Flame size={14} className="text-amber-400" />
-                      Longest <span className="tabular-nums">{stats.longestStreak}</span>d
+                      <Flame size={16} className="text-amber-400" />
+                      Longest streak:{" "}
+                      <span className="tabular-nums">{formatCount(stats.longestStreak)}</span>{" "}
+                      {stats.longestStreak === 1 ? "day" : "days"}
                     </span>
                     <span>
-                      <span className="tabular-nums">{stats.activeDays}</span> active days
+                      <span className="tabular-nums">{formatCount(stats.activeDays)}</span> active{" "}
+                      {stats.activeDays === 1 ? "day" : "days"}
                     </span>
                   </div>
                 </div>
@@ -334,7 +339,7 @@ function Kpi({
   return (
     <Card variant="inset" className="p-4">
       <div className="text-2xl font-bold tracking-tight tabular-nums text-foreground">
-        {value}
+        {typeof value === "number" ? formatCount(value) : value}
       </div>
       <div className="mt-1 text-xs text-muted">{label}</div>
       {hint && <div className="text-xs tabular-nums text-faint">{hint}</div>}

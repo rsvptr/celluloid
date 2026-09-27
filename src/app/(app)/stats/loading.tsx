@@ -1,8 +1,9 @@
-import { Shimmer } from "@/components/skeleton";
+import { LoadingStatus, Shimmer } from "@/components/skeleton";
 
 export default function Loading() {
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-6" aria-busy="true">
+      <LoadingStatus>Loading stats…</LoadingStatus>
       <Shimmer className="h-7 w-24" />
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         {Array.from({ length: 6 }).map((_, i) => (

@@ -275,7 +275,7 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
             aria-label="Back to all commands"
             className="focus-ring -ml-1 flex shrink-0 items-center gap-1.5 rounded-md py-1 pr-1.5 pl-1 text-xs font-medium text-brand"
           >
-            <ArrowLeft size={14} aria-hidden />
+            <ArrowLeft size={16} aria-hidden />
             {activeAction.prompt}
           </button>
         ) : (
@@ -326,7 +326,7 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
                   onSelect={() => runAction(activeAction.kind, t)}
                   className={itemClass}
                 >
-                  <Icon size={15} className="text-muted" />
+                  <Icon size={16} className="text-muted" />
                   <span className="min-w-0 flex-1 truncate">{t.name}</span>
                   {t.year ? (
                     <span className="shrink-0 text-xs text-faint">{t.year}</span>
@@ -337,7 +337,7 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
           </Command.Group>
         ) : (
           <>
-            <Command.Group heading="Do" className={groupClass}>
+            <Command.Group heading="Actions" className={groupClass}>
               {ACTIONS.map((a) => {
                 const Icon = a.icon;
                 return (
@@ -347,7 +347,7 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
                     onSelect={() => startAction(a.kind)}
                     className={itemClass}
                   >
-                    <Icon size={15} className="text-brand" />
+                    <Icon size={16} className="text-brand" />
                     <span className="min-w-0 flex-1 truncate">{a.label}</span>
                     <span className="shrink-0 text-xs text-faint">Pick a title</span>
                   </Command.Item>
@@ -365,7 +365,7 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
                     onSelect={() => go(n.href)}
                     className={itemClass}
                   >
-                    <Icon size={15} className="text-muted" />
+                    <Icon size={16} className="text-muted" />
                     {n.label}
                   </Command.Item>
                 );
@@ -383,7 +383,7 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
                       onSelect={() => go(`/title/${t.id}`)}
                       className={itemClass}
                     >
-                      <Icon size={15} className="text-muted" />
+                      <Icon size={16} className="text-muted" />
                       <span className="min-w-0 flex-1 truncate">{t.name}</span>
                       {t.year ? (
                         <span className="shrink-0 text-xs text-faint">{t.year}</span>

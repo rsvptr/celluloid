@@ -17,6 +17,7 @@ import {
   languageName,
   mediaTypeLabel,
   runtimeText,
+  tvStatusLabel,
 } from "@/lib/format";
 import { MatchControls } from "@/components/match-controls";
 import { TitleControls } from "./title-controls";
@@ -24,19 +25,6 @@ import { SeasonTracker } from "./season-tracker";
 import { TagEditor } from "./tag-editor";
 import { TitleExtras, TitleExtrasFallback } from "./title-extras";
 import { WatchHistory } from "./watch-history";
-
-/**
- * TMDB's TV lifecycle string, softened for display. "Ended" (concluded its
- * run) and "Canceled" (axed) are deliberately kept distinct — whether a show
- * got a real ending is exactly what a viewer deciding to start it wants to
- * know; only the spelling of "Canceled" is normalized. Anything else (e.g.
- * "Planned", "In Production") is shown exactly as TMDB sent it.
- */
-function tvStatusLabel(status: string): string {
-  if (status === "Returning Series") return "Returning";
-  if (status === "Canceled") return "Cancelled";
-  return status;
-}
 
 export async function generateMetadata({
   params,
@@ -111,7 +99,7 @@ export default async function TitlePage({
         href="/"
         className="focus-ring inline-flex w-fit items-center gap-1.5 rounded text-sm text-muted hover:text-foreground"
       >
-        <ArrowLeft size={15} /> Library
+        <ArrowLeft size={16} /> Library
       </Link>
 
       {/* Hero */}
@@ -180,7 +168,7 @@ export default async function TitlePage({
                 const Icon = m.icon;
                 return (
                   <span key={i} className="inline-flex items-center gap-1.5">
-                    <Icon size={14} /> {m.text}
+                    <Icon size={16} /> {m.text}
                   </span>
                 );
               })}

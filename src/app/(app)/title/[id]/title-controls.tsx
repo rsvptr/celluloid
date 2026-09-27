@@ -445,7 +445,7 @@ export function TitleControls({
               className="absolute right-3 top-3 -m-3 flex min-h-11 min-w-11 items-center justify-center rounded text-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 sm:m-0 sm:min-h-0 sm:min-w-0"
               aria-label="Close"
             >
-              <X size={18} />
+              <X size={20} />
             </Dialog.Close>
             <Dialog.Title className="text-sm font-semibold">Log a watch</Dialog.Title>
             <Dialog.Description className="mt-1.5 text-sm text-muted">
@@ -487,7 +487,7 @@ export function TitleControls({
                   id={logNoteId}
                   value={logNote}
                   onChange={(e) => setLogNote(e.target.value)}
-                  placeholder="Watched with..."
+                  placeholder="Watched with…"
                   maxLength={500}
                 />
               </div>
@@ -662,8 +662,10 @@ export function TitleControls({
             commitImmediate();
           }}
         >
-          <Heart size={15} className={cn(localFav && "fill-current")} />
-          {localFav ? "Favorited" : "Favorite"}
+          {/* A toggle keeps one label; aria-pressed, the fill and the heart
+              carry the state (APG button pattern, JK-06). */}
+          <Heart size={16} className={cn(localFav && "fill-current")} />
+          Favorite
         </Button>
         <Button
           variant="danger"
@@ -702,7 +704,7 @@ export function TitleControls({
             });
           }}
         >
-          <Trash2 size={15} />
+          <Trash2 size={16} />
           Remove
         </Button>
       </div>

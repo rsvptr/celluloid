@@ -8,6 +8,7 @@ import type { SearchResult } from "@/app/api/search/route";
 import { Spinner } from "@/components/ui";
 import { TmdbSearch } from "@/components/tmdb-search";
 import { addFromTmdb } from "@/lib/actions";
+import { nameWithTypeAndYear } from "@/lib/format";
 
 type AddState =
   | { kind: "idle" }
@@ -63,7 +64,15 @@ export function AddSearch({ initialQuery }: { initialQuery?: string }) {
         renderAction={(r) => {
           const key = `${r.mediaType}:${r.tmdbId}`;
           const state = states[key] ?? { kind: "idle" };
-          return <AddButton name={r.name} state={state} onAdd={() => add(r)} />;
+          // Type and year in the accessible names: a show and a movie can
+          // share a title (JK-21).
+          return (
+            <AddButton
+              name={nameWithTypeAndYear(r.name, r.mediaType, r.year)}
+              state={state}
+              onAdd={() => add(r)}
+            />
+          );
         }}
       />
     </div>
@@ -105,7 +114,7 @@ function AddButton({
         aria-label={`View ${name} in your library`}
         className="focus-ring flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg bg-emerald-500/15 px-3 py-2 text-sm font-medium text-emerald-300 ring-1 ring-emerald-500/30 hover:bg-emerald-500/25 sm:min-h-0"
       >
-        <Check size={15} aria-hidden="true" />
+        <Check size={16} aria-hidden="true" />
         {state.kind === "added" ? "Added" : "In library"}
       </Link>
     );
@@ -122,7 +131,7 @@ function AddButton({
         >
           Retry
         </button>
-        <p role="alert" className="max-w-[10rem] text-right text-[11px] text-rose-300">
+        <p role="alert" className="max-w-[10rem] text-right text-xs text-rose-300">
           {state.message}
         </p>
       </div>
@@ -134,9 +143,9 @@ function AddButton({
       onClick={beginAdd}
       disabled={state.kind === "adding"}
       aria-label={`Add ${name} to your library`}
-      className="focus-ring brand-gradient flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-[#04121c] hover:opacity-90 disabled:opacity-60 sm:min-h-0"
+      className="focus-ring brand-gradient flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-on-accent hover:opacity-90 disabled:opacity-60 sm:min-h-0"
     >
-      {state.kind === "adding" ? <Spinner /> : <Plus size={15} aria-hidden="true" />}
+      {state.kind === "adding" ? <Spinner /> : <Plus size={16} aria-hidden="true" />}
       Add
     </button>
   );

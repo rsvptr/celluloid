@@ -51,6 +51,15 @@ function tvLabel(count: number) {
   return count === 1 ? "TV show" : "TV shows";
 }
 
+/**
+ * Whether a note can overflow its four-line clamp. A card column holds about
+ * 22 characters of text-xs per line, so 80 characters or 4 line breaks can;
+ * erring long only shows a toggle that changes nothing.
+ */
+function noteMayClamp(notes: string) {
+  return notes.length > 80 || notes.split("\n").length > 4;
+}
+
 export async function generateMetadata({
   params,
 }: {
@@ -149,14 +158,14 @@ export default async function SharePage({
               </p>
               <span aria-hidden="true" className="hidden h-1 w-1 rounded-full bg-faint sm:block" />
               <p className="inline-flex items-center gap-2">
-                <LockKeyhole aria-hidden="true" size={15} />
+                <LockKeyhole aria-hidden="true" size={16} />
                 Read-only
               </p>
               {includeNotes ? (
                 <>
                   <span aria-hidden="true" className="hidden h-1 w-1 rounded-full bg-faint sm:block" />
                   <p className="inline-flex items-center gap-2">
-                    <MessageSquareQuote aria-hidden="true" size={15} />
+                    <MessageSquareQuote aria-hidden="true" size={16} />
                     Notes included
                   </p>
                 </>
@@ -228,9 +237,22 @@ export default async function SharePage({
                     lcp={index < 2 ? "preload" : index < 7 ? "eager" : undefined}
                   />
                   {includeNotes && item.notes ? (
-                    <blockquote className="mt-3 border-l-2 border-brand-cyan/45 pl-3 text-xs leading-5 text-muted">
+                    <blockquote className="group/note mt-3 border-l-2 border-brand-cyan/45 pl-3 text-xs leading-5 text-muted">
                       <span className="sr-only">Note from {ownerName}: </span>
-                      <p className="line-clamp-4 break-words whitespace-pre-wrap">{item.notes}</p>
+                      {/* Anonymous viewers have no detail page, so a clamped
+                          note needs its own way to the rest (JK-27). Opening
+                          the details lifts the clamp; no client JS. */}
+                      <p className="line-clamp-4 break-words whitespace-pre-wrap group-has-[details[open]]/note:line-clamp-none">
+                        {item.notes}
+                      </p>
+                      {noteMayClamp(item.notes) ? (
+                        <details className="group/more mt-1">
+                          <summary className="focus-ring w-fit cursor-pointer list-none rounded font-medium text-foreground/80 hover:text-foreground [&::-webkit-details-marker]:hidden">
+                            <span className="group-open/more:hidden">Show full note</span>
+                            <span className="hidden group-open/more:inline">Show less</span>
+                          </summary>
+                        </details>
+                      ) : null}
                     </blockquote>
                   ) : null}
                 </article>

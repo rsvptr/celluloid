@@ -130,6 +130,8 @@ export function Nav({ userName }: { userName?: string | null }) {
 
   // Close on outside click / Escape; Escape also returns focus to the trigger
   // (outside click leaves focus wherever the user clicked, which is correct).
+  // Focus moving outside (Tab past "Sign out") closes it too, so it never
+  // floats over the page with focus elsewhere (JK-25).
   useEffect(() => {
     if (!moreOpen) return;
     function onPointerDown(e: PointerEvent) {
@@ -142,6 +144,15 @@ export function Nav({ userName }: { userName?: string | null }) {
       }
       setMoreOpen(false);
     }
+    function onFocusIn(e: FocusEvent) {
+      const target = e.target as Node;
+      if (
+        !morePopoverRef.current?.contains(target) &&
+        !moreTriggerRef.current?.contains(target)
+      ) {
+        setMoreOpen(false);
+      }
+    }
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
         setMoreOpen(false);
@@ -150,9 +161,11 @@ export function Nav({ userName }: { userName?: string | null }) {
     }
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("focusin", onFocusIn);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("focusin", onFocusIn);
     };
   }, [moreOpen]);
 
@@ -236,13 +249,17 @@ export function Nav({ userName }: { userName?: string | null }) {
               // reverts to the original content-sized pill at md+.
               className="focus-ring flex h-11 w-11 items-center justify-center gap-1.5 rounded-lg text-sm text-muted ring-1 ring-line press hover:text-foreground lg:h-auto lg:w-auto lg:justify-start lg:px-2 lg:py-1.5"
             >
-              <Search size={15} />
+              <Search size={16} />
               <span className="hidden items-center gap-0.5 text-xs text-faint lg:flex">
                 {isMac ? <CommandIcon size={11} /> : <span>Ctrl</span>}K
               </span>
             </button>
             {userName && (
-              <span className="hidden text-sm text-muted lg:inline">{userName}</span>
+              // Names run to 80 characters: cap and truncate so a long one
+              // can't wrap out of the 56px header (JK-30).
+              <span className="hidden max-w-40 truncate text-sm text-muted lg:inline" title={userName}>
+                {userName}
+              </span>
             )}
             <Link
               href="/settings"
@@ -277,14 +294,13 @@ export function Nav({ userName }: { userName?: string | null }) {
                 title="More"
                 className="focus-ring flex h-11 w-11 items-center justify-center rounded-lg text-muted press hover:bg-surface-2/60 hover:text-foreground"
               >
-                <MoreHorizontal size={18} />
+                <MoreHorizontal size={20} />
               </button>
               <AnimatePresence>
                   {moreOpen && (
                     <motion.div
                       ref={morePopoverRef}
                       id="nav-more-menu"
-                      aria-label="More options"
                       data-motion-enter
                       initial={{ opacity: 0, y: -6, scale: 0.97 }}
                       animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -352,7 +368,7 @@ export function Nav({ userName }: { userName?: string | null }) {
                 href={l.href}
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  "focus-ring relative flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 py-2.5 text-[11px] font-medium press",
+                  "focus-ring relative flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 py-2.5 text-xs font-medium press",
                   active ? "text-foreground" : "text-muted hover:text-foreground",
                 )}
               >
@@ -362,7 +378,7 @@ export function Nav({ userName }: { userName?: string | null }) {
                 {active && (
                   <span aria-hidden className="absolute inset-x-0 top-0 mx-auto w-8 border-t-2 border-foreground" />
                 )}
-                <Icon size={19} aria-hidden />
+                <Icon size={20} aria-hidden />
                 {l.label}
               </Link>
             );
