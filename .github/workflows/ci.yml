@@ -102,3 +102,8 @@ jobs:
       # generated since they were added has tried to drop them.
       - name: Fail on drift between the migrated database and schema.prisma
         run: npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
+
+      # The flip side of the note above: the diff can't see a migration that
+      # drops the Tag index or a CHECK, so check those objects directly.
+      - name: Fail if the migration-only index or CHECK constraints are missing
+        run: node scripts/check-migration-objects.mjs
