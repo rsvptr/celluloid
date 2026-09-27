@@ -5,7 +5,6 @@ import * as m from "motion/react-m";
 import {
   AnimatePresence,
   LazyMotion,
-  LayoutGroup,
   MotionConfig,
   useIsPresent,
   useReducedMotion,
@@ -14,10 +13,10 @@ import {
 // Re-export the bits the rest of the app uses so imports stay in one place.
 // Consumers keep the existing `motion.div` spelling, but the value is Motion's
 // lean `m` component and receives its features from MotionProvider below.
-export { AnimatePresence, LayoutGroup, m as motion, useReducedMotion };
+export { AnimatePresence, m as motion, useReducedMotion };
 
-// `layout` (recommendation cards) and `layoutId` (nav pill) need domMax rather
-// than domAnimation. The async feature import keeps that larger feature bundle
+// `layout` (recommendation cards) needs domMax rather than domAnimation.
+// The async feature import keeps that larger feature bundle
 // out of the app shell's initial JS while the statically analyzable path lets
 // Next split it into its own chunk. If the chunk fails to load (flaky network,
 // a blocker, deploy skew), `m` components simply stay feature-less: the promise

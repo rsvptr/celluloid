@@ -15,13 +15,12 @@ import {
   Settings,
   Sparkles,
 } from "lucide-react";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import { authClient } from "@/lib/auth-client";
 import {
   AnimatePresence,
   EASE_OUT,
-  LayoutGroup,
   motion,
 } from "@/components/motion";
 import { Wordmark } from "./brand";
@@ -67,6 +66,31 @@ export function Nav({ userName }: { userName?: string | null }) {
   // Guards against a second sign-out firing while one is already in flight
   // (e.g. an impatient double-click) rather than a render-triggering state.
   const signingOutRef = useRef(false);
+
+  // The desktop active pill is one persistent element that moves to the active
+  // link's offset and width. A layoutId pill measured its box against page
+  // scroll, which Next resets on navigation, so it flew in from the old scroll
+  // position. Until the first measurement (and for good if Motion's features
+  // failed to load, since the pill could not move) the active link draws a
+  // static pill instead, so the SSR nav already shows one.
+  const deskNavRef = useRef<HTMLElement>(null);
+  const [pill, setPill] = useState<{ x: number; width: number } | null>(null);
+  useLayoutEffect(() => {
+    const nav = deskNavRef.current;
+    if (!nav) return;
+    const measure = () => {
+      if (!nav.offsetWidth) return; // hidden below lg
+      const link = nav.querySelector<HTMLElement>('[aria-current="page"]');
+      const failed = "motionFailed" in document.documentElement.dataset;
+      setPill(link && !failed ? { x: link.offsetLeft, width: link.offsetWidth } : null);
+    };
+    // Measure before paint, so the pill starts moving in the same frame as the
+    // link's color, then again whenever late fonts or a resize change the row.
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(nav);
+    return () => observer.disconnect();
+  }, [pathname]);
 
   const isActive = (href: string) =>
     href === "/"
@@ -141,12 +165,20 @@ export function Nav({ userName }: { userName?: string | null }) {
               its visible position (the nav row still starts flush left). */}
           <Wordmark size={28} textClassName="hidden lg:inline" className="p-2 lg:p-0" />
           <span aria-hidden className="hidden h-5 w-px shrink-0 bg-line lg:mx-2 lg:block" />
-          <LayoutGroup>
               {/* Desktop link row — unchanged from before, just newly gated to
                   lg+ now that the same four destinations live in the bottom bar
                   below lg (AUD-08: the md switch overflowed between 768 and
                   849px). */}
-              <nav className="hidden items-center gap-1 lg:flex">
+              <nav ref={deskNavRef} className="relative hidden items-center gap-1 lg:flex">
+                {pill && (
+                  <motion.span
+                    aria-hidden
+                    className="absolute inset-y-0 left-0 -z-10 rounded-lg bg-surface-2"
+                    initial={false}
+                    animate={pill}
+                    transition={{ type: "spring", stiffness: 400, damping: 40 }}
+                  />
+                )}
                 {LINKS.map((l) => {
                   const Icon = l.icon;
                   const active = isActive(l.href);
@@ -167,12 +199,8 @@ export function Nav({ userName }: { userName?: string | null }) {
                           : "text-muted hover:bg-surface-2/60 hover:text-foreground",
                       )}
                     >
-                      {active && (
-                        <motion.span
-                          layoutId="nav-active"
-                          className="absolute inset-0 -z-10 rounded-lg bg-surface-2"
-                          transition={{ type: "spring", stiffness: 400, damping: 32 }}
-                        />
+                      {active && !pill && (
+                        <span className="absolute inset-0 -z-10 rounded-lg bg-surface-2" />
                       )}
                       <Icon size={16} />
                       <span className="hidden lg:inline">{l.label}</span>
@@ -180,7 +208,6 @@ export function Nav({ userName }: { userName?: string | null }) {
                   );
                 })}
               </nav>
-          </LayoutGroup>
           <div className="ml-auto flex items-center gap-2">
             <button
               onClick={openCommand}
