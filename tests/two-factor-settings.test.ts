@@ -77,3 +77,21 @@ describe("regenerating backup codes (BA-09)", () => {
     assert.match(between(settings, "function reset()", "async function"), /setNewCodes\(null\)/);
   });
 });
+
+// Setup showed its backup codes with Copy only; regenerating had Copy and Download.
+describe("backup codes at 2FA setup", () => {
+  it("offer Copy and the same Download as regenerating", async () => {
+    const settings = await source(settingsPath);
+    // The same Blob and filename in both places.
+    const blob = (codes: string) =>
+      new RegExp(
+        String.raw`saveBlob\(\s*new Blob\(\[\`\$\{${codes}\.join\("\\n"\)\}\\n\`\], \{ type: "text/plain" \}\),\s*"celluloid-backup-codes\.txt",?\s*\)`,
+      );
+    const regenerate = between(settings, 'id="settings-new-backup-codes"', "Done\n");
+    assert.match(regenerate, blob("newCodes"));
+    const setup = between(settings, "2. Keep these backup codes somewhere safe.", "3. Enter the 6-digit code");
+    assert.match(setup, /copyText\(backupCodes\.join\("\\n"\), "Backup codes copied"\)/);
+    assert.match(setup, blob("backupCodes"));
+    assert.match(setup, /<Download size=\{12\} \/> Download/);
+  });
+});

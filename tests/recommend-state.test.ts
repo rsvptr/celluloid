@@ -23,7 +23,7 @@ function rec(overrides: Partial<Recommendation> = {}): Recommendation {
 const run = (...actions: RecommendAction[]) =>
   actions.reduce(recommendReducer, initialRecommendState);
 
-const finish: RecommendAction = { type: "finish", language: undefined, era: "" };
+const finish: RecommendAction = { type: "finish", language: undefined, era: "", stopped: false };
 const titles = (state: RecommendState) => state.recs.map((r) => r.title);
 
 const alien = rec({ title: "Alien", year: 1979, tmdbId: 348 });
@@ -108,7 +108,7 @@ describe("recommend request lifecycle (VE-08)", () => {
       { type: "rec", rec: french },
       { type: "rec", rec: heat },
       { type: "rec", rec: zodiac },
-      { type: "finish", language: "fr", era: "1990s" },
+      { type: "finish", language: "fr", era: "1990s", stopped: false },
     );
     assert.equal(state.status, "done");
     assert.equal(state.error, null);
@@ -138,20 +138,25 @@ describe("recommend request lifecycle (VE-08)", () => {
     assert.deepEqual(state.received, []);
   });
 
-  it("ends a run stopped before any pick done and empty", () => {
-    const state = run({ type: "start" }, { type: "phase", phase: "thinking" }, finish);
+  it("ends a run stopped before any pick done and empty, and says it was stopped", () => {
+    const state = run({ type: "start" }, { type: "phase", phase: "thinking" }, { ...finish, stopped: true });
     assert.equal(state.status, "done");
+    assert.equal(state.status === "done" && state.stopped, true);
     assert.deepEqual(state.recs, []);
     assert.deepEqual(state.received, []);
+    // A run that simply came back empty isn't a stop.
+    const empty = run({ type: "start" }, finish);
+    assert.equal(empty.status === "done" && empty.stopped, false);
   });
 
   it("leaves the cards alone when nothing streamed in", () => {
-    // An Undo from an earlier run can land a card mid-run; with nothing
-    // received there is nothing to rank, so the list is kept as it is.
-    const withCard = run({ type: "start" }, { type: "restore", rec: alien, index: 0 });
-    const ended = recommendReducer(withCard, finish);
+    // With nothing received there is nothing to rank, so the list is kept as
+    // it is. (An Undo from an earlier run used to land a card here; it no
+    // longer can, see "recommend undo across runs".)
+    const started = run({ type: "start" });
+    const ended = recommendReducer(started, finish);
     assert.equal(ended.status, "done");
-    assert.equal(ended.recs, withCard.recs);
+    assert.equal(ended.recs, started.recs);
   });
 
   it("turns a late error into the error state", () => {
@@ -212,10 +217,10 @@ describe("recommend dismiss and undo (VE-08)", () => {
       { type: "rec", rec: brazil },
       { type: "dismiss", identity: recommendationIdentity(heat) },
     );
-    const restored = recommendReducer(streaming, { type: "restore", rec: heat, index: 1 });
+    const restored = recommendReducer(streaming, { type: "restore", rec: heat, index: 1, runId: 1 });
     assert.deepEqual(titles(restored), ["Alien", "Heat", "Brazil"]);
     assert.equal(restored.dismissed.has(recommendationIdentity(heat)), false);
-    const again = recommendReducer(restored, { type: "restore", rec: heat, index: 0 });
+    const again = recommendReducer(restored, { type: "restore", rec: heat, index: 0, runId: 1 });
     assert.deepEqual(titles(again), ["Alien", "Heat", "Brazil"]);
     assert.deepEqual(titles(recommendReducer(restored, finish)), ["Alien", "Heat", "Brazil"]);
   });
@@ -228,7 +233,7 @@ describe("recommend dismiss and undo (VE-08)", () => {
       finish,
       { type: "dismiss", identity: recommendationIdentity(heat) },
       { type: "dismiss", identity: recommendationIdentity(alien) },
-      { type: "restore", rec: heat, index: 1 },
+      { type: "restore", rec: heat, index: 1, runId: 1 },
     );
     assert.equal(state.status, "done");
     assert.deepEqual(titles(state), ["Heat"]);
@@ -243,8 +248,20 @@ describe("recommend dismiss and undo (VE-08)", () => {
     assert.equal(before.recs, recs);
     assert.equal(dismissed.size, 0);
     assert.equal(after.dismissed.size, 1);
-    recommendReducer(after, { type: "restore", rec: alien, index: 0 });
+    recommendReducer(after, { type: "restore", rec: alien, index: 0, runId: 1 });
     assert.equal(after.dismissed.size, 1);
+  });
+
+  it("counts runs, so a restore can name the run its card came from", () => {
+    assert.equal(initialRecommendState.runId, 0);
+    const first = run({ type: "start" });
+    assert.equal(first.runId, 1);
+    const second = recommendReducer(recommendReducer(first, finish), { type: "start" });
+    assert.equal(second.runId, 2);
+    // Every other action keeps the run.
+    const ended = run({ type: "start" }, { type: "rec", rec: alien }, { type: "fail", error: "Late." }, finish);
+    assert.equal(ended.runId, 1);
+    assert.equal(recommendReducer(ended, { type: "fail", error: "Later." }).runId, 1);
   });
 
   it("identifies a pick by TMDB id, or by normalized name and year", () => {
@@ -254,5 +271,38 @@ describe("recommend dismiss and undo (VE-08)", () => {
       recommendationIdentity(rec({ title: "Twin Peaks", year: null, mediaType: "tv" })),
       "tv:name:twin peaks:?",
     );
+  });
+});
+
+// An Undo, or a failed hide, from the previous run, done after a new run had
+// started, put the old card into the new list.
+describe("recommend undo across runs", () => {
+  const runOne = run(
+    { type: "start" },
+    { type: "rec", rec: alien },
+    { type: "rec", rec: heat },
+    finish,
+    { type: "dismiss", identity: recommendationIdentity(heat) },
+  );
+  const runTwo = ([{ type: "start" }, { type: "rec", rec: brazil }] satisfies RecommendAction[]).reduce(
+    recommendReducer,
+    runOne,
+  );
+  const staleRestore = { type: "restore", rec: heat, index: 0, runId: runOne.runId } as const;
+
+  it("keeps an earlier run's card out of a run that is streaming", () => {
+    assert.equal(runTwo.status, "streaming");
+    assert.equal(recommendReducer(runTwo, staleRestore), runTwo);
+    assert.deepEqual(titles(recommendReducer(recommendReducer(runTwo, staleRestore), finish)), ["Brazil"]);
+  });
+
+  it("keeps it out of a later run that has finished", () => {
+    const done = recommendReducer(runTwo, finish);
+    assert.equal(recommendReducer(done, staleRestore), done);
+  });
+
+  it("still puts the card back within its own run", () => {
+    const restored = recommendReducer(runOne, { ...staleRestore, index: 1 });
+    assert.deepEqual(titles(restored), ["Alien", "Heat"]);
   });
 });

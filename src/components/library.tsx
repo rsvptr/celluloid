@@ -14,11 +14,12 @@ import {
   libraryFiltersReducer,
   libraryMirrorFilters,
   libraryResultsKey,
+  libraryUrlFilters,
   toLibraryFilterState,
   type LibraryFilterUpdate,
   type LibraryResultCriteria,
 } from "@/lib/library-filter-state";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { CheckSquare, Dices, LayoutGrid, List, Share2 } from "lucide-react";
 import { toast } from "sonner";
 import type { LibraryItem, TrashedTitle } from "@/lib/data";
@@ -141,9 +142,18 @@ export function Library({
   // adjustment below (React's "adjusting state when a prop changes" pattern) runs
   // its setState exactly once per actual count change instead of looping.
   const [reconciledTrashedCount, setReconciledTrashedCount] = useState(trashedCount);
+  // The filters the address bar holds. They differ from initialFilters only
+  // when the page came back from the router's cache for an earlier URL (Back
+  // to a URL this component had mirrored), and then the address bar is right.
+  const searchParams = useSearchParams();
+  const urlFilters = libraryUrlFilters(initialFilters, searchParams, {
+    languages,
+    tags,
+    genres,
+  });
   const [filters, dispatchFilters] = useReducer(
     libraryFiltersReducer,
-    initialFilters,
+    urlFilters,
     toLibraryFilterState,
   );
   const { query, view, onlyOnServices } = filters;
@@ -169,7 +179,7 @@ export function Library({
   const incomingFilterKey = libraryFilterKey(initialFilters);
   if (incomingFilterKey !== appliedFilterKey) {
     setAppliedFilterKey(incomingFilterKey);
-    dispatchFilters({ type: "adopt", filters: initialFilters });
+    dispatchFilters({ type: "adopt", filters: urlFilters });
   }
 
   // The single advanced-filters disclosure (all widths); collapsed by default.
@@ -257,7 +267,10 @@ export function Library({
     };
     // The reducer returns the same state when nothing changed, so this runs
     // exactly when a filter does, as it did with a dependency per filter.
-  }, [filters, rememberFilters]);
+    // initialFilters is new on every server re-render (router.refresh, a
+    // server action), and each of those has the router rewrite the address
+    // bar to the last URL it navigated to, so the mirror runs again after it.
+  }, [filters, rememberFilters, initialFilters]);
 
   // Flushes a still-pending debounced mirror on unmount so the last keystroke's
   // filters aren't lost — the cleanup above only cancels a stale timer between
@@ -498,7 +511,8 @@ export function Library({
             filtersTriggerRef={filtersTriggerRef}
           />
 
-          <LibraryFilterChips />
+          {/* The Filters button is hidden on a first run, and the search isn't. */}
+          <LibraryFilterChips fallbackFocusRef={firstRun ? searchInputRef : filtersTriggerRef} />
 
           <LibraryFilterPanel
             showFilters={showFilters}

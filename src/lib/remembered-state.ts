@@ -116,25 +116,9 @@ export function libraryRememberedStateToParams(
   };
 }
 
-const LIBRARY_PARAM_KEYS = new Set([
-  "q",
-  "type",
-  "status",
-  "lang",
-  "tag",
-  "genre",
-  "rating",
-  "sort",
-  "view",
-  "unmatched",
-  "services",
-]);
-
-export function hasExplicitLibraryFilterParams(
-  raw: Record<string, string | string[] | undefined>,
-): boolean {
-  return Object.keys(raw).some((key) => LIBRARY_PARAM_KEYS.has(key));
-}
+// Lives with the URL mapping so the library can apply the same rule in the
+// browser without importing this module's Zod schemas (AUD-NEXT-01).
+export { hasExplicitLibraryFilterParams } from "@/lib/library-filters";
 
 export function parseRecommendRememberedState(
   raw: string | null | undefined,

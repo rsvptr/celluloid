@@ -5,7 +5,12 @@
 // places in the component.
 
 import { STATUS_META, languageName } from "@/lib/format";
-import type { LibraryFilters } from "@/lib/library-filters";
+import {
+  hasExplicitLibraryFilterParams,
+  parseLibraryFilters,
+  type FilterFacets,
+  type LibraryFilters,
+} from "@/lib/library-filters";
 
 /** The reducer's state. The URL leaves onlyOnServices optional; here it is always a boolean. */
 export type LibraryFilterState = Required<LibraryFilters>;
@@ -127,6 +132,19 @@ export function libraryFilterChips(filters: LibraryFilters): LibraryFilterChip[]
   return chips;
 }
 
+/**
+ * The chip focus moves to when `key`'s chip is removed: the one that takes its
+ * place, or the one before it when it was last. Null when it was the only one.
+ */
+export function libraryChipFocusAfterRemoval(
+  chips: LibraryFilterChip[],
+  key: string,
+): string | null {
+  const index = chips.findIndex((chip) => chip.key === key);
+  if (index === -1) return null;
+  return chips[index + 1]?.key ?? chips[index - 1]?.key ?? null;
+}
+
 // Deep link to /export with the current filters pre-applied (query and the
 // needs-match toggle have no export equivalent; sort doesn't affect content).
 export function libraryExportHref(filters: LibraryFilters): string {
@@ -140,6 +158,24 @@ export function libraryExportHref(filters: LibraryFilters): string {
   if (rating !== "all" && rating !== "unrated") p.set("min", rating);
   const qs = p.toString();
   return qs ? `/export?${qs}` : "/export";
+}
+
+/**
+ * The filters the address bar stands for, by the rule the page applies on the
+ * server: the URL's own params when it has any, otherwise `serverFilters` (the
+ * remembered filters or the defaults a bare URL gets). Library mirrors its
+ * filters with replaceState, which the router never sees, so on Back the page
+ * can be the one rendered for the URL before the mirror (no search) while the
+ * address bar still holds the mirrored one. Reading the URL keeps the search.
+ */
+export function libraryUrlFilters(
+  serverFilters: LibraryFilters,
+  params: URLSearchParams,
+  facets: FilterFacets,
+): LibraryFilters {
+  // get() is the first value, like the server's parse of a repeated param.
+  const raw = Object.fromEntries([...params.keys()].map((key) => [key, params.get(key) ?? undefined]));
+  return hasExplicitLibraryFilterParams(raw) ? parseLibraryFilters(raw, facets) : serverFilters;
 }
 
 /** What the URL and the remembered-filters cookie mirror: the filters, search trimmed. */
