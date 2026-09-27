@@ -2036,6 +2036,7 @@ export async function bulkSetStatus(ids: string[], status: WatchStatus) {
     select: { id: true },
   });
   const now = new Date();
+  let failed = 0;
 
   if (status === WatchStatus.WATCHED) {
     // Each title is its own bounded transaction: lock, reread, mutate, and log.
@@ -2044,6 +2045,9 @@ export async function bulkSetStatus(ids: string[], status: WatchStatus) {
     // One fewer at a time than the pool holds, so the instance's other requests
     // keep a connection. A start can still queue behind those requests, so it
     // may wait 10 s for a connection instead of Prisma's 2 s default.
+    // A title that fails is logged and counted rather than rejecting the batch
+    // (PR-01). The first rejection used to end the request while the other
+    // workers kept committing unseen, with the pages left unrevalidated.
     await mapLimit(owned, Math.max(1, PRISMA_POOL_MAX - 1), ({ id: titleId }) =>
       prisma.$transaction(async (tx) => {
         const rows = await tx.$queryRaw<
@@ -2121,7 +2125,10 @@ export async function bulkSetStatus(ids: string[], status: WatchStatus) {
             },
           });
         }
-      }, { maxWait: 10_000 }),
+      }, { maxWait: 10_000 }).catch((err) => {
+        console.error(`bulkSetStatus failed (titleId=${titleId}):`, err);
+        failed += 1;
+      }),
     );
   } else {
     // Any demotion (WATCHLIST / WATCHING / ON_HOLD / DROPPED): set the enum only
@@ -2140,7 +2147,9 @@ export async function bulkSetStatus(ids: string[], status: WatchStatus) {
   }
 
   revalidateAll();
-  return { count: owned.length };
+  if (failed === 0) return { count: owned.length };
+  if (failed === owned.length) return { error: "Couldn't update those titles. Try again." };
+  return { count: owned.length - failed, failed };
 }
 
 export async function bulkSetFavorite(ids: string[], favorite: boolean) {
