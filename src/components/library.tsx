@@ -147,7 +147,7 @@ export function libraryFilterKey(filters: LibraryFilters): string {
 }
 
 const addTitleButtonClass =
-  "inline-flex min-h-11 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg brand-gradient px-4 text-sm font-semibold text-[#04121c] shadow-sm shadow-brand/20 transition-colors hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/60 sm:min-h-10";
+  "inline-flex min-h-11 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg brand-gradient px-4 text-sm font-semibold text-[#04121c] shadow-sm shadow-brand/20 transition-colors hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 sm:min-h-10";
 
 // Chrome moves focus to <body> the instant a focused control becomes
 // `disabled`, so every bulk and Trash action left the keyboard back at the skip

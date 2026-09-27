@@ -386,7 +386,7 @@ export function SeasonTracker({
                     }))
                   }
                   aria-expanded={isOpen}
-                  className="flex min-h-11 flex-1 items-center gap-3 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/60 sm:min-h-0"
+                  className="flex min-h-11 flex-1 items-center gap-3 rounded-md text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 sm:min-h-0"
                 >
                   <ChevronDown
                     size={16}
