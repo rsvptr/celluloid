@@ -145,7 +145,7 @@ export async function TitleExtras({
                   rel="noreferrer"
                   className="focus-ring rounded font-medium text-brand hover:underline"
                 >
-                  Check JustWatch
+                  Check TMDB
                 </a>
               </>
             )}
@@ -193,7 +193,7 @@ export async function TitleExtras({
                 rel="noreferrer"
                 className="focus-ring inline-flex items-center gap-0.5 rounded hover:text-muted"
               >
-                Open <ExternalLink size={10} aria-hidden />
+                Open on TMDB <ExternalLink size={10} aria-hidden />
               </a>
             </>
           )}

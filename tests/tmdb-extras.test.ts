@@ -16,11 +16,11 @@ const p = (id: number, name: string, priority?: number): TmdbProvider => ({
 });
 
 describe("regionWatchInfo", () => {
-  it("groups stream/rent/buy and keeps the JustWatch link", () => {
+  it("groups stream/rent/buy and keeps TMDB's watch link", () => {
     const info = regionWatchInfo(
       {
         US: {
-          link: "https://justwatch/x",
+          link: "https://www.themoviedb.org/tv/95396-severance/watch?locale=US",
           flatrate: [p(8, "Netflix", 1)],
           rent: [p(2, "Apple TV", 3)],
           buy: [p(2, "Apple TV", 3), p(3, "Amazon", 4)],
@@ -28,7 +28,7 @@ describe("regionWatchInfo", () => {
       },
       "US",
     );
-    assert.equal(info.link, "https://justwatch/x");
+    assert.equal(info.link, "https://www.themoviedb.org/tv/95396-severance/watch?locale=US");
     assert.deepEqual(
       info.groups.map((g) => [g.label, g.providers.map((x) => x.provider_name)]),
       [

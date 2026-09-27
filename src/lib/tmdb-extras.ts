@@ -56,7 +56,10 @@ export interface ProviderGroup {
 }
 
 export interface RegionWatchInfo {
-  /** JustWatch page for this title in this region (TMDB terms ask for attribution). */
+  /**
+   * TMDB's watch page for this title in this region, which links on to each
+   * service. The availability data is JustWatch's, so that attribution stays.
+   */
   link: string | null;
   groups: ProviderGroup[];
 }
