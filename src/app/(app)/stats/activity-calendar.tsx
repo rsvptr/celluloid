@@ -122,13 +122,16 @@ export function ActivityCalendar({
 
   return (
     <div>
+      {/* Below sm the day cells are 20px on a 24px pitch, which meets WCAG
+          2.5.8's spacing exception for touch targets (JK-10). From sm they
+          keep the compact 11px cells with 3px gaps. */}
       <div className="overflow-x-auto pb-1">
-        <div className="flex gap-[3px]" role="group" aria-label="Watch activity by day">
+        <div className="flex gap-1 sm:gap-[3px]" role="group" aria-label="Watch activity by day">
           {cols.map((col, ci) => (
-            <div key={ci} className="flex flex-col gap-[3px]">
+            <div key={ci} className="flex flex-col gap-1 sm:gap-[3px]">
               {col.map((cell) =>
                 cell.future ? (
-                  <div key={cell.date} className="h-[11px] w-[11px]" />
+                  <div key={cell.date} className="size-5 sm:size-[11px]" />
                 ) : (
                   <DayCell
                     key={cell.date}
@@ -238,7 +241,7 @@ function DayCellImpl({
       onClick={() => onSelect(date)}
       onKeyDown={(e) => onKeyDown(e, date)}
       className={cn(
-        "focus-ring h-[11px] w-[11px] rounded-[2px]",
+        "focus-ring size-5 rounded-[2px] sm:size-[11px]",
         LEVEL_CLASS[level],
         selected && "ring-1 ring-foreground",
       )}
