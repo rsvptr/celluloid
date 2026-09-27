@@ -3,7 +3,7 @@ import { betterAuth } from "better-auth";
 import { APIError, createAuthMiddleware } from "better-auth/api";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { nextCookies } from "better-auth/next-js";
-import { twoFactor } from "better-auth/plugins";
+import { twoFactor } from "better-auth/plugins/two-factor";
 import { env } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 import { consumeSignupInvite } from "@/lib/signup-invite";
