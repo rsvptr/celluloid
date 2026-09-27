@@ -48,8 +48,10 @@ function TitleCardImpl({
   const isTv = item.mediaType === "TV";
   const pct = isTv ? progressPct(item.watchedEpisodes, item.totalEpisodes) : 0;
   const target = href === undefined ? `/title/${item.id}` : href;
-  // The link is named by the heading and described by the meta line, so its
-  // name no longer leads with the status and an unlabelled rating (JK-22).
+  // The link is named by the heading and described by the meta line, then the
+  // status and the poster chips, so its name no longer leads with the status
+  // and an unlabelled rating (JK-22) but the state is still announced. Ids of
+  // chips that aren't rendered are ignored.
   const id = useId();
 
   const visual = (
@@ -78,8 +80,10 @@ function TitleCardImpl({
           lcp={lcp}
           className={cn(
             // Neutral outline, not a tinted ring (JK-33); the brand ring stays
-            // for hover and selection. Only the properties that change (EM-09).
-            "outline -outline-offset-1 outline-white/10 transition-[box-shadow,opacity] duration-150 ease-[ease]",
+            // for hover and selection. Drawn on an overlay: an outline on this
+            // box paints under the positioned image. Only the properties that
+            // change (EM-09).
+            "after:pointer-events-none after:absolute after:inset-0 after:rounded-[inherit] after:outline after:-outline-offset-1 after:outline-white/10 transition-[box-shadow,opacity] duration-150 ease-[ease]",
             selectable
               ? selected
                 ? "ring-2 ring-brand"
@@ -107,7 +111,7 @@ function TitleCardImpl({
                 white poster, and keeping it preserves the hue cue. */}
             <Badge className={cn(status.badge, "bg-black/75")}>
               <span className={cn("h-1.5 w-1.5 rounded-full", status.dot)} />
-              {status.label}
+              <span id={`${id}-status`}>{status.label}</span>
             </Badge>
           </span>
         )}
@@ -115,7 +119,7 @@ function TitleCardImpl({
         {!selectable && item.favorite && (
           <span className="absolute right-1.5 top-1.5">
             <Heart size={16} aria-hidden="true" className="fill-rose-400 text-rose-400 drop-shadow" />
-            <span className="sr-only">Favorite</span>
+            <span id={`${id}-fav`} className="sr-only">Favorite</span>
           </span>
         )}
         {/* Every status except DROPPED. The gate used to also require
@@ -126,6 +130,7 @@ function TitleCardImpl({
             new episode is genuinely not wanted. */}
         {!selectable && item.hasNewEpisodes && item.status !== "DROPPED" ? (
           <span
+            id={`${id}-new`}
             className={cn(
               "absolute right-1.5 rounded-md bg-brand/90 px-1.5 py-0.5 text-[10px] font-medium text-[#04121c] shadow",
               // Stack under the favorite heart instead of overlapping it.
@@ -136,9 +141,12 @@ function TitleCardImpl({
           </span>
         ) : null}
         {!selectable && item.tmdbRating ? (
-          <span className="absolute bottom-1.5 right-1.5 flex items-center gap-0.5 rounded-md bg-black/75 px-1.5 py-0.5 text-[11px] font-medium text-amber-300">
+          <span
+            id={`${id}-rating`}
+            className="absolute bottom-1.5 right-1.5 flex items-center gap-0.5 rounded-md bg-black/75 px-1.5 py-0.5 text-[11px] font-medium text-amber-300"
+          >
             <Star size={11} className="fill-amber-300" />
-            <span className="sr-only">TMDB rating</span>
+            <span className="sr-only">TMDB rating{" "}</span>
             {item.tmdbRating.toFixed(1)}
           </span>
         ) : null}
@@ -146,7 +154,10 @@ function TitleCardImpl({
             unmatched; public share items omit the field (undefined), and the
             badge must not show there. */}
         {!selectable && item.tmdbId === null ? (
-          <span className="absolute bottom-1.5 left-1.5 rounded-md bg-black/75 px-1.5 py-0.5 text-[10px] font-medium text-amber-300/90 ring-1 ring-amber-400/30">
+          <span
+            id={`${id}-unmatched`}
+            className="absolute bottom-1.5 left-1.5 rounded-md bg-black/75 px-1.5 py-0.5 text-[10px] font-medium text-amber-300/90 ring-1 ring-amber-400/30"
+          >
             Unmatched
           </span>
         ) : null}
@@ -216,7 +227,7 @@ function TitleCardImpl({
     <IntentLink
       href={target}
       aria-labelledby={`${id}-name`}
-      aria-describedby={`${id}-meta`}
+      aria-describedby={`${id}-meta ${id}-status ${id}-fav ${id}-new ${id}-unmatched ${id}-rating`}
       className={cn("group", pressClass)}
     >
       {visual}

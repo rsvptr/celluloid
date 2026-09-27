@@ -82,30 +82,69 @@ const item: CardItem = {
   watchedEpisodes: 0,
 };
 
-function card() {
+function card(overrides: Partial<CardItem> = {}) {
   const router = { prefetch() {} } as unknown as AppRouterInstance;
   return renderToStaticMarkup(
-    createElement(AppRouterContext.Provider, { value: router }, createElement(TitleCard, { item })),
+    createElement(
+      AppRouterContext.Provider,
+      { value: router },
+      createElement(TitleCard, { item: { ...item, ...overrides } }),
+    ),
   );
 }
 
+/** Text content of the element with this id (enough for these flat chips). */
+function textOf(html: string, id: string): string | null {
+  const open = new RegExp(`<(\\w+) id="${id}"[^>]*>`).exec(html);
+  if (!open) return null;
+  const tag = open[1];
+  let depth = 1;
+  const re = new RegExp(`<${tag}[\\s>]|</${tag}>`, "g");
+  re.lastIndex = open.index + open[0].length;
+  let match: RegExpExecArray | null;
+  while (depth > 0 && (match = re.exec(html))) depth += match[0].startsWith("</") ? -1 : 1;
+  return html.slice(open.index + open[0].length, re.lastIndex).replace(/<[^>]+>/g, "");
+}
+
+/** The link's description as accname builds it: missing ids are skipped. */
+function description(html: string): string {
+  const ids = html.match(/<a [^>]*aria-describedby="([^"]+)"/)?.[1].split(" ") ?? [];
+  return ids
+    .map((id) => textOf(html, id))
+    .filter((text) => text !== null)
+    .join(" ");
+}
+
 describe("TitleCard link", () => {
-  it("is named by its heading and described by the meta line (JK-22)", () => {
+  it("is named by its heading (JK-22)", () => {
     const html = card();
     const labelledby = html.match(/<a [^>]*aria-labelledby="([^"]+)"/)?.[1];
-    const describedby = html.match(/<a [^>]*aria-describedby="([^"]+)"/)?.[1];
-    assert.ok(labelledby && describedby);
+    assert.ok(labelledby);
     assert.match(html, new RegExp(`<h2 id="${labelledby}"[^>]*>The Long, Hot Summer</h2>`));
-    assert.match(html, new RegExp(`<p id="${describedby}"[^>]*>1965 · 0/26 eps</p>`));
   });
 
-  it("labels the TMDB rating (JK-22)", () => {
-    assert.match(card(), /<span class="sr-only">TMDB rating<\/span>6\.0/);
+  it("is described by the meta line, the status and the rating (JK-22)", () => {
+    assert.equal(description(card()), "1965 · 0/26 eps Watchlist TMDB rating 6.0");
+  });
+
+  it("also describes favorite, new episodes and unmatched when shown", () => {
+    assert.equal(
+      description(card({ favorite: true, hasNewEpisodes: true, tmdbId: null })),
+      "1965 · 0/26 eps Watchlist Favorite New Unmatched TMDB rating 6.0",
+    );
   });
 
   it("has press feedback and no hover lift (EM-01, EM-09)", () => {
     const anchor = card().match(/<a [^>]*>/)?.[0] ?? "";
     assert.match(anchor, /motion-safe:active:scale-\[0\.98\]/);
     assert.doesNotMatch(anchor, /translate-y/);
+  });
+});
+
+describe("TitleCard poster edge (JK-33)", () => {
+  it("draws the outline on an overlay above the image, not under it", () => {
+    const wrapper = card().match(/<div class="relative aspect-\[2\/3\][^"]*"/)?.[0] ?? "";
+    assert.match(wrapper, /after:absolute after:inset-0 [^"]*after:outline after:-outline-offset-1 after:outline-white\/10/);
+    assert.doesNotMatch(wrapper, /(^|\s)outline(\s|")/);
   });
 });
