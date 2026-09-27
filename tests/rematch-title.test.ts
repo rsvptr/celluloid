@@ -55,7 +55,7 @@ export async function resolve(specifier, context, nextResolve) {
       "const state = globalThis.__CELLULOID_C1_TMDB__;" +
       "export async function getMovie(id, options) { state.calls.push({kind:'movie', options}); if (!state.movie) throw new Error('unused movie'); return {id,...state.movie}; }" +
       "export async function getTv(id, options) { state.calls.push({kind:'tv', options}); return {id,name:'Series',original_name:'',overview:'',first_air_date:'2012-01-01',poster_path:null,backdrop_path:null,original_language:'en',vote_average:8,episode_run_time:[45],genres:[],number_of_seasons:1,seasons:[{season_number:1}],...state.tv}; }" +
-      "export async function getSeason(_id, n, options) { state.calls.push({kind:'season', options}); if (state.failSeasons?.includes(n)) throw new Error('season unavailable'); return {id:500+n,season_number:n,name:'Season 1',overview:'',air_date:'2012-01-01',poster_path:null,episodes:state.episodes.map(e=>({...e,season_number:n,overview:'',runtime:45,still_path:null,vote_average:0}))}; }"
+      "export async function getSeason(_id, n, options) { state.calls.push({kind:'season', options}); if (state.failSeasons?.includes(n)) throw new Error('season unavailable'); return {id:500+n,season_number:n,name:'Season 1',overview:'',air_date:'2012-01-01',poster_path:null,episodes:state.episodes.map(e=>({...e,id:e.id+(n-1)*1000,season_number:n,overview:'',runtime:45,still_path:null,vote_average:0}))}; }"
     );
   }
   return nextResolve(specifier, context);
@@ -92,20 +92,22 @@ function createRematchDb(options: {
     watchedEpisodes: options.episodes?.filter((episode) => episode.watched).length ?? 0,
     ...options.title,
   };
-  let season: Row | null = {
-    id: "season-old",
-    titleId: title.id,
-    seasonNumber: 1,
-    tmdbId: 501,
-    name: "Season 1",
-    overview: null,
-    airDate: new Date("2012-01-01T00:00:00Z"),
-    posterPath: null,
-  };
+  let seasons: Row[] = [
+    {
+      id: "season-old",
+      titleId: title.id,
+      seasonNumber: 1,
+      tmdbId: 501,
+      name: "Season 1",
+      overview: null,
+      airDate: new Date("2012-01-01T00:00:00Z"),
+      posterPath: null,
+    },
+  ];
   let episodeSequence = 0;
   let episodes: Row[] = (options.episodes ?? []).map((episode) => ({
     id: `old-${episode.tmdbId}`,
-    seasonId: season?.id,
+    seasonId: "season-old",
     tmdbId: episode.tmdbId,
     episodeNumber: episode.episodeNumber,
     name: episode.name,
@@ -125,6 +127,12 @@ function createRematchDb(options: {
       : [],
   );
   const createdRows: Row[] = [];
+  /** Statements issued inside the transaction, by model method. */
+  const statements: Record<string, number> = {};
+  const tally = (name: string) => {
+    statements[name] = (statements[name] ?? 0) + 1;
+  };
+  const seasonOf = (episode: Row) => seasons.find((row) => row.id === episode.seasonId);
 
   const db = {
     title: {
@@ -139,33 +147,49 @@ function createRematchDb(options: {
           values[0] === title.id && values[1] === title.userId ? [{ ...title }] : [],
         season: {
           deleteMany: async () => {
+            tally("season.deleteMany");
             episodes = [];
-            season = null;
+            seasons = [];
             for (const event of events) event.episodeId = null as never;
           },
-          create: async ({ data }: { data: Row }) => {
-            season = { id: "season-new", ...data };
-            return season;
+          createManyAndReturn: async ({ data }: { data: Row[] }) => {
+            tally("season.createManyAndReturn");
+            const created = data.map((row) => {
+              assert.equal(
+                seasons.some((season) => season.seasonNumber === row.seasonNumber),
+                false,
+                "title/seasonNumber unique rejected a colliding write",
+              );
+              const season: Row = { id: `season-new-${String(row.seasonNumber)}`, ...row };
+              seasons.push(season);
+              return season;
+            });
+            return created.map(({ id, seasonNumber }) => ({ id, seasonNumber }));
           },
         },
         episode: {
           findMany: async () =>
-            episodes.map((episode) => ({
-              ...episode,
-              season: {
-                seasonNumber: season?.seasonNumber,
-                tmdbId: season?.tmdbId,
-                name: season?.name,
-                overview: season?.overview,
-                airDate: season?.airDate,
-                posterPath: season?.posterPath,
-              },
-              watchEvents: events
-                .filter((event) => event.episodeId === episode.id)
-                .map((event) => ({ id: event.id })),
-            })),
+            episodes.map((episode) => {
+              const season = seasonOf(episode);
+              return {
+                ...episode,
+                season: {
+                  seasonNumber: season?.seasonNumber,
+                  tmdbId: season?.tmdbId,
+                  name: season?.name,
+                  overview: season?.overview,
+                  airDate: season?.airDate,
+                  posterPath: season?.posterPath,
+                },
+                watchEvents: events
+                  .filter((event) => event.episodeId === episode.id)
+                  .map((event) => ({ id: event.id })),
+              };
+            }),
           createMany: async ({ data }: { data: Row[] }) => {
+            tally("episode.createMany");
             for (const row of data) {
+              assert.ok(seasonOf(row), "episode written without a created season");
               assert.ok(
                 (row.episodeNumber as number) >= 0,
                 "episodeNumber CHECK rejected a negative write",
@@ -176,7 +200,9 @@ function createRematchDb(options: {
               );
               assert.equal(
                 episodes.some(
-                  (episode) => episode.episodeNumber === row.episodeNumber,
+                  (episode) =>
+                    episode.seasonId === row.seasonId &&
+                    episode.episodeNumber === row.episodeNumber,
                 ),
                 false,
                 "season/episodeNumber unique rejected a colliding write",
@@ -203,14 +229,21 @@ function createRematchDb(options: {
             Object.assign(title, data);
           },
         },
-        watchEvent: {
-          findFirst: async () => null,
-          create: async () => undefined,
-          updateMany: async ({ where, data }: { where: { id: { in: string[] } }; data: Row }) => {
-            for (const event of events) {
-              if (where.id.in.includes(event.id)) Object.assign(event, data);
-            }
-          },
+        // The relink UPDATE: one joined VALUES list of (eventId, episodeId)
+        // pairs, then the titleId the write is confined to.
+        $executeRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
+          tally("$executeRaw");
+          assert.match(strings.join("?"), /UPDATE "WatchEvent"[\s\S]*w\."titleId" = \?/);
+          const [pairs, titleId] = values as [{ values: string[] }, string];
+          if (titleId !== title.id) return 0;
+          let updated = 0;
+          for (let index = 0; index < pairs.values.length; index += 2) {
+            const event = events.find((row) => row.id === pairs.values[index]);
+            if (!event) continue;
+            event.episodeId = pairs.values[index + 1];
+            updated++;
+          }
+          return updated;
         },
       }),
   };
@@ -220,7 +253,9 @@ function createRematchDb(options: {
     title,
     events,
     createdRows,
+    statements,
     episodes: () => episodes,
+    seasons: () => seasons,
   };
 }
 
@@ -324,6 +359,106 @@ describe("rematchTitle TMDB identity", { concurrency: false }, () => {
     assert.equal(state.events[0].episodeId, withdrawn?.id);
     assert.equal(state.title.totalEpisodes, 1);
     assert.equal(state.title.watchedEpisodes, 0);
+  });
+});
+
+describe("rematchTitle transaction shape", { concurrency: false }, () => {
+  it("rebuilds a multi-season show and relinks its history in fixed statements", async () => {
+    const state = createRematchDb({
+      currentTmdbId: 400,
+      status: "WATCHING",
+      episodes: [1, 2, 3].map((n) => ({
+        tmdbId: 4000 + n,
+        episodeNumber: n,
+        name: `Episode ${n}`,
+        watched: true,
+        eventId: `event-${n}`,
+      })),
+    });
+    const tmdb = globalThis.__CELLULOID_C1_TMDB__;
+    tmdb.tv = {
+      number_of_seasons: 3,
+      seasons: [{ season_number: 1 }, { season_number: 2 }, { season_number: 3 }],
+    };
+    tmdb.episodes = [1, 2, 3, 4].map((n) => ({
+      id: 4000 + n,
+      episode_number: n,
+      name: `Episode ${n}`,
+      air_date: "2012-01-01",
+    }));
+    Object.assign(globalThis.__CELLULOID_C1_DB__, state.db);
+
+    assert.deepEqual(await rematchTitle("title-1", 400, "tv"), { ok: true });
+    assert.equal(state.seasons().length, 3);
+    assert.equal(state.episodes().length, 12);
+    assert.deepEqual(state.statements, {
+      "season.deleteMany": 1,
+      "season.createManyAndReturn": 1,
+      "episode.createMany": 1,
+      $executeRaw: 1,
+    });
+    for (const event of state.events) {
+      const episode = state.episodes().find((row) => row.id === event.episodeId);
+      assert.equal(episode?.tmdbId, 4000 + Number(event.id.slice(-1)));
+      assert.equal(episode?.watched, true);
+    }
+    assert.equal(state.title.watchedEpisodes, 3);
+  });
+
+  it("recreates a season TMDB dropped so its watched episode keeps its history", async () => {
+    const state = createRematchDb({
+      currentTmdbId: 400,
+      status: "WATCHING",
+      episodes: [
+        { tmdbId: 4001, episodeNumber: 1, name: "Pilot", watched: true, eventId: "event-1" },
+      ],
+    });
+    state.seasons().push({
+      id: "season-old-2",
+      titleId: "title-1",
+      seasonNumber: 2,
+      tmdbId: 502,
+      name: "Season 2",
+      overview: null,
+      airDate: new Date("2013-01-01T00:00:00Z"),
+      posterPath: null,
+    });
+    state.episodes().push({
+      id: "old-4200",
+      seasonId: "season-old-2",
+      tmdbId: 4200,
+      episodeNumber: 1,
+      name: "Dropped",
+      overview: null,
+      airDate: new Date("2013-01-01T00:00:00Z"),
+      runtime: 45,
+      stillPath: null,
+      watched: true,
+      watchedAt: new Date("2026-02-01T00:00:00Z"),
+      withdrawnAt: null,
+      discoveredAt: new Date("2026-01-01T00:00:00Z"),
+    });
+    state.events.push({ id: "event-dropped", titleId: "title-1", episodeId: "old-4200" });
+    const tmdb = globalThis.__CELLULOID_C1_TMDB__;
+    tmdb.episodes = [{ id: 4001, episode_number: 1, name: "Pilot", air_date: "2012-01-01" }];
+    Object.assign(globalThis.__CELLULOID_C1_DB__, state.db);
+
+    assert.deepEqual(await rematchTitle("title-1", 400, "tv"), { ok: true });
+    const placeholder = state.seasons().find((season) => season.seasonNumber === 2);
+    assert.equal(placeholder?.tmdbId, 502);
+    assert.equal(placeholder?.name, "Season 2");
+    assert.equal(placeholder?.episodeCount, 0);
+    const dropped = state.episodes().find((episode) => episode.tmdbId === 4200);
+    assert.equal(dropped?.seasonId, placeholder?.id);
+    assert.equal(dropped?.watched, true);
+    assert.ok(dropped?.withdrawnAt instanceof Date);
+    assert.equal(
+      state.events.find((event) => event.id === "event-dropped")?.episodeId,
+      dropped?.id,
+    );
+    assert.equal(state.statements["season.createManyAndReturn"], 2);
+    assert.equal(state.statements["episode.createMany"], 2);
+    assert.equal(state.statements.$executeRaw, 1);
   });
 });
 
@@ -465,10 +600,11 @@ describe("addFromTmdb sync fields", { concurrency: false }, () => {
             update: async ({ data }: { data: Row }) => Object.assign(created, data),
           },
           season: {
-            create: async ({ data }: { data: Row }) => ({
-              id: `season-${String(data.seasonNumber)}`,
-              ...data,
-            }),
+            createManyAndReturn: async ({ data }: { data: Row[] }) =>
+              data.map((row) => ({
+                id: `season-${String(row.seasonNumber)}`,
+                seasonNumber: row.seasonNumber,
+              })),
           },
           episode: {
             createMany: async () => undefined,

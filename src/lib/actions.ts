@@ -21,10 +21,12 @@ import { isTagColor } from "@/lib/tag-colors";
 import { tagNameFilter } from "@/lib/tag-name";
 import {
   ACTIVE_EPISODE_FILTER,
+  chunks,
   deriveNextEpisodeAirDate,
   discoveredAtForNewEpisode,
   planEpisodeEventRelinks,
   preservesEpisodeHistory,
+  RELINK_BATCH_SIZE,
   WITHDRAWN_EPISODE_NUMBER_OFFSET,
   type EpisodeEventCoordinate,
 } from "@/lib/rematch-history";
@@ -1315,54 +1317,60 @@ async function writeSeasons(
       ] as const),
   );
   const matched = new Set<PriorEpisode>();
-  const seasonIds = new Map<number, string>();
   const activeCoordinates = new Set(
     seasons.flatMap(({ n, sd }) =>
       (sd.episodes ?? []).map((episode) => `${n}:${episode.episode_number}`),
     ),
   );
 
-  for (const { n, sd } of seasons) {
-    const season = await tx.season.create({
-      data: {
-        titleId,
-        tmdbId: sd.id,
-        seasonNumber: n,
-        name: sd.name || null,
-        overview: sd.overview || null,
-        airDate: toDate(sd.air_date),
-        posterPath: sd.poster_path,
-        episodeCount: sd.episodes?.length ?? null,
-      },
-    });
-    seasonIds.set(n, season.id);
-    if (sd.episodes?.length) {
-      await tx.episode.createMany({
-        data: sd.episodes.map((ep) => {
-          const p =
-            priorByTmdbId.get(ep.id) ??
-            legacyByCoordinate.get(`${n}:${ep.episode_number}`);
-          if (p) matched.add(p);
-          const airDate = toDate(ep.air_date);
-          return {
-            seasonId: season.id,
-            tmdbId: ep.id,
-            episodeNumber: ep.episode_number,
-            name: ep.name || null,
-            overview: ep.overview || null,
-            airDate,
-            runtime: ep.runtime ?? null,
-            stillPath: ep.still_path,
-            watched: p?.watched ?? false,
-            watchedAt: p?.watched ? (p.watchedAt ?? null) : null,
-            withdrawnAt: null,
-            discoveredAt:
-              p?.discoveredAt ??
-              discoveredAtForNewEpisode(airDate, titleCreatedAt, now),
-          };
-        }),
-      });
-    }
+  // One INSERT for every season and one for every episode, however long the
+  // show. This runs inside the caller's transaction, which holds the Title
+  // lock, and a statement per season held that lock for a round trip each.
+  // Prisma splits a bulk insert that would pass the database's bind limit.
+  const created =
+    seasons.length > 0
+      ? await tx.season.createManyAndReturn({
+          data: seasons.map(({ n, sd }) => ({
+            titleId,
+            tmdbId: sd.id,
+            seasonNumber: n,
+            name: sd.name || null,
+            overview: sd.overview || null,
+            airDate: toDate(sd.air_date),
+            posterPath: sd.poster_path,
+            episodeCount: sd.episodes?.length ?? null,
+          })),
+          select: { id: true, seasonNumber: true },
+        })
+      : [];
+  const seasonIds = new Map(created.map((season) => [season.seasonNumber, season.id]));
+  const episodeRows = seasons.flatMap(({ n, sd }) =>
+    (sd.episodes ?? []).map((ep) => {
+      const p =
+        priorByTmdbId.get(ep.id) ??
+        legacyByCoordinate.get(`${n}:${ep.episode_number}`);
+      if (p) matched.add(p);
+      const airDate = toDate(ep.air_date);
+      return {
+        seasonId: seasonIds.get(n)!,
+        tmdbId: ep.id,
+        episodeNumber: ep.episode_number,
+        name: ep.name || null,
+        overview: ep.overview || null,
+        airDate,
+        runtime: ep.runtime ?? null,
+        stillPath: ep.still_path,
+        watched: p?.watched ?? false,
+        watchedAt: p?.watched ? (p.watchedAt ?? null) : null,
+        withdrawnAt: null,
+        discoveredAt:
+          p?.discoveredAt ??
+          discoveredAtForNewEpisode(airDate, titleCreatedAt, now),
+      };
+    }),
+  );
+  if (episodeRows.length > 0) {
+    await tx.episode.createMany({ data: episodeRows });
   }
 
   // A same-series refresh deletes and rebuilds seasons. Recreate watched rows
@@ -1376,12 +1384,16 @@ async function writeSeasons(
     rows.push(episode);
     withdrawnBySeason.set(episode.seasonNumber, rows);
   }
-  for (const [seasonNumber, episodes] of withdrawnBySeason) {
-    let seasonId = seasonIds.get(seasonNumber);
-    if (!seasonId) {
-      const exemplar = episodes[0];
-      const season = await tx.season.create({
-        data: {
+  // Seasons TMDB no longer lists that still hold a watched row: at most one
+  // more INSERT for the seasons and one for the rows.
+  const missingSeasons = [...withdrawnBySeason].filter(
+    ([seasonNumber]) => !seasonIds.has(seasonNumber),
+  );
+  if (missingSeasons.length > 0) {
+    const recreated = await tx.season.createManyAndReturn({
+      data: missingSeasons.map(([seasonNumber, episodes]) => {
+        const exemplar = episodes[0];
+        return {
           titleId,
           seasonNumber,
           tmdbId: exemplar.season.tmdbId,
@@ -1390,31 +1402,34 @@ async function writeSeasons(
           airDate: exemplar.season.airDate,
           posterPath: exemplar.season.posterPath,
           episodeCount: 0,
-        },
-      });
-      seasonId = season.id;
-      seasonIds.set(seasonNumber, seasonId);
-    }
-    await tx.episode.createMany({
-      data: episodes.map((episode) => ({
-        seasonId,
-        tmdbId: episode.tmdbId,
-        episodeNumber: activeCoordinates.has(
-          `${episode.seasonNumber}:${episode.episodeNumber}`,
-        )
-          ? episode.episodeNumber + WITHDRAWN_EPISODE_NUMBER_OFFSET
-          : episode.episodeNumber,
-        name: episode.name,
-        overview: episode.overview,
-        airDate: episode.airDate,
-        runtime: episode.runtime,
-        stillPath: episode.stillPath,
-        watched: true,
-        watchedAt: episode.watchedAt,
-        withdrawnAt: episode.withdrawnAt ?? now,
-        discoveredAt: episode.discoveredAt,
-      })),
+        };
+      }),
+      select: { id: true, seasonNumber: true },
     });
+    for (const season of recreated) seasonIds.set(season.seasonNumber, season.id);
+  }
+  const withdrawnRows = [...withdrawnBySeason].flatMap(([seasonNumber, episodes]) =>
+    episodes.map((episode) => ({
+      seasonId: seasonIds.get(seasonNumber)!,
+      tmdbId: episode.tmdbId,
+      episodeNumber: activeCoordinates.has(
+        `${episode.seasonNumber}:${episode.episodeNumber}`,
+      )
+        ? episode.episodeNumber + WITHDRAWN_EPISODE_NUMBER_OFFSET
+        : episode.episodeNumber,
+      name: episode.name,
+      overview: episode.overview,
+      airDate: episode.airDate,
+      runtime: episode.runtime,
+      stillPath: episode.stillPath,
+      watched: true,
+      watchedAt: episode.watchedAt,
+      withdrawnAt: episode.withdrawnAt ?? now,
+      discoveredAt: episode.discoveredAt,
+    })),
+  );
+  if (withdrawnRows.length > 0) {
+    await tx.episode.createMany({ data: withdrawnRows });
   }
 }
 
@@ -1864,17 +1879,17 @@ export async function rematchTitle(
                 episodeNumber: episode.episodeNumber,
               })),
             );
-            const eventIdsByEpisode = new Map<string, string[]>();
-            for (const relink of relinks) {
-              const eventIds = eventIdsByEpisode.get(relink.episodeId) ?? [];
-              eventIds.push(relink.eventId);
-              eventIdsByEpisode.set(relink.episodeId, eventIds);
-            }
-            for (const [episodeId, eventIds] of eventIdsByEpisode) {
-              await tx.watchEvent.updateMany({
-                where: { id: { in: eventIds }, titleId },
-                data: { episodeId },
-              });
+            // One statement per batch rather than one per watched episode,
+            // which held the Title lock for a round trip each. The titleId
+            // predicate keeps the write inside the locked title.
+            for (const batch of chunks(relinks, RELINK_BATCH_SIZE)) {
+              await tx.$executeRaw`
+                UPDATE "WatchEvent" AS w
+                SET "episodeId" = v.episode_id
+                FROM (VALUES ${Prisma.join(
+                  batch.map((r) => Prisma.sql`(${r.eventId}::text, ${r.episodeId}::text)`),
+                )}) AS v(event_id, episode_id)
+                WHERE w.id = v.event_id AND w."titleId" = ${titleId}`;
             }
           }
 

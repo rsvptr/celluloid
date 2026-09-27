@@ -25,6 +25,22 @@ export interface EpisodeEventRelink {
 }
 
 /**
+ * Relinks per UPDATE statement. Each binds two values, which keeps a statement
+ * well inside Postgres' 65,535-parameter limit. Prisma splits its own bulk
+ * inserts at that limit, but not a raw statement.
+ */
+export const RELINK_BATCH_SIZE = 10_000;
+
+/** Consecutive slices of at most `size` items, in order. */
+export function chunks<T>(values: readonly T[], size: number): T[][] {
+  const result: T[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    result.push(values.slice(index, index + size));
+  }
+  return result;
+}
+
+/**
  * Episode state belongs to one TMDB series, not merely to matching season and
  * episode numbers. A genuine re-match must never transplant one show's history
  * into another show that happens to have an S01E01 of its own.

@@ -1,8 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  chunks,
   planEpisodeEventRelinks,
   preservesEpisodeHistory,
+  RELINK_BATCH_SIZE,
 } from "../src/lib/rematch-history";
 
 const events = [
@@ -78,6 +80,24 @@ describe("rematch episode-history policy", () => {
         [{ episodeId: "fresh", tmdbId: 999, seasonNumber: 1, episodeNumber: 1 }],
       ),
       [{ eventId: "legacy", episodeId: "fresh" }],
+    );
+  });
+});
+
+describe("relink batching", () => {
+  it("splits into ordered slices with a short tail", () => {
+    assert.deepEqual(chunks([1, 2, 3, 4, 5], 2), [[1, 2], [3, 4], [5]]);
+    assert.deepEqual(chunks([1, 2, 3, 4], 2), [[1, 2], [3, 4]]);
+    assert.deepEqual(chunks([], 2), []);
+  });
+
+  it("keeps a relink statement inside Postgres' bind limit", () => {
+    // Two binds per relink, plus one for the titleId predicate.
+    assert.ok(RELINK_BATCH_SIZE * 2 + 1 <= 65_535);
+    const relinks = Array.from({ length: RELINK_BATCH_SIZE + 1 }, (_, index) => index);
+    assert.deepEqual(
+      chunks(relinks, RELINK_BATCH_SIZE).map((batch) => batch.length),
+      [RELINK_BATCH_SIZE, 1],
     );
   });
 });
