@@ -268,8 +268,14 @@ export default async function TitlePage({
           />
         </aside>
 
+        {/* Movies have no tracker, so at lg the extras take its rows beside
+            the controls instead of leaving columns 1-2 empty (JK-04). */}
         {title.tmdbId != null && (
-          <div className="order-4 flex flex-col gap-6 lg:order-none lg:col-span-2 lg:col-start-1 lg:row-start-3">
+          <div
+            className={`order-4 flex flex-col gap-6 lg:order-none lg:col-span-2 lg:col-start-1 ${
+              isTv ? "lg:row-start-3" : "lg:row-start-1 lg:row-span-2"
+            }`}
+          >
             <Suspense fallback={<TitleExtrasFallback />}>
               <TitleExtras
                 userId={user.id}
