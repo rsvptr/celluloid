@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { AnimatePresence, motion } from "@/components/motion";
+import { AnimatePresence, InertOnExit, motion } from "@/components/motion";
 import { Button, Card, Input } from "@/components/ui";
 import { authClient } from "@/lib/auth-client";
 
@@ -240,7 +240,8 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
               // The reveal is CSS (collapse-in), so the fields are visible even
               // if Motion's features never load; Motion only runs the exit (and
               // a reopen mid-exit). Without features it unmounts at once, so
-              // the closed fields are never focusable.
+              // the closed fields are never focusable; with them, InertOnExit
+              // drops the fields from the tab order as the exit starts.
               initial={false}
               animate={{ opacity: 1, height: "auto" }}
               exit={{ opacity: 0, height: 0 }}
@@ -249,10 +250,13 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
               // but that clips the Input's focus ring (a box-shadow). The inner
               // padding gives the ring room inside the clip box; the negative
               // margin cancels it in the layout, keeping field rhythm identical.
-              className="-m-1 grid grid-rows-[1fr] overflow-hidden motion-safe:animate-[collapse-in_220ms_cubic-bezier(0.16,1,0.3,1)]"
+              // -mb-3 here and pb-3 inside also cancel the form's gap-4 below
+              // this first child, so the collapsed region takes no space and
+              // the Email field never jumps.
+              className="-m-1 -mb-3 grid grid-rows-[1fr] overflow-hidden motion-safe:animate-[collapse-in_220ms_cubic-bezier(0.16,1,0.3,1)]"
             >
-              <div className="min-h-0">
-              <div className="flex flex-col gap-4 p-1">
+              <InertOnExit className="min-h-0">
+              <div className="flex flex-col gap-4 p-1 pb-3">
                 <Field label="Name" htmlFor="login-name">
                   <Input
                     id="login-name"
@@ -281,7 +285,7 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
                   </p>
                 </Field>
               </div>
-              </div>
+              </InertOnExit>
             </motion.div>
           ) : null}
         </AnimatePresence>

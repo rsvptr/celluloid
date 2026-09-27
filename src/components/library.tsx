@@ -48,6 +48,7 @@ import { useConfirm } from "./confirm-dialog";
 import {
   AnimatePresence,
   EASE_OUT,
+  InertOnExit,
   motion,
   useReducedMotion,
 } from "./motion";
@@ -783,7 +784,8 @@ export function Library({
               // The reveal is CSS (collapse-in), so the open panel is visible
               // even if Motion's features never load; Motion only runs the exit
               // (and a reopen mid-exit). Without features it unmounts at once,
-              // so a closed panel is never focusable. -mt-4 here and mt-4 on
+              // so a closed panel is never focusable; with them, InertOnExit takes
+              // it out of the tab order as the exit starts. -mt-4 here and mt-4 on
               // the Card cancel the parent's gap-4, so the collapsed panel
               // takes no space and the gap never jumps.
               initial={false}
@@ -792,7 +794,7 @@ export function Library({
               transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: EASE_OUT }}
               className="-mt-4 grid grid-rows-[1fr] overflow-hidden motion-safe:animate-[collapse-in_200ms_cubic-bezier(0.16,1,0.3,1)]"
             >
-              <div className="min-h-0">
+              <InertOnExit className="min-h-0">
               <Card variant="inset" className="mt-4 flex flex-col gap-3 p-3">
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                   <Select
@@ -919,7 +921,7 @@ export function Library({
                   </div>
                 )}
               </Card>
-              </div>
+              </InertOnExit>
             </motion.div>
           )}
         </AnimatePresence>
@@ -1221,6 +1223,7 @@ function BulkBar({
           // below dialogs/command palette (z-50) so a confirm dialog or the share
           // dialog opened from here still renders on top.
           className="fixed inset-x-0 bottom-0 z-[45] px-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
+          data-motion-enter
           initial={{ y: 80, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
           exit={{ y: 80, opacity: 0 }}
