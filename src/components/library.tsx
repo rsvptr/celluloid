@@ -47,13 +47,7 @@ import { IntentLink } from "./intent-link";
 import { Poster } from "./poster";
 import { ShareDialog } from "./share-dialog";
 import { useConfirm } from "./confirm-dialog";
-import {
-  AnimatePresence,
-  EASE_OUT,
-  InertOnExit,
-  motion,
-  useReducedMotion,
-} from "./motion";
+import { AnimatePresence, EASE_DRAWER, EASE_OUT, InertOnExit, motion } from "./motion";
 import { STATUS_META, STATUS_ORDER, fullDate, languageName, progressPct } from "@/lib/format";
 import {
   bulkAddTag,
@@ -194,7 +188,6 @@ export function Library({
   rememberFilters: boolean;
 }) {
   const router = useRouter();
-  const reduceMotion = useReducedMotion();
   // Trash is a distinct mode that replaces the whole toolbar + grid; entered from
   // the Filters panel, exited via "Back to library". trashedCount drives the entry.
   const [trashMode, setTrashMode] = useState(false);
@@ -794,8 +787,8 @@ export function Library({
               initial={false}
               animate={{ opacity: 1, height: "auto" }}
               exit={{ opacity: 0, height: 0 }}
-              transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: EASE_OUT }}
-              className="-mt-4 grid grid-rows-[1fr] overflow-hidden motion-safe:animate-[collapse-in_200ms_cubic-bezier(0.16,1,0.3,1)]"
+              transition={{ duration: 0.2, ease: EASE_OUT }}
+              className="-mt-4 grid grid-rows-[1fr] overflow-hidden motion-safe:animate-[collapse-in_200ms_var(--ease-out)]"
             >
               <InertOnExit className="min-h-0">
               <Card variant="inset" className="mt-4 flex flex-col gap-3 p-3">
@@ -1219,10 +1212,11 @@ function BulkBar({
           // dialog opened from here still renders on top.
           className="fixed inset-x-0 bottom-0 z-[45] px-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
           data-motion-enter
-          initial={{ y: 80, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          exit={{ y: 80, opacity: 0 }}
-          transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+          // EM-11: rise its full height (80px left a 132px phone bar half on
+          // screen) on the drawer curve, and leave faster than it came.
+          initial={{ y: "100%", opacity: 0 }}
+          animate={{ y: 0, opacity: 1, transition: { duration: 0.25, ease: EASE_DRAWER } }}
+          exit={{ y: "100%", opacity: 0, transition: { duration: 0.2, ease: EASE_DRAWER } }}
         >
           {/* max-w-5xl (was 4xl): the full control set measures ~930px, so the
               wider cap is what lets a desktop still show it on a single row. */}
@@ -1551,7 +1545,7 @@ const ListRow = memo(function ListRow({
         onClick={() => onToggle(item.id)}
         aria-pressed={selected}
         className={cn(
-          "cv-auto focus-ring flex items-center gap-3 px-3 py-2.5 text-left transition-colors active:bg-surface-2/60 active:transition-none",
+          "cv-auto focus-ring flex items-center gap-3 px-3 py-2.5 text-left transition-colors active:bg-surface-2/60 active:duration-0",
           selected ? "bg-brand/10" : "bg-surface hover:bg-surface-2/50",
         )}
       >
@@ -1571,7 +1565,7 @@ const ListRow = memo(function ListRow({
   return (
     <IntentLink
       href={`/title/${item.id}`}
-      className="cv-auto focus-ring flex items-center gap-3 bg-surface px-3 py-2.5 transition-colors hover:bg-surface-2/50 active:bg-surface-2/60 active:transition-none"
+      className="cv-auto focus-ring flex items-center gap-3 bg-surface px-3 py-2.5 transition-colors hover:bg-surface-2/50 active:bg-surface-2/60 active:duration-0"
     >
       {inner}
     </IntentLink>

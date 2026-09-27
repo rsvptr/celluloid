@@ -12,11 +12,17 @@ describe("app Toaster config", () => {
       source("../src/app/(app)/layout.tsx"),
       source("../src/components/library.tsx"),
     ]);
+    // The offsets stay at rest and toast-lift raises the toaster by the bar's
+    // height on `translate`, so it can ease back down when the bar closes.
+    assert.match(layout, /offset=\{\{ bottom: "var\(--toast-desktop-bottom, 24px\)" \}\}/);
+    assert.match(layout, /mobileOffset=\{\{ bottom: "calc\(4\.5rem \+ env\(safe-area-inset-bottom\)\)" \}\}/);
+    assert.match(layout, /className="toast-lift /);
+    const css = await source("../src/app/globals.css");
+    const lift = css.slice(css.indexOf("[data-sonner-toaster].toast-lift {"));
     assert.match(
-      layout,
-      /offset=\{\{ bottom: "var\(--toast-bottom, var\(--toast-desktop-bottom, 24px\)\)" \}\}/,
+      lift,
+      /^\[data-sonner-toaster\]\.toast-lift \{\s*translate: 0 calc\(var\(--toast-desktop-bottom, 24px\) - var\(--toast-bottom, var\(--toast-desktop-bottom, 24px\)\)\);\s*transition: transform 400ms ease, translate 200ms var\(--ease-drawer\);/,
     );
-    assert.match(layout, /mobileOffset=\{\{\s*bottom: "var\(--toast-bottom, /);
     // The bar publishes its own measured height plus a gap at every width.
     assert.match(library, /"--toast-bottom",\s*`\$\{Math\.ceil\(bar\.getBoundingClientRect\(\)\.height\) \+ 8\}px`/);
   });
@@ -30,7 +36,7 @@ describe("app Toaster config", () => {
     assert.match(nav, /className="fixed inset-x-0 bottom-0 [^"]*\blg:hidden\b/);
     assert.match(
       layout,
-      /className="\[--toast-desktop-bottom:calc\(4\.5rem\+env\(safe-area-inset-bottom\)\)\] lg:\[--toast-desktop-bottom:24px\]"/,
+      /className="toast-lift \[--toast-desktop-bottom:calc\(4\.5rem\+env\(safe-area-inset-bottom\)\)\] lg:\[--toast-desktop-bottom:24px\]"/,
     );
   });
 

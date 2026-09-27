@@ -15,7 +15,6 @@ import { toast } from "sonner";
 import type { WatchStatus } from "@/generated/prisma/client";
 import { Button, Card, Input, Select, Textarea } from "@/components/ui";
 import { RatingStars } from "@/components/rating-stars";
-import { useConfirm } from "@/components/confirm-dialog";
 import { STATUS_META, STATUS_ORDER } from "@/lib/format";
 import {
   logWatch,
@@ -74,7 +73,8 @@ export function TitleControls({
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
-  const { confirm, dialog } = useConfirm();
+  // A double click must not trash twice and stack two undo toasts.
+  const removingRef = useRef(false);
 
   // --- Log-watch dialog -----------------------------------------------------
   const [logOpen, setLogOpen] = useState(false);
@@ -414,10 +414,9 @@ export function TitleControls({
 
   return (
     <>
-      {dialog}
       <Dialog.Root open={logOpen} onOpenChange={setLogOpen}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-[dialog-overlay-in_0.2s_ease-out]" />
+          <Dialog.Overlay className="dialog-overlay fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
           <Dialog.Content
             ref={logContentRef}
             onOpenAutoFocus={(e) => {
@@ -440,7 +439,7 @@ export function TitleControls({
               e.preventDefault();
               logTriggerRef.current?.focus();
             }}
-            className="fixed left-1/2 top-1/2 z-50 max-h-[85dvh] w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[var(--radius-card)] bg-surface p-5 ring-1 ring-line focus:outline-none data-[state=open]:animate-[dialog-content-in_0.2s_cubic-bezier(0.16,1,0.3,1)]"
+            className="dialog-content fixed left-1/2 top-1/2 z-50 max-h-[85dvh] w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[var(--radius-card)] bg-surface p-5 ring-1 ring-line focus:outline-none"
           >
             <Dialog.Close
               className="absolute right-3 top-3 -m-3 flex min-h-11 min-w-11 items-center justify-center rounded text-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 sm:m-0 sm:min-h-0 sm:min-w-0"
@@ -670,20 +669,16 @@ export function TitleControls({
           variant="danger"
           size="sm"
           className="ml-auto"
-          onClick={async () => {
-            if (
-              !(await confirm({
-                title: "Move to Trash?",
-                body: "This moves it to Trash. You can restore it from there.",
-                confirmLabel: "Move to Trash",
-                destructive: true,
-              }))
-            )
-              return;
+          // EM-18: no confirmation. Trash is recoverable twice over (Undo on
+          // the toast, then Trash itself), so the dialog only added a step.
+          onClick={() => {
+            if (removingRef.current) return;
+            removingRef.current = true;
             startTransition(async () => {
               try {
                 const res = await removeTitle(id);
                 if (res.error) {
+                  removingRef.current = false;
                   toast.error(res.error);
                   return;
                 }
@@ -696,7 +691,12 @@ export function TitleControls({
                   onSuccess: () => router.push(`/title/${id}`),
                 });
                 router.push("/");
+                // This button goes with the page. <main> persists across the
+                // navigation, so focus lands there rather than on <body>, as
+                // useConfirm does when a confirmed delete removes its opener.
+                document.getElementById("main")?.focus();
               } catch {
+                removingRef.current = false;
                 toast.error("Couldn't move this title to Trash. Please try again.");
               }
             });

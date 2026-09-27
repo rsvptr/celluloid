@@ -80,15 +80,27 @@ function TitleCardImpl({
           lcp={lcp}
           className={cn(
             // Neutral outline, not a tinted ring (JK-33); the brand ring stays
-            // for hover and selection. Drawn on an overlay: an outline on this
-            // box paints under the positioned image. Only the properties that
-            // change (EM-09).
-            "after:pointer-events-none after:absolute after:inset-0 after:rounded-[inherit] after:outline after:-outline-offset-1 after:outline-white/10 transition-[box-shadow,opacity] duration-150 ease-[ease]",
+            // for hover and selection, on the span after this. Drawn on an overlay:
+            // an outline on this box paints under the positioned image. Only
+            // the property that changes (EM-09).
+            "after:pointer-events-none after:absolute after:inset-0 after:rounded-[inherit] after:outline after:-outline-offset-1 after:outline-white/10 transition-opacity duration-150 ease-[ease]",
+            selectable && !selected && "opacity-90 group-hover:opacity-100",
+          )}
+        />
+        {/* The brand ring for hover and selection, on its own layer so it fades
+            on opacity instead of repainting a box-shadow every frame (MO-10),
+            at EM-09's 150 ms ease. It sits where a ring on the poster would,
+            outside its edge, which the poster's overflow-hidden would clip if
+            this were drawn inside it. */}
+        <span
+          aria-hidden
+          className={cn(
+            "pointer-events-none absolute inset-0 rounded-lg ring-2 transition-opacity duration-150 ease-[ease]",
             selectable
               ? selected
-                ? "ring-2 ring-brand"
-                : "opacity-90 group-hover:opacity-100"
-              : "group-hover:ring-2 group-hover:ring-brand/50",
+                ? "ring-brand"
+                : "ring-brand opacity-0"
+              : "ring-brand/50 opacity-0 group-hover:opacity-100",
           )}
         />
 
@@ -165,7 +177,7 @@ function TitleCardImpl({
           <div className="absolute inset-x-0 bottom-0 h-1 bg-black/50">
             {/* transform instead of width: compositor-only animation, no layout thrash */}
             <div
-              className="brand-gradient h-full origin-left transition-transform duration-500"
+              className="brand-gradient h-full origin-left transition-transform"
               style={{ transform: `scaleX(${pct / 100})` }}
             />
           </div>
@@ -200,7 +212,7 @@ function TitleCardImpl({
   // a button's 0.97 for a surface this large, transform only, off under
   // reduced motion.
   const pressClass =
-    "flow-root transition-[scale] duration-160 ease-[cubic-bezier(0.23,1,0.32,1)] motion-safe:active:scale-[0.98]";
+    "flow-root transition-[scale] duration-160 ease-out motion-safe:active:scale-[0.98]";
 
   // Selection mode: toggle instead of navigating.
   if (selectable) {

@@ -100,6 +100,9 @@ export function ImportReview({
   const [job, setJob] = useState(initialJob);
   const [busyItem, setBusyItem] = useState<string | null>(null);
   const [matchingItem, setMatchingItem] = useState<StagedImportItemView | null>(null);
+  // Open state apart from the item: the item stays set while the dialog plays
+  // its exit (EM-03), so the title and search don't flip to empty mid-fade.
+  const [matchOpen, setMatchOpen] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -361,7 +364,13 @@ export function ImportReview({
             aria-valuenow={terminalCount}
             className="h-1.5 overflow-hidden rounded-full bg-surface-2 ring-1 ring-line"
           >
-            <div className="h-full rounded-full brand-gradient transition-[width]" style={{ width: `${percent}%` }} />
+            {/* scaleX, not width, like the card and season bars (MO-10): no
+                layout per frame. Linear over 300 ms, since progress is steady
+                motion (EM-14). */}
+            <div
+              className="brand-gradient h-full w-full origin-left transition-transform duration-300 ease-linear"
+              style={{ transform: `scaleX(${percent / 100})` }}
+            />
           </div>
         </div>
 
@@ -607,6 +616,7 @@ export function ImportReview({
                         onClick={(event) => {
                           matchOpener.current = event.currentTarget;
                           setMatchingItem(item);
+                          setMatchOpen(true);
                         }}
                       >
                         {busyItem === item.id ? <Spinner /> : <Replace size={13} aria-hidden="true" />}
@@ -664,9 +674,9 @@ export function ImportReview({
         </div>
       </Card>
 
-      <Dialog.Root open={matchingItem !== null} onOpenChange={(open) => !open && setMatchingItem(null)}>
+      <Dialog.Root open={matchOpen} onOpenChange={setMatchOpen}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
+          <Dialog.Overlay className="dialog-overlay fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
           <Dialog.Content
             onCloseAutoFocus={(event) => {
               if (matchOpener.current) {
@@ -674,7 +684,7 @@ export function ImportReview({
                 matchOpener.current.focus();
               }
             }}
-            className="fixed left-1/2 top-1/2 z-50 flex max-h-[85dvh] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col rounded-[var(--radius-card)] bg-surface p-5 ring-1 ring-line focus:outline-none"
+            className="dialog-content fixed left-1/2 top-1/2 z-50 flex max-h-[85dvh] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col rounded-[var(--radius-card)] bg-surface p-5 ring-1 ring-line focus:outline-none"
           >
             <Dialog.Close className="absolute right-3 top-3 flex min-h-11 min-w-11 items-center justify-center rounded text-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-brand/60" aria-label="Close match search">
               <X size={18} aria-hidden="true" />
@@ -693,7 +703,7 @@ export function ImportReview({
                 onPick={(result) => {
                   if (!matchingItem) return;
                   void updateItem(matchingItem.id, { proposed: proposedFromSearch(result) }).then((ok) => {
-                    if (ok) setMatchingItem(null);
+                    if (ok) setMatchOpen(false);
                   });
                 }}
                 placeholder="Search the correct title…"

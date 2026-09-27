@@ -82,7 +82,16 @@ export function Nav({ userName }: { userName?: string | null }) {
     const measure = () => {
       if (!nav.offsetWidth) return; // hidden below lg
       const link = nav.querySelector<HTMLElement>('[aria-current="page"]');
-      setPill(link ? { x: link.offsetLeft, width: link.offsetWidth } : null);
+      if (!link) {
+        setPill(null);
+        return;
+      }
+      // Rects, not offsetLeft/offsetWidth: those round to whole pixels, and
+      // the links sit at fractional ones, so the pill drifted up to 0.5px off
+      // its link and off the static pill it replaces. The links carry no
+      // transform, so their rects are their layout boxes.
+      const box = link.getBoundingClientRect();
+      setPill({ x: box.left - nav.getBoundingClientRect().left, width: box.width });
     };
     // Measure before paint, so the pill starts moving in the same frame as the
     // link's color, then again whenever late fonts or a resize change the row.
@@ -279,7 +288,13 @@ export function Nav({ userName }: { userName?: string | null }) {
                       data-motion-enter
                       initial={{ opacity: 0, y: -6, scale: 0.97 }}
                       animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: -6, scale: 0.97 }}
+                      // EM-10: the exit is faster than the 150 ms enter.
+                      exit={{
+                        opacity: 0,
+                        y: -6,
+                        scale: 0.97,
+                        transition: { duration: 0.1, ease: EASE_OUT },
+                      }}
                       transition={{ duration: 0.15, ease: EASE_OUT }}
                       className="absolute right-0 top-[calc(100%+0.5rem)] z-50 w-48 origin-top-right overflow-hidden rounded-xl bg-surface p-1.5 shadow-xl ring-1 ring-line"
                     >

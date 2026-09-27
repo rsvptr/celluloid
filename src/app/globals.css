@@ -179,22 +179,8 @@ label {
     rgba(231, 238, 246, 0.06),
     transparent
   );
-  animation: shimmer 1.6s infinite;
-}
-
-/* Slow drifting glow used behind hero/landing art */
-@keyframes hero-float {
-  0%, 100% {
-    transform: translate3d(0, 0, 0);
-    opacity: 0.8;
-  }
-  50% {
-    transform: translate3d(0, -14px, 0);
-    opacity: 1;
-  }
-}
-.hero-float {
-  animation: hero-float 9s ease-in-out infinite;
+  /* Constant motion is linear (EM-16); `ease` surged and stalled each sweep. */
+  animation: shimmer 1.6s linear infinite;
 }
 
 /* Chevron affordance for native selects (which use appearance-none) */
@@ -212,6 +198,27 @@ label {
   outline-offset: 2px;
 }
 
+/* ==========================================================================
+   Motion tokens (emil-design-eng, EM-14)
+   The one place the curves live; components/motion.tsx mirrors them for
+   Motion. `static` emits them even where no utility names them, because sites
+   read them through var() inside arbitrary values, which Tailwind doesn't
+   trace back to the theme. Overriding --ease-out also makes the `ease-out`
+   utility emil's curve instead of Tailwind's weak default.
+   ========================================================================== */
+@theme static {
+  /* Enter, exit and press: starts fast, settles gently. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  /* Panels docked to a screen edge (the bulk bar). */
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+}
+:root {
+  /* Radix dialogs: exits run faster than entrances. */
+  --duration-dialog-in: 200ms;
+  --duration-dialog-out: 150ms;
+}
+/* ======================== end of motion tokens ========================== */
+
 /* Press feedback (emil-design-eng): scale on pointer-down. It replaces
    transition-colors on a control, so it keeps that property list and adds
    opacity and scale. An @utility (not a bare class) stays in Tailwind's
@@ -220,7 +227,7 @@ label {
 @utility press {
   transition-property: color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to, opacity, scale;
   transition-duration: 160ms;
-  transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
+  transition-timing-function: var(--ease-out);
   @media (prefers-reduced-motion: no-preference) {
     &:active:not(:disabled, [aria-disabled="true"]) {
       scale: 0.97;
@@ -228,13 +235,22 @@ label {
   }
 }
 
-/* Radix dialog entrance (close is instant — Radix unmounts immediately) */
+/* Radix dialogs (EM-03). Radix's Presence sees the closed state change
+   animation-name, waits for that animation to end, and only then unmounts,
+   so the exit plays in full. Content that changes on close would show during
+   those 150 ms: see share-dialog.tsx and import-review.tsx. The content keeps
+   transform-origin at its centre, which modals are exempt from. */
 @keyframes dialog-overlay-in {
   from {
     opacity: 0;
   }
   to {
     opacity: 1;
+  }
+}
+@keyframes dialog-overlay-out {
+  to {
+    opacity: 0;
   }
 }
 @keyframes dialog-content-in {
@@ -246,6 +262,37 @@ label {
     opacity: 1;
     scale: 1;
   }
+}
+@keyframes dialog-content-out {
+  to {
+    opacity: 0;
+    scale: 0.97;
+  }
+}
+.dialog-overlay[data-state="open"] {
+  animation: dialog-overlay-in var(--duration-dialog-in) var(--ease-out);
+}
+.dialog-overlay[data-state="closed"] {
+  animation: dialog-overlay-out var(--duration-dialog-out) var(--ease-out);
+}
+.dialog-content[data-state="open"] {
+  animation: dialog-content-in var(--duration-dialog-in) var(--ease-out);
+}
+.dialog-content[data-state="closed"] {
+  animation: dialog-content-out var(--duration-dialog-out) var(--ease-out);
+}
+
+/* The toaster rides above the library's bulk bar (EM-07). While open, the bar
+   publishes --toast-bottom, its height plus a gap. The toaster keeps its
+   resting offset and is lifted by the difference on `translate`, so when the
+   bar closes its toasts ease down with the bar (same curve, the bar's 200 ms
+   exit) rather than snapping: `bottom` wasn't transitioned, and animating it
+   would lay out every frame. --toast-desktop-bottom is the resting offset at
+   every width, since below Sonner's 600px mobile layout it equals the mobile
+   one. Sonner's own toaster transition (transform) is restated. */
+[data-sonner-toaster].toast-lift {
+  translate: 0 calc(var(--toast-desktop-bottom, 24px) - var(--toast-bottom, var(--toast-desktop-bottom, 24px)));
+  transition: transform 400ms ease, translate 200ms var(--ease-drawer);
 }
 
 /* Entrances that run from the first paint, with no JS. Sites apply them with
@@ -305,12 +352,48 @@ label {
   transform: none !important;
 }
 
-/* Respect reduced motion */
+/* Reduced motion (EM-04): fewer and gentler, not none (emil-design-eng).
+   - Kill switch: every CSS animation, including any added later, finishes at
+     once and never loops, unless it is allowed below. That stops the shimmer
+     and any other decorative loop.
+   - Transitions keep their authored durations, but only on properties that
+     don't move anything: colour, opacity and shadow still ease; transform,
+     translate, scale, rotate and size changes snap.
+   - Allowed: the dialog fades (the content fades without its scale), and the
+     spinner pulses in place, so it still shows that work is under way.
+   Motion's own animations follow MotionConfig reducedMotion="user". */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.001ms !important;
-    transition-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-property: color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to, opacity, box-shadow !important;
+    scroll-behavior: auto !important;
+  }
+  .dialog-overlay[data-state="open"],
+  .dialog-content[data-state="open"] {
+    animation-duration: var(--duration-dialog-in) !important;
+  }
+  .dialog-overlay[data-state="closed"],
+  .dialog-content[data-state="closed"] {
+    animation-duration: var(--duration-dialog-out) !important;
+  }
+  .dialog-content[data-state="open"] {
+    animation-name: dialog-overlay-in;
+  }
+  .dialog-content[data-state="closed"] {
+    animation-name: dialog-overlay-out;
+  }
+  .animate-spin {
+    animation: spinner-pulse 1s ease-in-out infinite alternate !important;
+  }
+}
+@keyframes spinner-pulse {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.35;
   }
 }
