@@ -559,7 +559,8 @@ export async function updateTitle(
  * migration. Episodes are only unticked while their current watchedAt still
  * equals that instant, protecting a later correction made before Undo is used.
  * The title's watchedAt returns to the token's restoreWatchedAt under the same
- * guard, which takes back an auto-stamp without clearing a date the owner set.
+ * guard, which takes back an auto-stamp without clearing a date the owner set,
+ * then follows any surviving viewing as syncWatchedAtFromEvents does elsewhere.
  */
 export async function undoWatchedTransition(
   titleId: string,
@@ -639,13 +640,15 @@ export async function undoWatchedTransition(
       },
     });
     // Restore the token's date only while watchedAt still holds this instant: a
-    // later change (say a newer logged watch) owns it, as with the episodes. Done
+    // later change (say a newer logged watch) owns it, as with the episodes. Then
+    // raise it to any viewing that survives the undo (a back-dated log). Done
     // before the recount, so one that re-completes the title stamps a fresh date.
     if (title.watchedAt?.getTime() === transitionAt.getTime()) {
       await tx.title.update({
         where: { id: titleId },
         data: { watchedAt: restoreAt },
       });
+      await syncWatchedAtFromEvents(tx, titleId, restoreAt);
     }
 
     const episodeRows = await tx.episode.count({ where: { season: { titleId } } });

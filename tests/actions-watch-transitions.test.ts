@@ -619,6 +619,31 @@ describe("watch transition locking", { concurrency: false }, () => {
     assert.equal(activeDb.watchedAt?.toISOString(), later);
   });
 
+  it("follows a viewing logged before Undo instead of emptying the watch date", async () => {
+    activeDb = new FakeWatchDb();
+    const result = await updateTitle("title-1", { status: WatchStatus.WATCHED });
+    assert.ok(result.undo);
+    // Log watch defaults to today, a day that starts before the stamp, so the
+    // log keeps the stamp and the undo guard still passes.
+    const today = result.undo.occurredAt.slice(0, 10);
+    await logWatch("title-1", { occurredAt: today });
+    assert.equal(activeDb.watchedAt?.toISOString(), result.undo.occurredAt);
+
+    assert.deepEqual(
+      await undoWatchedTransition(
+        result.undo.titleId,
+        result.undo.occurredAt,
+        result.undo.restoreWatchedAt,
+      ),
+      { ok: true },
+    );
+    assert.deepEqual(
+      activeDb.events.map((event) => [event.kind, event.source]),
+      [[WatchEventKind.REWATCH, WatchEventSource.MANUAL]],
+    );
+    assert.equal(activeDb.watchedAt?.toISOString(), `${today}T00:00:00.000Z`);
+  });
+
   it("keeps a date entered before the title transitions to WATCHED", async () => {
     activeDb = new FakeWatchDb();
     activeDb.mediaType = MediaType.MOVIE;
