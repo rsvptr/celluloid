@@ -13,6 +13,21 @@ export function norm(s: string): string {
     .trim();
 }
 
+/**
+ * The normalized names a TMDB result can be matched by: its localized title
+ * and its original-language one. TMDB's search matches both, so "Ladri di
+ * biciclette" returns "Bicycle Thieves"; comparing the localized title alone
+ * then rejected the very result TMDB found. Names that normalize to nothing (a
+ * non-Latin script) are left out.
+ */
+export function resultNames(
+  item: Pick<TmdbSearchItem, "title" | "name" | "original_title" | "original_name">,
+): string[] {
+  return [item.title ?? item.name, item.original_title ?? item.original_name]
+    .map((name) => norm(name ?? ""))
+    .filter((name) => name.length > 0);
+}
+
 /** Release/air year of a TMDB result, or null. */
 export function yearOf(item: TmdbSearchItem): number | null {
   const d = item.release_date ?? item.first_air_date;
@@ -50,15 +65,16 @@ export function pickBest(
   const target = norm(title);
 
   const scored = results.map((r, i) => {
-    const rn = norm(r.title ?? r.name ?? "");
+    const names = resultNames(r);
     const ry = yearOf(r);
     // A title in a non-Latin script normalizes to "", and any string includes
     // "" - without the length guards such a query would "partial match" every
-    // result and bypass the carve-out below. Empty-vs-empty is no signal either.
+    // result and bypass the carve-out below. Empty-vs-empty is no signal either
+    // (resultNames already drops empty names).
     const nameMatch: "exact" | "partial" | "none" =
-      target.length > 0 && rn === target
+      target.length > 0 && names.includes(target)
         ? "exact"
-        : target.length > 0 && rn.length > 0 && (rn.includes(target) || target.includes(rn))
+        : target.length > 0 && names.some((n) => n.includes(target) || target.includes(n))
           ? "partial"
           : "none";
     const yearDiff = year != null && ry != null ? Math.abs(ry - year) : null;

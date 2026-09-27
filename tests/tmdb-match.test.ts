@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { norm, yearOf, nameYearKey, pickBest } from "../src/lib/tmdb-match";
+import { norm, yearOf, nameYearKey, pickBest, resultNames } from "../src/lib/tmdb-match";
 import type { TmdbSearchItem } from "../src/lib/tmdb";
 
 function movie(
@@ -17,6 +17,16 @@ function movie(
     vote_average: vote,
   };
 }
+
+// TM-05: TMDB searches original titles too. Live, "Ladri di biciclette" with
+// primary_release_year=1948 returned exactly this one result.
+const bicycleThieves: TmdbSearchItem = {
+  id: 5156,
+  media_type: "movie",
+  title: "Bicycle Thieves",
+  original_title: "Ladri di biciclette",
+  release_date: "1948-07-21",
+};
 
 describe("norm", () => {
   it("lowercases, strips accents and punctuation", () => {
@@ -95,5 +105,40 @@ describe("pickBest", () => {
     // because its year is within one of the target.
     const results = [movie(9, "Romanized Name", 2023)];
     assert.equal(pickBest(results, "completely different script", 2024), null);
+  });
+
+  it("matches a row written in the original language by the original title", () => {
+    assert.equal(pickBest([bicycleThieves], "Ladri di biciclette", 1948)?.id, 5156);
+    assert.equal(pickBest([bicycleThieves], "Bicycle Thieves", 1948)?.id, 5156);
+  });
+
+  it("prefers an exact original-title match over an earlier partial localized one", () => {
+    const results = [movie(1, "Ladri", 1948, 6), bicycleThieves];
+    assert.equal(pickBest(results, "Ladri di biciclette", 1948)?.id, 5156);
+  });
+
+  it("does the same for TV original names", () => {
+    const moneyHeist: TmdbSearchItem = {
+      id: 71446,
+      media_type: "tv",
+      name: "Money Heist",
+      original_name: "La casa de papel",
+      first_air_date: "2017-05-02",
+    };
+    assert.equal(pickBest([moneyHeist], "La casa de papel", 2017)?.id, 71446);
+  });
+});
+
+describe("resultNames", () => {
+  it("lists the localized and original names, normalized", () => {
+    assert.deepEqual(resultNames(bicycleThieves), ["bicycle thieves", "ladri di biciclette"]);
+  });
+
+  it("drops names that normalize to nothing, such as a non-Latin original", () => {
+    assert.deepEqual(
+      resultNames({ title: "Bramayugam", original_title: "ഭ്രമയുഗം" }),
+      ["bramayugam"],
+    );
+    assert.deepEqual(resultNames({}), []);
   });
 });

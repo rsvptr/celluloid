@@ -15,9 +15,9 @@ import {
   type TitleCastMember,
 } from "@/lib/tmdb-extras";
 // tmdb-match imports only a TYPE from this module, so there is no runtime cycle.
-// Reusing its normalizer keeps "does this page contain the title we asked for?"
-// answered the same way the matcher will answer it.
-import { norm } from "@/lib/tmdb-match";
+// Reusing its normalizer and name list keeps "does this page contain the title
+// we asked for?" answered the same way the matcher will answer it.
+import { norm, resultNames } from "@/lib/tmdb-match";
 
 const BASE = "https://api.themoviedb.org/3";
 
@@ -352,9 +352,9 @@ export async function searchByType(
   // year-filtered ones first, so it can still prefer them on an even score.
   if (year !== undefined) {
     const wanted = norm(query);
-    const hasNameMatch = results.some(
-      (r) => norm(r.title ?? r.name ?? "") === wanted,
-    );
+    // The original title counts too: a query written in the original language
+    // ("Ladri di biciclette") found on the filtered page needs no second search.
+    const hasNameMatch = results.some((r) => resultNames(r).includes(wanted));
     if (!hasNameMatch) {
       const seen = new Set(results.map((r) => r.id));
       const unfiltered = (await run()).results.filter((r) => !seen.has(r.id));
