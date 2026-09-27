@@ -7,6 +7,7 @@ import {
   WatchEventSource,
   WatchStatus,
 } from "../src/generated/prisma/client";
+import { PRISMA_POOL_MAX } from "../src/lib/db-pool";
 
 type EventRow = {
   id?: string;
@@ -1109,6 +1110,36 @@ describe("watch transition locking", { concurrency: false }, () => {
 
     assert.equal(activeDb.status, WatchStatus.WATCHED);
     assert.equal(activeDb.watchedEpisodes, 30);
+  });
+
+  it("runs bulk WATCHED below the pool size and gives each start 10 s to get a connection", async () => {
+    activeDb = new FakeWatchDb();
+    const ids = Array.from({ length: 12 }, (_, index) => `title-${index}`);
+    let inFlight = 0;
+    let peak = 0;
+    const maxWaits: unknown[] = [];
+    Object.assign(activeDb.prisma, {
+      title: { ...activeDb.prisma.title, findMany: async () => ids.map((id) => ({ id })) },
+      $transaction: async (
+        operation: (tx: { $queryRaw: () => Promise<unknown[]> }) => Promise<unknown>,
+        options?: { maxWait?: number },
+      ) => {
+        maxWaits.push(options?.maxWait);
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          // An empty lock read is the "title vanished" early return.
+          return await operation({ $queryRaw: async () => [] });
+        } finally {
+          inFlight -= 1;
+        }
+      },
+    });
+
+    assert.deepEqual(await bulkSetStatus(ids, WatchStatus.WATCHED), { count: ids.length });
+    assert.equal(peak, PRISMA_POOL_MAX - 1);
+    assert.deepEqual(maxWaits, ids.map(() => 10_000));
   });
 });
 
