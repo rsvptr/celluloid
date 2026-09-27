@@ -33,7 +33,7 @@ describe("motion polish", () => {
   });
 
   it("dismisses recommend cards without an exit-then-reflow, measuring on list changes only (EM-12, MO-06)", async () => {
-    const rec = await source("app/(app)/recommend/recommend-client.tsx");
+    const rec = await source("app/(app)/recommend/rec-results.tsx");
     const at = rec.indexOf('<AnimatePresence initial={false} mode="popLayout">');
     assert.notEqual(at, -1, "recommend cards need popLayout");
     // popLayout positions the exiting card against its nearest positioned parent.

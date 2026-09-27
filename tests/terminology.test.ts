@@ -8,7 +8,7 @@ async function source(path: string) {
 
 describe("terminology and button labels (JK-32)", () => {
   it("says TV shows and All, like the library", async () => {
-    const rec = await source("../src/app/(app)/recommend/recommend-client.tsx");
+    const rec = await source("../src/app/(app)/recommend/recommend-form.tsx");
     assert.match(rec, /\["all", "All"\],\s*\["movie", "Movies"\],\s*\["tv", "TV shows"\],/);
     assert.doesNotMatch(rec, /Movies & TV/);
   });
@@ -36,7 +36,7 @@ describe("terminology and button labels (JK-32)", () => {
 
   it("uses verb-complete labels and a named palette group", async () => {
     const [rec, palette] = await Promise.all([
-      source("../src/app/(app)/recommend/recommend-client.tsx"),
+      source("../src/app/(app)/recommend/rec-results.tsx"),
       source("../src/components/command-palette.tsx"),
     ]);
     assert.match(rec, /Show different picks\n/);

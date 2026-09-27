@@ -22,7 +22,7 @@ describe("Add buttons name the type and year (JK-21)", () => {
   });
 
   it("recommendations qualify Add and View", async () => {
-    const rec = await source("../src/app/(app)/recommend/recommend-client.tsx");
+    const rec = await source("../src/app/(app)/recommend/rec-card.tsx");
     assert.match(rec, /`Add \$\{nameWithTypeAndYear\(rec\.title, rec\.mediaType, rec\.year\)\} to your watchlist`/);
     assert.match(rec, /`View \$\{nameWithTypeAndYear\(rec\.title, rec\.mediaType, rec\.year\)\} in your watchlist`/);
   });
