@@ -18,8 +18,14 @@ export { AnimatePresence, LayoutGroup, m as motion, useReducedMotion };
 // `layout` is used by recommendation/library cards, so this needs domMax rather
 // than domAnimation. The async feature import keeps that larger feature bundle
 // out of the app shell's initial JS while the statically analyzable path lets
-// Next split it into its own chunk.
-const loadDomMax = () => import("motion/react").then((module) => module.domMax);
+// Next split it into its own chunk. If the chunk fails to load (flaky network,
+// a blocker, deploy skew), `m` components simply stay feature-less: the promise
+// never settles, so there is no unhandled rejection and no half-loaded state.
+// Nothing server-rendered starts hidden, so that costs animation, not content.
+const loadDomMax = () =>
+  import("motion/react")
+    .then((module) => module.domMax)
+    .catch(() => new Promise<never>(() => {}));
 
 // A cinematic ease-out curve used for most entrances.
 export const EASE_OUT = [0.16, 1, 0.3, 1] as const;
@@ -34,29 +40,6 @@ export function MotionProvider({ children }: { children: React.ReactNode }) {
     <LazyMotion features={loadDomMax} strict>
       <MotionConfig reducedMotion="user">{children}</MotionConfig>
     </LazyMotion>
-  );
-}
-
-export function FadeIn({
-  children,
-  className,
-  delay = 0,
-  y = 8,
-}: {
-  children: React.ReactNode;
-  className?: string;
-  delay?: number;
-  y?: number;
-}) {
-  return (
-    <m.div
-      className={className}
-      initial={{ opacity: 0, y }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.35, ease: EASE_OUT, delay }}
-    >
-      {children}
-    </m.div>
   );
 }
 

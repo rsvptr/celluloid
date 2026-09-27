@@ -232,6 +232,55 @@ label {
   }
 }
 
+/* Entrances that run from the first paint, with no JS. Sites apply them with
+   motion-safe:animate-[…], so the resting (and reduced-motion) state is
+   visible and still, and nothing waits on Motion's lazily loaded features.
+   No fill-mode: an element Motion later animates out must not stay pinned. */
+@keyframes enter-rise {
+  from {
+    opacity: 0;
+    translate: 0 8px;
+  }
+}
+@keyframes enter-scale {
+  from {
+    opacity: 0;
+    scale: 0.98;
+  }
+}
+/* Height reveal for a one-row grid (grid-rows-[1fr]) whose only child is
+   min-h-0, so the 0fr track collapses it fully. */
+@keyframes collapse-in {
+  from {
+    opacity: 0;
+    grid-template-rows: 0fr;
+  }
+}
+@keyframes grow-x {
+  from {
+    scale: 0 1;
+  }
+}
+@keyframes grow-y {
+  from {
+    scale: 1 0;
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+/* Needs pathLength="1" on the path. */
+@keyframes draw-line {
+  from {
+    stroke-dasharray: 0 1;
+  }
+  to {
+    stroke-dasharray: 1 1;
+  }
+}
+
 /* Respect reduced motion */
 @media (prefers-reduced-motion: reduce) {
   *,

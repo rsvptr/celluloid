@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { Wordmark } from "@/components/brand";
-import { FadeIn, MotionProvider } from "@/components/motion";
+import { MotionProvider } from "@/components/motion";
 import { signupsDisabled } from "@/lib/auth";
 import { getOptionalUser } from "@/lib/session";
 import { AuthForm } from "./auth-form";
@@ -35,8 +35,8 @@ export default async function LoginPage() {
     // lives on MAIN so both columns share one continuous canvas - no seam.
     // MotionProvider is mounted here (not the root layout) because this page
     // and the authed shell are the only Motion users; the provider is what
-    // makes FadeIn and the form's transitions honor the OS reduce-motion
-    // setting.
+    // makes the form's transitions honor the OS reduce-motion setting. The
+    // column's entrance is CSS, so the form is visible before any JS runs.
     <MotionProvider>
     <main className="relative min-h-dvh overflow-hidden lg:grid lg:h-dvh lg:grid-cols-[minmax(0,1.08fr)_minmax(28rem,0.92fr)]">
       <div aria-hidden="true" className="pointer-events-none absolute inset-0">
@@ -97,7 +97,7 @@ export default async function LoginPage() {
           aria-hidden="true"
           className="hero-float pointer-events-none absolute -top-40 left-1/2 h-96 w-96 -translate-x-1/2 rounded-full bg-brand/20 blur-[120px] lg:hidden"
         />
-        <FadeIn className="relative w-full max-w-sm" y={14}>
+        <div className="relative w-full max-w-sm motion-safe:animate-[enter-rise_250ms_cubic-bezier(0.23,1,0.32,1)]">
           <div className="mb-8 flex flex-col items-center text-center lg:hidden">
             <Wordmark size={56} href={null} className="flex-col gap-3" />
             <p className="mt-4 text-sm text-muted">
@@ -107,7 +107,7 @@ export default async function LoginPage() {
           <Suspense fallback={null}>
             <AuthForm signupsDisabled={signupsDisabled} />
           </Suspense>
-        </FadeIn>
+        </div>
       </section>
     </main>
     </MotionProvider>

@@ -1,10 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { motion } from "@/components/motion";
 import { cn } from "@/lib/utils";
-
-const EASE = [0.16, 1, 0.3, 1] as const;
 
 // --- Horizontal bar rows ---------------------------------------------------
 
@@ -26,12 +23,12 @@ export function BarRow({
         {label}
       </span>
       <div className="h-2 flex-1 overflow-hidden rounded-full bg-surface-2">
-        <motion.div
-          className={cn("h-full origin-left rounded-full", colorClass ?? "brand-gradient")}
+        <div
+          className={cn(
+            "h-full origin-left rounded-full motion-safe:animate-[grow-x_300ms_cubic-bezier(0.23,1,0.32,1)]",
+            colorClass ?? "brand-gradient",
+          )}
           style={{ width: `${pct}%` }}
-          initial={{ scaleX: 0 }}
-          animate={{ scaleX: 1 }}
-          transition={{ duration: 0.6, ease: EASE }}
         />
       </div>
       <span className="w-8 shrink-0 text-right text-xs tabular-nums text-muted">
@@ -72,13 +69,10 @@ export function ColumnChart({
             {d.value > 0 && (
               <span className="text-[10px] tabular-nums text-faint">{d.value}</span>
             )}
-            <motion.div
+            <div
               title={`${d.label}: ${d.value}`}
-              className="w-full rounded-t-md brand-gradient"
+              className="w-full rounded-t-md brand-gradient motion-safe:animate-[grow-y_300ms_cubic-bezier(0.23,1,0.32,1)]"
               style={{ height: px, transformOrigin: "bottom" }}
-              initial={{ scaleY: 0 }}
-              animate={{ scaleY: 1 }}
-              transition={{ duration: 0.5, ease: EASE, delay: i * 0.02 }}
             />
             {/* Past 8 buckets, labels collide at narrow widths; drop every
                 other one but keep its slot (invisible, not unmounted) so bars
@@ -150,14 +144,12 @@ export function Sparkline({
             <stop offset="100%" stopColor="#2dd4ee" stopOpacity="0" />
           </linearGradient>
         </defs>
-        <motion.path
+        <path
           d={area}
           fill="url(#spark-fill)"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.8, ease: EASE }}
+          className="motion-safe:animate-[fade-in_300ms_cubic-bezier(0.23,1,0.32,1)]"
         />
-        <motion.path
+        <path
           d={line}
           fill="none"
           stroke="#2dd4ee"
@@ -165,9 +157,8 @@ export function Sparkline({
           strokeLinejoin="round"
           strokeLinecap="round"
           vectorEffect="non-scaling-stroke"
-          initial={{ pathLength: 0 }}
-          animate={{ pathLength: 1 }}
-          transition={{ duration: 1, ease: EASE }}
+          pathLength={1}
+          className="motion-safe:animate-[draw-line_400ms_cubic-bezier(0.23,1,0.32,1)]"
         />
       </svg>
       {labels && (
