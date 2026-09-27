@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  memo,
   useCallback,
   useDeferredValue,
   useEffect,
@@ -1455,7 +1456,13 @@ function ViewToggle({
 /** Tags shown inline on a row before the rest collapse into a "+n" count. */
 const ROW_TAG_LIMIT = 3;
 
-function ListRow({
+/**
+ * Memoized, like TitleCard, so a keystroke's re-render of Library doesn't
+ * reconcile every row (VE-04). Its props hold across those renders: item refs
+ * come from `items`, tagColors is a server prop, onToggle is the useCallback'd
+ * toggle and the rest are booleans.
+ */
+const ListRow = memo(function ListRow({
   item,
   tagColors,
   selectMode,
@@ -1567,7 +1574,7 @@ function ListRow({
       {inner}
     </Link>
   );
-}
+});
 
 function EmptyState({
   hasItems,
