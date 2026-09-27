@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useState, useTransition } from "react";
+import { flushSync } from "react-dom";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -1424,6 +1425,9 @@ function ColorSwatch({
 function PasswordSection() {
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
+  // The field that failed the last submit. The button stays enabled so a short
+  // password gets a reason on submit, not a dead button (JK-12).
+  const [invalid, setInvalid] = useState<"current" | "new" | null>(null);
   const [msg, setMsg] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [pending, start] = useTransition();
 
@@ -1433,6 +1437,18 @@ function PasswordSection() {
         className="flex flex-col gap-3"
         onSubmit={(e) => {
           e.preventDefault();
+          if (!current || next.length < 10) {
+            const field = !current ? "current" : "new";
+            // Render aria-invalid and the message before focus lands, so the
+            // field is announced with them.
+            flushSync(() => {
+              setMsg(null);
+              setInvalid(field);
+            });
+            document.getElementById(`settings-${field}-password`)?.focus();
+            return;
+          }
+          setInvalid(null);
           start(async () => {
             setMsg(null);
             try {
@@ -1457,34 +1473,62 @@ function PasswordSection() {
           });
         }}
       >
-        <label className="flex flex-col gap-1.5">
-          <span className="text-xs font-medium text-muted">Current password</span>
-          <Input
-            name="current-password"
-            type="password"
-            value={current}
-            onChange={(e) => setCurrent(e.target.value)}
-            autoComplete="current-password"
-          />
-        </label>
-        <label className="flex flex-col gap-1.5">
-          <span className="text-xs font-medium text-muted">New password</span>
-          <Input
-            name="new-password"
-            type="password"
-            value={next}
-            onChange={(e) => setNext(e.target.value)}
-            autoComplete="new-password"
-            placeholder="At least 10 characters"
-          />
-        </label>
+        <div className="flex flex-col gap-1.5">
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-muted">Current password</span>
+            <Input
+              id="settings-current-password"
+              name="current-password"
+              type="password"
+              value={current}
+              onChange={(e) => {
+                setCurrent(e.target.value);
+                if (invalid === "current" && e.target.value) setInvalid(null);
+              }}
+              autoComplete="current-password"
+              aria-invalid={invalid === "current" || undefined}
+              aria-describedby={
+                invalid === "current" ? "settings-current-password-error" : undefined
+              }
+            />
+          </label>
+          {invalid === "current" ? (
+            <p id="settings-current-password-error" className="text-xs text-rose-300">
+              Enter your current password.
+            </p>
+          ) : null}
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-muted">New password</span>
+            <Input
+              id="settings-new-password"
+              name="new-password"
+              type="password"
+              value={next}
+              onChange={(e) => {
+                setNext(e.target.value);
+                if (invalid === "new" && e.target.value.length >= 10) setInvalid(null);
+              }}
+              autoComplete="new-password"
+              aria-invalid={invalid === "new" || undefined}
+              aria-describedby="settings-new-password-help"
+            />
+          </label>
+          <p
+            id="settings-new-password-help"
+            className={cn("text-xs", invalid === "new" ? "text-rose-300" : "text-faint")}
+          >
+            {invalid === "new" ? "Too short. " : null}Use at least 10 characters.
+          </p>
+        </div>
         {msg && <Notice kind={msg.kind}>{msg.text}</Notice>}
         <Button
           type="submit"
           variant="secondary"
           size="sm"
           className="self-start"
-          disabled={pending || !current || next.length < 10}
+          disabled={pending}
         >
           {pending ? "Updating…" : "Change password"}
         </Button>
