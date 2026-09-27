@@ -281,7 +281,29 @@ function ProfileSection({ name, email }: { name: string; email: string }) {
 
   return (
     <Section icon={User} title="Profile">
-      <div className="flex flex-col gap-3">
+      <form
+        className="flex flex-col gap-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          start(async () => {
+            try {
+              const r = await updateProfile(value);
+              if (r.error) {
+                setMsg({ kind: "error", text: r.error });
+              } else {
+                setMsg({ kind: "ok", text: "Profile saved." });
+                router.refresh();
+                setTimeout(() => setMsg(null), 1500);
+              }
+            } catch {
+              setMsg({
+                kind: "error",
+                text: "Celluloid couldn't save your profile. Check your connection and retry.",
+              });
+            }
+          });
+        }}
+      >
         <label className="flex flex-col gap-1.5">
           <span className="text-xs font-medium text-muted">Email</span>
           <Input name="email" value={email} disabled className="opacity-60" />
@@ -297,33 +319,15 @@ function ProfileSection({ name, email }: { name: string; email: string }) {
         </label>
         {msg && <Notice kind={msg.kind}>{msg.text}</Notice>}
         <Button
+          type="submit"
           variant="secondary"
           size="sm"
           className="self-start"
           disabled={pending || value.trim() === name}
-          onClick={() =>
-            start(async () => {
-              try {
-                const r = await updateProfile(value);
-                if (r.error) {
-                  setMsg({ kind: "error", text: r.error });
-                } else {
-                  setMsg({ kind: "ok", text: "Profile saved." });
-                  router.refresh();
-                  setTimeout(() => setMsg(null), 1500);
-                }
-              } catch {
-                setMsg({
-                  kind: "error",
-                  text: "Celluloid couldn't save your profile. Check your connection and retry.",
-                });
-              }
-            })
-          }
         >
           Save
         </Button>
-      </div>
+      </form>
     </Section>
   );
 }
@@ -714,7 +718,28 @@ function ApiKeySection({
       title="Anthropic API key"
       description="Powers your AI recommendations. Stored encrypted. You can grab one at console.anthropic.com."
     >
-      <div className="flex flex-col gap-3">
+      <form
+        className="flex flex-col gap-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          start(async () => {
+            setError(null);
+            setStatus(null);
+            try {
+              const r = await setAnthropicKey(key);
+              if (r.error) setError(r.error);
+              else {
+                setSaved(true);
+                setKey("");
+                setStatus(saved ? "API key replaced." : "API key saved.");
+                router.refresh();
+              }
+            } catch {
+              setError("Celluloid couldn't save the API key. Check your connection and retry.");
+            }
+          });
+        }}
+      >
         <p role="status" aria-live="polite" className="text-xs text-muted">
           {saved ? (
             <span className="text-emerald-300">✓ Your personal key is set.</span>
@@ -743,27 +768,10 @@ function ApiKeySection({
         {error && <Notice kind="error">{error}</Notice>}
         <div className="flex gap-2">
           <Button
+            type="submit"
             variant="primary"
             size="sm"
             disabled={pending || !key.trim()}
-            onClick={() =>
-              start(async () => {
-                setError(null);
-                setStatus(null);
-                try {
-                  const r = await setAnthropicKey(key);
-                  if (r.error) setError(r.error);
-                  else {
-                    setSaved(true);
-                    setKey("");
-                    setStatus(saved ? "API key replaced." : "API key saved.");
-                    router.refresh();
-                  }
-                } catch {
-                  setError("Celluloid couldn't save the API key. Check your connection and retry.");
-                }
-              })
-            }
           >
             {saved ? "Replace key" : "Save key"}
           </Button>
@@ -795,7 +803,7 @@ function ApiKeySection({
             </Button>
           )}
         </div>
-      </div>
+      </form>
     </Section>
   );
 }
@@ -1421,7 +1429,34 @@ function PasswordSection() {
 
   return (
     <Section icon={KeyRound} title="Password">
-      <div className="flex flex-col gap-3">
+      <form
+        className="flex flex-col gap-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          start(async () => {
+            setMsg(null);
+            try {
+              const { error } = await authClient.changePassword({
+                currentPassword: current,
+                newPassword: next,
+                revokeOtherSessions: true,
+              });
+              if (error) {
+                setMsg({ kind: "error", text: error.message ?? "Could not change password. Check your current password and try again." });
+              } else {
+                setMsg({ kind: "ok", text: "Password updated." });
+                setCurrent("");
+                setNext("");
+              }
+            } catch {
+              setMsg({
+                kind: "error",
+                text: "Celluloid couldn't update your password. Check your connection and retry.",
+              });
+            }
+          });
+        }}
+      >
         <label className="flex flex-col gap-1.5">
           <span className="text-xs font-medium text-muted">Current password</span>
           <Input
@@ -1445,38 +1480,15 @@ function PasswordSection() {
         </label>
         {msg && <Notice kind={msg.kind}>{msg.text}</Notice>}
         <Button
+          type="submit"
           variant="secondary"
           size="sm"
           className="self-start"
           disabled={pending || !current || next.length < 10}
-          onClick={() =>
-            start(async () => {
-              setMsg(null);
-              try {
-                const { error } = await authClient.changePassword({
-                  currentPassword: current,
-                  newPassword: next,
-                  revokeOtherSessions: true,
-                });
-                if (error) {
-                  setMsg({ kind: "error", text: error.message ?? "Could not change password. Check your current password and try again." });
-                } else {
-                  setMsg({ kind: "ok", text: "Password updated." });
-                  setCurrent("");
-                  setNext("");
-                }
-              } catch {
-                setMsg({
-                  kind: "error",
-                  text: "Celluloid couldn't update your password. Check your connection and retry.",
-                });
-              }
-            })
-          }
         >
           {pending ? "Updating…" : "Change password"}
         </Button>
-      </div>
+      </form>
     </Section>
   );
 }
@@ -1855,7 +1867,14 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
       description="Ask for a code from your authenticator app each time you sign in."
     >
       {on ? (
-        <div className="flex flex-col gap-3">
+        <form
+          className="flex flex-col gap-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (busy || !password) return;
+            void disable();
+          }}
+        >
           <p role="status" className="text-sm text-emerald-300">
             ✓ Two-factor authentication is on.
           </p>
@@ -1873,20 +1892,23 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
           </label>
           {error && <Notice kind="error">{error}</Notice>}
           <Button
+            type="submit"
             variant="danger"
             size="sm"
             className={cn("self-start", softDisabledClass)}
             aria-disabled={busy || !password}
-            onClick={() => {
-              if (busy || !password) return;
-              void disable();
-            }}
           >
             {busy ? <Spinner /> : null} Disable 2FA
           </Button>
-        </div>
+        </form>
       ) : phase === "idle" ? (
-        <div className="flex flex-col gap-3">
+        <form
+          className="flex flex-col gap-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void beginEnable();
+          }}
+        >
           <label className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-muted">
               Current password to enable 2FA
@@ -1901,17 +1923,23 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
           </label>
           {error && <Notice kind="error">{error}</Notice>}
           <Button
+            type="submit"
             variant="primary"
             size="sm"
             className="self-start"
             disabled={busy || !password}
-            onClick={beginEnable}
           >
             {busy ? <Spinner /> : <ShieldCheck size={15} />} Enable 2FA
           </Button>
-        </div>
+        </form>
       ) : (
-        <div className="flex flex-col gap-4">
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void confirmEnable();
+          }}
+        >
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
             {qr && (
               // eslint-disable-next-line @next/next/no-img-element
@@ -1988,10 +2016,10 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
           {error && <Notice kind="error">{error}</Notice>}
           <div className="flex gap-2">
             <Button
+              type="submit"
               variant="primary"
               size="sm"
               disabled={busy || code.length < 6}
-              onClick={confirmEnable}
             >
               {busy ? <Spinner /> : null} Verify & turn on
             </Button>
@@ -2007,7 +2035,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
               Cancel
             </Button>
           </div>
-        </div>
+        </form>
       )}
       </Section>
     </>
@@ -2485,7 +2513,34 @@ function DangerSection() {
       title="Delete account"
       description="This wipes your account and everything in it. There's no undo."
     >
-      <div className="rounded-lg border border-rose-500/25 bg-rose-500/5 p-4">
+      <form
+        className="rounded-lg border border-rose-500/25 bg-rose-500/5 p-4"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          if (pending || !password) return;
+          if (
+            !(await confirm({
+              title: "Delete your account?",
+              body: "This permanently deletes your account and everything in it. This can't be undone.",
+              confirmLabel: "Delete account",
+              destructive: true,
+            }))
+          )
+            return;
+          start(async () => {
+            setError(null);
+            // The auth boundary requires and verifies this password even for
+            // a fresh session, so a session cookie alone cannot delete data.
+            const { error } = await authClient.deleteUser({ password });
+            if (error) {
+              setError(error.message ?? "Couldn't delete the account. Try again.");
+              return;
+            }
+            router.push("/login");
+            router.refresh();
+          });
+        }}
+      >
         <p className="text-sm font-medium text-foreground/90">
           Deleting your account removes:
         </p>
@@ -2508,38 +2563,15 @@ function DangerSection() {
         </label>
         {error && <div className="mt-3"><Notice kind="error">{error}</Notice></div>}
         <Button
+          type="submit"
           variant="danger"
           size="sm"
           className={cn("mt-4", softDisabledClass)}
           aria-disabled={pending || !password}
-          onClick={async () => {
-            if (pending || !password) return;
-            if (
-              !(await confirm({
-                title: "Delete your account?",
-                body: "This permanently deletes your account and everything in it. This can't be undone.",
-                confirmLabel: "Delete account",
-                destructive: true,
-              }))
-            )
-              return;
-            start(async () => {
-              setError(null);
-              // The auth boundary requires and verifies this password even for
-              // a fresh session, so a session cookie alone cannot delete data.
-              const { error } = await authClient.deleteUser({ password });
-              if (error) {
-                setError(error.message ?? "Couldn't delete the account. Try again.");
-                return;
-              }
-              router.push("/login");
-              router.refresh();
-            });
-          }}
         >
           <Trash2 size={15} /> Delete my account
         </Button>
-      </div>
+      </form>
       </Section>
     </>
   );

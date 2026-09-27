@@ -131,7 +131,13 @@ export function ShareDialog({
           </div>
 
           {!url ? (
-            <div className="flex flex-col gap-3">
+            <form
+              className="flex flex-col gap-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                create();
+              }}
+            >
               <Dialog.Description className="text-xs text-muted">
                 Anyone with the link can view a read-only page, no account
                 needed. The link is unguessable, and you can revoke it anytime
@@ -175,6 +181,12 @@ export function ShareDialog({
                     type="checkbox"
                     checked={includeNotes}
                     onChange={(e) => setIncludeNotes(e.target.checked)}
+                    // Chrome and Firefox submit a form on Enter in a checkbox.
+                    // Someone pressing Enter to toggle this must not publish a
+                    // link with the wrong privacy setting.
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") e.preventDefault();
+                    }}
                     className="h-4 w-4 accent-brand"
                   />
                   Include my ratings and notes
@@ -189,6 +201,9 @@ export function ShareDialog({
                     type="checkbox"
                     checked={includeWatchlist}
                     onChange={(e) => setIncludeWatchlist(e.target.checked)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") e.preventDefault();
+                    }}
                     className="h-4 w-4 accent-brand"
                   />
                   Include my watchlist (titles I haven&apos;t watched yet)
@@ -209,15 +224,15 @@ export function ShareDialog({
                   </Button>
                 </Dialog.Close>
                 <Button
+                  type="submit"
                   variant="primary"
                   size="sm"
                   disabled={pending}
-                  onClick={create}
                 >
                   {pending ? "Creating…" : "Create link"}
                 </Button>
               </div>
-            </div>
+            </form>
           ) : (
             <div className="flex flex-col gap-3">
               <Dialog.Description className="text-xs text-emerald-300">

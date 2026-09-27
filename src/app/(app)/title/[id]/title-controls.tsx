@@ -459,7 +459,13 @@ export function TitleControls({
               Record a viewing. Logging again on a watched title counts as a
               rewatch.
             </Dialog.Description>
-            <div className="mt-4 flex flex-col gap-3">
+            <form
+              className="mt-4 flex flex-col gap-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                submitLog();
+              }}
+            >
               <div className="flex flex-col gap-1.5">
                 <label
                   htmlFor={logDateId}
@@ -497,15 +503,15 @@ export function TitleControls({
                   </Button>
                 </Dialog.Close>
                 <Button
+                  type="submit"
                   variant="primary"
                   size="sm"
                   disabled={isLogging || !logDate}
-                  onClick={submitLog}
                 >
                   {isLogging ? "Logging…" : "Log watch"}
                 </Button>
               </div>
-            </div>
+            </form>
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>

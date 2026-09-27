@@ -6,21 +6,28 @@ async function source(path: string) {
   return readFile(new URL(path, import.meta.url), "utf8");
 }
 
-/** The `<Button ...>...</Button>` that contains `marker`. */
-function buttonAround(file: string, marker: string): string {
+/** The `<Button ...>...</Button>` that contains `marker`, and its handler's
+ * scope: the button itself, or for a submit button, its form up to the button. */
+function buttonAround(file: string, marker: string): { button: string; handler: string } {
   const at = file.indexOf(marker);
   assert.notEqual(at, -1, `marker not found: ${marker}`);
-  return file.slice(file.lastIndexOf("<Button", at), file.indexOf("</Button>", at));
+  const start = file.lastIndexOf("<Button", at);
+  const button = file.slice(start, file.indexOf("</Button>", at));
+  const handler = button.includes('type="submit"')
+    ? file.slice(file.lastIndexOf("<form", start), start)
+    : button;
+  return { button, handler };
 }
 
-function assertSoftDisabled(button: string, marker: string) {
+function assertSoftDisabled({ button, handler }: { button: string; handler: string }, marker: string) {
   const condition = button.match(/aria-disabled=\{([^}]*)\}/)?.[1];
   assert.ok(condition, `${marker}: no aria-disabled`);
   assert.doesNotMatch(button, /\sdisabled=\{/, `${marker}: still natively disabled`);
   assert.match(button, /softDisabledClass/, `${marker}: no soft-disabled styling`);
-  // Click, Enter and Space all arrive as a click, so the handler must refuse
-  // while the button is soft-disabled.
-  assert.ok(button.includes(`if (${condition}) return;`), `${marker}: handler not guarded`);
+  // Click, Enter and Space all arrive as a click (and a submit button's click,
+  // or Enter in a field, as a submit), so the handler must refuse while the
+  // button is soft-disabled.
+  assert.ok(handler.includes(`if (${condition}) return;`), `${marker}: handler not guarded`);
 }
 
 // useConfirm hands focus back to its opener after the dialog closes, but a
@@ -36,7 +43,7 @@ describe("confirm openers keep focus after confirming (JK-03)", () => {
       '{deleting ? "Deleting…"',
       "void revokeSession(session)",
       "void revokeOtherSessions()",
-      "void disable()",
+      ": null} Disable 2FA",
       "void commitRestore()",
       "Delete my account",
     ]) {
