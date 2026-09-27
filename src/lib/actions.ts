@@ -1885,8 +1885,8 @@ export async function rematchTitle(
               })),
             );
             // One statement per batch rather than one per watched episode,
-            // which held the Title lock for a round trip each. The titleId
-            // predicate keeps the write inside the locked title.
+            // which held the Title lock for a round trip each. The titleId and
+            // userId predicates keep the write inside the locked title.
             for (const batch of chunks(relinks, RELINK_BATCH_SIZE)) {
               await tx.$executeRaw`
                 UPDATE "WatchEvent" AS w
@@ -1894,7 +1894,7 @@ export async function rematchTitle(
                 FROM (VALUES ${Prisma.join(
                   batch.map((r) => Prisma.sql`(${r.eventId}::text, ${r.episodeId}::text)`),
                 )}) AS v(event_id, episode_id)
-                WHERE w.id = v.event_id AND w."titleId" = ${titleId}`;
+                WHERE w.id = v.event_id AND w."titleId" = ${titleId} AND w."userId" = ${userId}`;
             }
           }
 

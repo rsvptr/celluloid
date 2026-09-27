@@ -231,12 +231,26 @@ function createRematchDb(options: {
           },
         },
         // The relink UPDATE: one joined VALUES list of (eventId, episodeId)
-        // pairs, then the titleId the write is confined to.
+        // pairs, then the title and owner the write is confined to. The text
+        // is pinned because this fake applies the pairs by position: a wrong
+        // join key or swapped columns would still "work" here while detaching
+        // every event in Postgres.
         $executeRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
           tally("$executeRaw");
-          assert.match(strings.join("?"), /UPDATE "WatchEvent"[\s\S]*w\."titleId" = \?/);
-          const [pairs, titleId] = values as [{ values: string[] }, string];
-          if (titleId !== title.id) return 0;
+          assert.equal(
+            strings.join("?").replace(/\s+/g, " ").trim(),
+            'UPDATE "WatchEvent" AS w SET "episodeId" = v.episode_id ' +
+              "FROM (VALUES ?) AS v(event_id, episode_id) " +
+              'WHERE w.id = v.event_id AND w."titleId" = ? AND w."userId" = ?',
+          );
+          const [pairs, titleId, userId] = values as [
+            { sql: string; values: string[] },
+            string,
+            string,
+          ];
+          assert.match(pairs.sql, /^\(\?::text, \?::text\)(,\(\?::text, \?::text\))*$/);
+          assert.equal(titleId, title.id);
+          assert.equal(userId, title.userId);
           let updated = 0;
           for (let index = 0; index < pairs.values.length; index += 2) {
             const event = events.find((row) => row.id === pairs.values[index]);
