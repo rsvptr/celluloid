@@ -75,14 +75,23 @@ function dateKey(date: Date): string {
 }
 
 export async function getUpcoming(userId: string): Promise<UpcomingData> {
-  const owner = await getUserPrefs(userId);
+  // The tracked-show aggregate is the one query here that doesn't need the
+  // owner's zone, so it runs alongside the prefs read, not behind it (VE-13).
+  const [owner, tracked] = await Promise.all([
+    getUserPrefs(userId),
+    prisma.title.aggregate({
+      where: { userId, deletedAt: null, mediaType: MediaType.TV },
+      _count: { _all: true },
+      _max: { metadataSyncedAt: true },
+    }),
+  ]);
   // "Today" is the owner's today, not the server's: a show airing tonight in
   // Kochi must not read as yesterday because the function ran in UTC.
   const todayKey = dayKeyInZone(new Date(), owner?.timeZone || "UTC");
   const today = new Date(`${todayKey}T00:00:00.000Z`);
   const horizon = new Date(today.getTime() + HORIZON_DAYS * DAY_MS);
 
-  const [airing, waitingRows, tracked] = await Promise.all([
+  const [airing, waitingRows] = await Promise.all([
     prisma.title.findMany({
       where: {
         userId,
@@ -132,11 +141,6 @@ export async function getUpcoming(userId: string): Promise<UpcomingData> {
       GROUP BY t.id
       ORDER BY MAX(e."airDate") DESC, t.name ASC
       LIMIT ${WAITING_LIMIT}`,
-    prisma.title.aggregate({
-      where: { userId, deletedAt: null, mediaType: MediaType.TV },
-      _count: { _all: true },
-      _max: { metadataSyncedAt: true },
-    }),
   ]);
 
   // One group per date, in the order the query already put them in.
