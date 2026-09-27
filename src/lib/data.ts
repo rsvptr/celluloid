@@ -1,6 +1,6 @@
 import { cache } from "react";
 import { prisma } from "@/lib/prisma";
-import type { MediaType } from "@/generated/prisma/client";
+import type { MediaType, Title } from "@/generated/prisma/client";
 // Value import (not `type`): shareTitleVisibility compares against the
 // WatchStatus enum member, which must exist at runtime.
 import { WatchStatus } from "@/generated/prisma/client";
@@ -10,20 +10,25 @@ import {
   ACTIVE_EPISODE_FILTER,
 } from "@/lib/rematch-history";
 
+/**
+ * One title as the library client receives it: only what its cards, list
+ * rows, filters and sorts read (VE-05). Every title rides the page payload on
+ * each render and refresh, so the year is read from releaseDate rather than
+ * sent as well.
+ */
 export interface LibraryItem {
   id: string;
   name: string;
   mediaType: MediaType;
   tmdbId: number | null;
   posterPath: string | null;
+  /** Calendar date, YYYY-MM-DD (the column is a date). */
   releaseDate: string | null;
-  year: number | null;
   language: string | null;
   tmdbRating: number | null;
   status: WatchStatus;
   rating: number | null;
   favorite: boolean;
-  totalSeasons: number | null;
   totalEpisodes: number | null;
   watchedEpisodes: number;
   genres: string[];
@@ -76,7 +81,6 @@ export async function getLibraryItems(userId: string): Promise<LibraryItem[]> {
         status: true,
         rating: true,
         favorite: true,
-        totalSeasons: true,
         totalEpisodes: true,
         watchedEpisodes: true,
         genres: true,
@@ -117,20 +121,46 @@ export async function getLibraryItems(userId: string): Promise<LibraryItem[]> {
   ]);
   const newEpisodeTitleIds = new Set(freshTvSeasons.map((t) => t.id));
 
-  return rows.map((t) => ({
+  return rows.map((t) => toLibraryItem(t, newEpisodeTitleIds.has(t.id)));
+}
+
+/** The Title columns getLibraryItems selects, with each title's tag names. */
+export type LibraryItemRow = Pick<
+  Title,
+  | "id"
+  | "name"
+  | "mediaType"
+  | "tmdbId"
+  | "posterPath"
+  | "releaseDate"
+  | "language"
+  | "tmdbRating"
+  | "status"
+  | "rating"
+  | "favorite"
+  | "totalEpisodes"
+  | "watchedEpisodes"
+  | "genres"
+  | "watchedAt"
+  | "createdAt"
+  | "streamProviderIds"
+  | "providersRegion"
+  | "providersSyncedAt"
+> & { tags: { tag: { name: string } }[] };
+
+export function toLibraryItem(t: LibraryItemRow, hasNewEpisodes: boolean): LibraryItem {
+  return {
     id: t.id,
     name: t.name,
     mediaType: t.mediaType,
     tmdbId: t.tmdbId,
     posterPath: t.posterPath,
-    releaseDate: t.releaseDate ? t.releaseDate.toISOString() : null,
-    year: t.releaseDate ? t.releaseDate.getUTCFullYear() : null,
+    releaseDate: t.releaseDate ? t.releaseDate.toISOString().slice(0, 10) : null,
     language: t.language,
     tmdbRating: t.tmdbRating,
     status: t.status,
     rating: t.rating,
     favorite: t.favorite,
-    totalSeasons: t.totalSeasons,
     totalEpisodes: t.totalEpisodes,
     watchedEpisodes: t.watchedEpisodes,
     genres: t.genres,
@@ -140,8 +170,8 @@ export async function getLibraryItems(userId: string): Promise<LibraryItem[]> {
     streamProviderIds: t.streamProviderIds,
     providersRegion: t.providersRegion,
     providersSyncedAt: t.providersSyncedAt?.toISOString() ?? null,
-    hasNewEpisodes: newEpisodeTitleIds.has(t.id),
-  }));
+    hasNewEpisodes,
+  };
 }
 
 export interface LibraryProviderPreferences {
