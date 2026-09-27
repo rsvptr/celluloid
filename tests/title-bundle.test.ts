@@ -31,4 +31,20 @@ describe("getTitleBundle", { concurrency: false }, () => {
     assert.equal(urls[0].searchParams.get("include_video_language"), "en,ml,null");
     assert.match(urls[0].searchParams.get("append_to_response") ?? "", /(^|,)videos(,|$)/);
   });
+
+  it("carries the viewer's region's release dates for a movie and none for TV", async () => {
+    serve({
+      id: 1166133,
+      recommendations: { results: [{ id: 1 }] },
+      release_dates: {
+        results: [
+          { iso_3166_1: "IN", release_dates: [{ type: 3, certification: "", release_date: "2024-02-15T00:00:00.000Z" }] },
+        ],
+      },
+    });
+    const movie = await getTitleBundle("movie", 1166133, "IN", ["en"]);
+    assert.deepEqual(movie.releases, [{ type: 3, date: "2024-02-15T00:00:00.000Z" }]);
+    const tv = await getTitleBundle("tv", 1166133, "IN", ["en"]);
+    assert.deepEqual(tv.releases, []);
+  });
 });

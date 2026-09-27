@@ -1,17 +1,8 @@
 import Image from "next/image";
-import { cookies, headers } from "next/headers";
 import { ExternalLink, Play, UserRound } from "lucide-react";
 import { prisma } from "@/lib/prisma";
-import { getUserPrefs } from "@/lib/data";
-import { getTitleBundle, getWatchRegions } from "@/lib/tmdb";
-import {
-  DEFAULT_WATCH_REGION,
-  isWatchRegion,
-  pickTrailer,
-  regionName,
-  regionWatchInfo,
-  trailerLanguages,
-} from "@/lib/tmdb-extras";
+import { getWatchRegions, type TitleBundle } from "@/lib/tmdb";
+import { pickTrailer, regionName, regionWatchInfo } from "@/lib/tmdb-extras";
 import { TMDB_IMAGE_BASE } from "@/lib/images";
 import { yearOf } from "@/lib/tmdb-match";
 import { Badge, Card } from "@/components/ui";
@@ -27,51 +18,29 @@ import { QuickAdd, RegionSelect } from "./title-extras-client";
  */
 export async function TitleExtras({
   userId,
-  tmdbId,
   mediaType,
-  language,
+  bundle: bundlePromise,
+  region,
+  videoLanguages,
 }: {
   userId: string;
-  tmdbId: number;
   mediaType: MediaType;
-  /** The title's original language, so its own trailers are fetched too. */
-  language: string | null;
+  /**
+   * The page's one TMDB request for this title (see page.tsx), shared with
+   * the rest of the page. Null when it failed.
+   */
+  bundle: Promise<TitleBundle | null>;
+  /** The viewer's streaming region, as the page resolved it. */
+  region: string;
+  /** The trailer languages the bundle was fetched with, most wanted first. */
+  videoLanguages: string[];
 }) {
   const kind = mediaType === MediaType.TV ? ("tv" as const) : ("movie" as const);
-  // Region precedence: the per-device cookie (set by the inline picker) beats
-  // the account default, which beats the built-in fallback.
-  //
-  // The saved User.watchRegion used to be written by Settings and never read
-  // here, so the account preference did nothing: on any browser without the
-  // cookie — a new device, a cleared cache, a private window — you silently got
-  // US providers and a US certification regardless of what Settings said.
-  // Only fall through to the database when the cookie is absent or invalid, so
-  // the common path still costs no extra query.
-  const regionRaw = (await cookies()).get("celluloid-region")?.value;
-  let region = DEFAULT_WATCH_REGION;
-  if (isWatchRegion(regionRaw)) {
-    region = regionRaw;
-  } else {
-    const owner = await getUserPrefs(userId);
-    const saved = owner?.watchRegion;
-    if (isWatchRegion(saved)) region = saved;
-  }
 
-  // Trailers in the viewer's language, then English, then the title's own
-  // (TM-10). Before, only English-tagged videos were ever fetched.
-  const videoLanguages = trailerLanguages(
-    (await headers()).get("accept-language"),
-    region,
-    language,
-  );
-
-  // One append_to_response request carries everything below — down from
-  // three separate round trips. The region localizes the certification badge
-  // alongside the watch providers it sits next to.
   // The picker's region list is its own long-cached request. Without it the
   // picker still shows the current region.
   const [bundle, watchRegions] = await Promise.all([
-    getTitleBundle(kind, tmdbId, region, videoLanguages).catch(() => null),
+    bundlePromise,
     getWatchRegions().catch(() => [] as string[]),
   ]);
   if (!bundle) return null;

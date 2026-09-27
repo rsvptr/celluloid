@@ -5,6 +5,7 @@ import {
   pickCreators,
   pickDirector,
   pickMovieCertification,
+  pickRegionalReleases,
   pickTopCast,
   pickTvCertification,
 } from "../src/lib/tmdb-extras";
@@ -117,6 +118,54 @@ describe("pickTvCertification", () => {
     assert.equal(
       pickTvCertification([{ iso_3166_1: "US", rating: "" }]),
       null,
+    );
+  });
+});
+
+describe("pickRegionalReleases", () => {
+  // Bramayugam's release_dates, live (trimmed to three regions).
+  const results = [
+    { iso_3166_1: "AU", release_dates: [{ certification: "", type: 1, release_date: "2025-02-23T00:00:00.000Z" }] },
+    {
+      iso_3166_1: "IN",
+      release_dates: [
+        { certification: "U/A 16+", type: 4, release_date: "2024-03-15T00:00:00.000Z" },
+        { certification: "U/A 16+", type: 3, release_date: "2024-02-15T00:00:00.000Z" },
+      ],
+    },
+    {
+      iso_3166_1: "GB",
+      release_dates: [
+        { certification: "15", type: 3, release_date: "2024-03-01T00:00:00.000Z" },
+        { certification: "15", type: 3, release_date: "2024-02-15T00:00:00.000Z" },
+        { certification: "", type: 2, release_date: "2024-01-10T00:00:00.000Z" },
+        { certification: "", type: 5, release_date: "2024-06-01T00:00:00.000Z" },
+        { certification: "", type: 6, release_date: "2024-12-25T00:00:00.000Z" },
+      ],
+    },
+  ];
+
+  it("gives the region's cinema, digital and disc dates in that order", () => {
+    assert.deepEqual(pickRegionalReleases(results, "IN"), [
+      { type: 3, date: "2024-02-15T00:00:00.000Z" },
+      { type: 4, date: "2024-03-15T00:00:00.000Z" },
+    ]);
+  });
+
+  it("takes the earliest date of a type and leaves out premieres, limited runs and TV", () => {
+    assert.deepEqual(pickRegionalReleases(results, "GB"), [
+      { type: 3, date: "2024-02-15T00:00:00.000Z" },
+      { type: 5, date: "2024-06-01T00:00:00.000Z" },
+    ]);
+    assert.deepEqual(pickRegionalReleases(results, "AU"), []);
+  });
+
+  it("returns nothing for a region TMDB has no dates for, or no data", () => {
+    assert.deepEqual(pickRegionalReleases(results, "US"), []);
+    assert.deepEqual(pickRegionalReleases(undefined, "US"), []);
+    assert.deepEqual(
+      pickRegionalReleases([{ iso_3166_1: "US", release_dates: [{ certification: "", type: 3, release_date: "soon" }] }], "US"),
+      [],
     );
   });
 });

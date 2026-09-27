@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
+import { cookies, headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { ArrowLeft, Calendar, CalendarClock, Clock, Globe, Star } from "lucide-react";
 import { requireUser } from "@/lib/session";
@@ -19,10 +20,14 @@ import {
   runtimeText,
 } from "@/lib/format";
 import { MatchControls } from "@/components/match-controls";
+import { getTitleBundle } from "@/lib/tmdb";
+import { trailerLanguages } from "@/lib/tmdb-extras";
+import { resolveWatchRegion } from "@/lib/watch-region";
 import { TitleControls } from "./title-controls";
 import { SeasonTracker } from "./season-tracker";
 import { TagEditor } from "./tag-editor";
 import { TitleExtras, TitleExtrasFallback } from "./title-extras";
+import { RegionalReleases } from "./regional-releases";
 import { WatchHistory } from "./watch-history";
 
 /**
@@ -56,7 +61,7 @@ export default async function TitlePage({
 }) {
   const { id } = await params;
   const user = await requireUser();
-  const [title, allTags, watchCount, prefs] = await Promise.all([
+  const [title, allTags, watchCount, prefs, cookieStore, headerStore] = await Promise.all([
     getTitleDetail(user.id, id),
     getTags(user.id),
     // Completion + rewatch count for the "Watched n times" badge and the
@@ -69,6 +74,8 @@ export default async function TitlePage({
       },
     }),
     getUserPrefs(user.id),
+    cookies(),
+    headers(),
   ]);
   if (!title) notFound();
 
@@ -76,6 +83,32 @@ export default async function TitlePage({
   // w780, not the w1280 default: it sits at 30% under two gradients (TM-13).
   const backdrop = backdropUrl(title.backdropPath, "w780");
   const isTv = title.mediaType === "TV";
+
+  // Region precedence: the per-device cookie (set by the inline picker) beats
+  // the account default, which beats the built-in fallback. The saved
+  // User.watchRegion once went unread here, so on any browser without the
+  // cookie (a new device, a cleared cache, a private window) you silently got
+  // US providers and a US certification regardless of what Settings said.
+  const region = resolveWatchRegion(
+    cookieStore.get("celluloid-region")?.value,
+    prefs?.watchRegion,
+  );
+  // Trailers in the viewer's language, then English, then the title's own
+  // (TM-10).
+  const videoLanguages = trailerLanguages(
+    headerStore.get("accept-language"),
+    region,
+    title.language,
+  );
+  // One TMDB request for everything this page draws from TMDB at render
+  // time: the extras below, and the regional release dates in the hero.
+  // Started here and never awaited here, so only the parts that need it wait.
+  const bundle =
+    title.tmdbId != null
+      ? getTitleBundle(isTv ? "tv" : "movie", title.tmdbId, region, videoLanguages).catch(
+          () => null,
+        )
+      : Promise.resolve(null);
 
   const meta: { icon: typeof Calendar; text: string }[] = [];
   if (title.releaseDate)
@@ -193,6 +226,13 @@ export default async function TitlePage({
               ) : null}
             </div>
 
+            {/* A watchlisted film: when it reaches the viewer's region. */}
+            {!isTv && title.status === "WATCHLIST" && (
+              <Suspense fallback={null}>
+                <RegionalReleases bundle={bundle} region={region} />
+              </Suspense>
+            )}
+
             {title.genres.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
                 {title.genres.map((g) => (
@@ -283,9 +323,10 @@ export default async function TitlePage({
             <Suspense fallback={<TitleExtrasFallback />}>
               <TitleExtras
                 userId={user.id}
-                tmdbId={title.tmdbId}
                 mediaType={title.mediaType}
-                language={title.language}
+                bundle={bundle}
+                region={region}
+                videoLanguages={videoLanguages}
               />
             </Suspense>
           </div>

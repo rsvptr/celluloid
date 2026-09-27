@@ -11,10 +11,12 @@ import {
   pickCreators,
   pickDirector,
   pickMovieCertification,
+  pickRegionalReleases,
   pickTopCast,
   pickTvCertification,
   sortRegionsByName,
   type Certification,
+  type RegionalRelease,
   type TitleCastMember,
 } from "@/lib/tmdb-extras";
 // tmdb-match imports only a TYPE from this module, so there is no runtime cycle.
@@ -798,6 +800,11 @@ export interface TitleBundle {
   creators: string[];
   /** Canonical IMDb URL, or null when TMDB has no imdb_id. */
   imdbUrl: string | null;
+  /**
+   * Movies: the region's theatrical, digital and physical release dates, from
+   * the same release_dates append the certification comes from. Empty for TV.
+   */
+  releases: RegionalRelease[];
 }
 
 /**
@@ -866,5 +873,6 @@ export async function getTitleBundle(
     creators:
       kind === "tv" ? pickCreators(data.created_by, data.aggregate_credits?.crew) : [],
     imdbUrl: imdbUrl(data.external_ids),
+    releases: kind === "movie" ? pickRegionalReleases(data.release_dates?.results, region) : [],
   };
 }

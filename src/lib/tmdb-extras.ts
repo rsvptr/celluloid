@@ -282,6 +282,37 @@ export function pickTvCertification(
   return null;
 }
 
+/** TMDB release types shown for a watchlisted film: theatrical, digital, physical. */
+export type RegionalReleaseType = 3 | 4 | 5;
+
+/** When a film reaches one region in one form. */
+export interface RegionalRelease {
+  type: RegionalReleaseType;
+  /** TMDB's timestamp for the release, a UTC midnight. */
+  date: string;
+}
+
+const REGIONAL_RELEASE_TYPES: readonly RegionalReleaseType[] = [3, 4, 5];
+
+/**
+ * The region's earliest theatrical (3), digital (4) and physical (5) release
+ * dates from a movie's `release_dates.results`, in that order. Premieres,
+ * limited runs and TV airings are left out, as is any date that doesn't parse.
+ */
+export function pickRegionalReleases(
+  results: TmdbReleaseDatesResult[] | null | undefined,
+  region: string,
+): RegionalRelease[] {
+  const dates = results?.find((r) => r.iso_3166_1 === region)?.release_dates ?? [];
+  return REGIONAL_RELEASE_TYPES.flatMap((type) => {
+    const earliest = dates
+      .filter((rd) => rd.type === type && !!rd.release_date && !Number.isNaN(Date.parse(rd.release_date)))
+      .map((rd) => rd.release_date as string)
+      .sort()[0];
+    return earliest ? [{ type, date: earliest }] : [];
+  });
+}
+
 /**
  * Top-billed cast for the "Cast" strip. Works for both movie `credits.cast`
  * (character in `character`) and TV `aggregate_credits.cast` (character in
