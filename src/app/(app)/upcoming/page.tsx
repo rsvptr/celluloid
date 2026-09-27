@@ -3,7 +3,7 @@ import Link from "next/link";
 import { requireUser } from "@/lib/session";
 import { Poster } from "@/components/poster";
 import { Badge } from "@/components/ui";
-import { STATUS_META, progressPct } from "@/lib/format";
+import { STATUS_META, airedAgoText, progressPct, tvStatusLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { getUpcoming, type AiringSoonEntry, type WaitingEntry } from "./data";
 
@@ -81,8 +81,13 @@ function TitleRow({
         />
       </div>
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-medium">{name}</div>
-        <div className="truncate text-xs text-muted">{meta}</div>
+        {/* title: a truncated line keeps its full text in reach (JK-27). */}
+        <div className="truncate text-sm font-medium" title={name}>
+          {name}
+        </div>
+        <div className="truncate text-xs text-muted" title={meta}>
+          {meta}
+        </div>
       </div>
       {trailing}
     </Link>
@@ -102,7 +107,9 @@ function progressText(entry: {
 
 function AiringRow({ entry }: { entry: AiringSoonEntry }) {
   const status = STATUS_META[entry.status];
-  const meta = [entry.tmdbStatus, progressText(entry)].filter(Boolean).join(" · ");
+  const meta = [entry.tmdbStatus && tvStatusLabel(entry.tmdbStatus), progressText(entry)]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <TitleRow
       id={entry.id}
@@ -120,14 +127,9 @@ function AiringRow({ entry }: { entry: AiringSoonEntry }) {
 }
 
 function WaitingRow({ entry, todayKey }: { entry: WaitingEntry; todayKey: string }) {
-  const days = daysBetween(entry.latestAirDateKey, todayKey);
-  const latest =
-    days <= 0
-      ? "aired today"
-      : days === 1
-        ? "aired yesterday"
-        : `aired ${days} days ago`;
-  const meta = [`latest ${latest}`, progressText(entry)].filter(Boolean).join(" · ");
+  const meta = [`latest ${airedAgoText(entry.latestAirDateKey, todayKey)}`, progressText(entry)]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <TitleRow
       id={entry.id}
@@ -207,31 +209,36 @@ export default async function UpcomingPage() {
         <EmptyState trackedShows={trackedShows} lastSyncedAt={lastSyncedAt} />
       ) : (
         <>
-          {groups.length > 0 && (
-            <section className="flex flex-col gap-4">
-              <h2 className="text-sm font-semibold">Coming up</h2>
-              {groups.map((group) => {
-                const relative = relativeDays(group.dateKey, todayKey);
-                return (
-                  <div key={group.dateKey} className="flex flex-col gap-2">
-                    <h3 className="flex items-baseline gap-2 text-xs font-medium uppercase tracking-wide text-faint">
-                      {dayLabel(group.dateKey, todayKey)}
-                      {relative && (
-                        <span className="font-normal normal-case tracking-normal">
-                          {relative}
-                        </span>
-                      )}
-                    </h3>
-                    <div className={listClass}>
-                      {group.entries.map((entry) => (
-                        <AiringRow key={entry.id} entry={entry} />
-                      ))}
-                    </div>
+          <section className="flex flex-col gap-4">
+            <h2 className="text-sm font-semibold">Coming up</h2>
+            {/* Only "Waiting for you" has rows: say so, rather than leave
+                the reader wondering whether the schedule failed (JK-31). */}
+            {groups.length === 0 && (
+              <p className="text-xs text-muted">
+                No new episodes are scheduled for the shows you track.
+              </p>
+            )}
+            {groups.map((group) => {
+              const relative = relativeDays(group.dateKey, todayKey);
+              return (
+                <div key={group.dateKey} className="flex flex-col gap-2">
+                  <h3 className="flex items-baseline gap-2 text-xs font-medium uppercase tracking-wide text-faint">
+                    {dayLabel(group.dateKey, todayKey)}
+                    {relative && (
+                      <span className="font-normal normal-case tracking-normal">
+                        {relative}
+                      </span>
+                    )}
+                  </h3>
+                  <div className={listClass}>
+                    {group.entries.map((entry) => (
+                      <AiringRow key={entry.id} entry={entry} />
+                    ))}
                   </div>
-                );
-              })}
-            </section>
-          )}
+                </div>
+              );
+            })}
+          </section>
 
           {waiting.length > 0 && (
             <section className="flex flex-col gap-2">

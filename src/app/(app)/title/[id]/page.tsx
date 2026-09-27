@@ -17,6 +17,7 @@ import {
   languageName,
   mediaTypeLabel,
   runtimeText,
+  tvStatusLabel,
 } from "@/lib/format";
 import { MatchControls } from "@/components/match-controls";
 import { TitleControls } from "./title-controls";
@@ -24,19 +25,6 @@ import { SeasonTracker } from "./season-tracker";
 import { TagEditor } from "./tag-editor";
 import { TitleExtras, TitleExtrasFallback } from "./title-extras";
 import { WatchHistory } from "./watch-history";
-
-/**
- * TMDB's TV lifecycle string, softened for display. "Ended" (concluded its
- * run) and "Canceled" (axed) are deliberately kept distinct — whether a show
- * got a real ending is exactly what a viewer deciding to start it wants to
- * know; only the spelling of "Canceled" is normalized. Anything else (e.g.
- * "Planned", "In Production") is shown exactly as TMDB sent it.
- */
-function tvStatusLabel(status: string): string {
-  if (status === "Returning Series") return "Returning";
-  if (status === "Canceled") return "Cancelled";
-  return status;
-}
 
 export async function generateMetadata({
   params,
