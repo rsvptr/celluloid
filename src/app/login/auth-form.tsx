@@ -409,12 +409,30 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
           {loading ? "Please wait…" : isSignup ? "Create account" : "Sign in"}
         </Button>
 
-        {isSignup ? (
-          <p className="text-xs leading-relaxed text-faint">
-            After you join, turn on two-factor authentication in Settings for extra
-            protection.
-          </p>
-        ) : null}
+        <AnimatePresence initial={false}>
+          {isSignup ? (
+            <motion.div
+              key="signup-note"
+              // MO-08: the note opens and closes with the name fields, on the
+              // same reveal, instead of popping in and out at the bottom.
+              // -mt-4 here and pt-4 inside cancel the form's gap-4, and the
+              // padding sits below the min-h-0 child, so the collapsed note
+              // takes no space.
+              initial={false}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.22, ease: EASE_OUT }}
+              className="-mt-4 grid grid-rows-[1fr] overflow-hidden motion-safe:animate-[collapse-in_220ms_var(--ease-out)]"
+            >
+              <div className="min-h-0">
+                <p className="pt-4 text-xs leading-relaxed text-faint">
+                  After you join, turn on two-factor authentication in Settings for extra
+                  protection.
+                </p>
+              </div>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
       </form>
 
       {!signupsDisabled ? (

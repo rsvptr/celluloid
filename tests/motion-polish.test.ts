@@ -50,4 +50,19 @@ describe("motion polish", () => {
     assert.doesNotMatch(glow, /hero-float|animate-/);
     assert.doesNotMatch(css, /hero-float/);
   });
+
+  it("reveals the sign-up note with the name fields (MO-08)", async () => {
+    const form = await source("app/login/auth-form.tsx");
+    const reveal = /initial=\{false\}\s*animate=\{\{ opacity: 1, height: "auto" \}\}\s*exit=\{\{ opacity: 0, height: 0 \}\}\s*transition=\{\{ duration: 0\.22, ease: EASE_OUT \}\}/;
+    const at = form.indexOf('key="signup-note"');
+    assert.notEqual(at, -1, "the note needs its own presence child");
+    const note = form.slice(at, form.indexOf("After you join", at));
+    assert.match(note, reveal);
+    assert.match(note, /className="-mt-4 grid grid-rows-\[1fr\] overflow-hidden motion-safe:animate-\[collapse-in_220ms_var\(--ease-out\)\]"/);
+    assert.match(note, /<div className="min-h-0">\s*<p className="pt-4 /);
+    // Same reveal as the name fields.
+    const name = form.slice(form.indexOf('key="name"'), form.indexOf("<InertOnExit", form.indexOf('key="name"')));
+    assert.match(name, reveal);
+    assert.match(name, /motion-safe:animate-\[collapse-in_220ms_var\(--ease-out\)\]/);
+  });
 });
