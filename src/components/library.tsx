@@ -57,6 +57,7 @@ import {
   bulkAddTag,
   bulkRemoveTag,
   bulkRemoveTitles,
+  bulkRestoreTitles,
   bulkSetFavorite,
   bulkSetStatus,
   emptyTrash,
@@ -1178,19 +1179,9 @@ function BulkBar({
         const removedCount = res.count ?? 0;
         onDone();
         undoToast(`Removed ${removedCount} ${removedCount === 1 ? "title" : "titles"}`, {
-          undo: async () => {
-            // Bound the server-action fan-out for a large selection. Each
-            // restore is ownership-scoped and safely no-ops if a row was
-            // already restored through Trash in another tab.
-            for (let index = 0; index < removedIds.length; index += 6) {
-              const results = await Promise.all(
-                removedIds.slice(index, index + 6).map((id) => restoreTitle(id)),
-              );
-              const error = results.find((result) => result.error)?.error;
-              if (error) return { error };
-            }
-            return {};
-          },
+          // One ownership-scoped call for the whole selection; it skips a row
+          // already restored through Trash in another tab.
+          undo: () => bulkRestoreTitles(removedIds),
           success: `Restored ${removedCount} ${removedCount === 1 ? "title" : "titles"}`,
           failure: "Couldn't restore every title. Check Trash and retry.",
           onError: () => router.refresh(),

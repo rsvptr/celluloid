@@ -2203,6 +2203,28 @@ export async function bulkRemoveTitles(ids: string[]) {
   return { count: res.count };
 }
 
+/**
+ * Undo a bulk remove in one call (VE-01). Replaying restoreTitle per title
+ * cost one POST each, which Next runs one at a time, each re-rendering the
+ * library into its response. Same predicate as restoreTitle: only the owner's
+ * rows still in Trash, so a title already restored elsewhere is left alone.
+ */
+export async function bulkRestoreTitles(ids: string[]) {
+  const userId = await getUserId();
+  if (!userId) return { error: SIGNED_OUT_MESSAGE };
+  const parsed = bulkIdsSchema.safeParse({ ids });
+  if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
+  ids = dedupeIds(parsed.data.ids);
+  const limitError = bulkLimitError(ids);
+  if (limitError) return { error: limitError };
+  const res = await prisma.title.updateMany({
+    where: { id: { in: ids }, userId, deletedAt: { not: null } },
+    data: { deletedAt: null },
+  });
+  revalidateAll();
+  return { count: res.count };
+}
+
 // --- Tags ------------------------------------------------------------------
 
 export async function createTag(name: string, color?: string | null) {
