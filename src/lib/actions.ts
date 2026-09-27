@@ -17,6 +17,7 @@ import { dayStartInZone } from "@/lib/data";
 import { getMovie, getSeason, getTv } from "@/lib/tmdb";
 import { mapLimit } from "@/lib/async";
 import { isTagColor } from "@/lib/tag-colors";
+import { tagNameFilter } from "@/lib/tag-name";
 import {
   ACTIVE_EPISODE_FILTER,
   discoveredAtForNewEpisode,
@@ -221,7 +222,7 @@ async function findOrCreateTag(
   color: string | null = null,
 ): Promise<{ id: string; name: string }> {
   const existing = await prisma.tag.findFirst({
-    where: { userId, name: { equals: name, mode: "insensitive" } },
+    where: { userId, name: tagNameFilter(name) },
     select: { id: true, name: true },
   });
   if (existing) return existing;
@@ -234,7 +235,7 @@ async function findOrCreateTag(
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
       const race = await prisma.tag.findFirst({
-        where: { userId, name: { equals: name, mode: "insensitive" } },
+        where: { userId, name: tagNameFilter(name) },
         select: { id: true, name: true },
       });
       if (race) return race;
@@ -2043,7 +2044,7 @@ export async function bulkRemoveTag(ids: string[], tagName: string) {
   // Case-insensitive lookup (see findOrCreateTag) so removing "horror" still
   // finds a tag stored as "Horror" instead of silently no-op'ing.
   const tag = await prisma.tag.findFirst({
-    where: { userId, name: { equals: name, mode: "insensitive" } },
+    where: { userId, name: tagNameFilter(name) },
     select: { id: true, name: true },
   });
   if (!tag) return { count: 0, tag: name };
@@ -2149,7 +2150,7 @@ export async function renameTag(
     where: {
       userId,
       id: { not: tag.id },
-      name: { equals: next, mode: "insensitive" },
+      name: tagNameFilter(next),
     },
     select: { name: true },
   });
