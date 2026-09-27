@@ -8,6 +8,7 @@ import {
   DEFAULT_WATCH_REGION,
   isWatchRegion,
   pickTrailer,
+  regionName,
   regionWatchInfo,
 } from "@/lib/tmdb-extras";
 import { TMDB_IMAGE_BASE } from "@/lib/images";
@@ -104,7 +105,14 @@ export async function TitleExtras({
             <h2 className="text-sm font-semibold">Where to watch</h2>
             {bundle.certification && (
               <Badge className="bg-surface-2 text-muted ring-line">
-                {bundle.certification}
+                {/* A rating from another country is labelled with it, so a
+                    fallback never reads as this region's rating (TM-08). */}
+                {bundle.certification.region !== region && (
+                  <abbr title={regionName(bundle.certification.region)} className="no-underline">
+                    {bundle.certification.region}
+                  </abbr>
+                )}
+                {bundle.certification.rating}
               </Badge>
             )}
           </div>

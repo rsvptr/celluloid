@@ -29,16 +29,42 @@ describe("pickMovieCertification", () => {
 
   it("prefers the requested region, skipping empty certifications", () => {
     // US's first release has an empty cert; the theatrical "R" is chosen.
-    assert.equal(pickMovieCertification(results), "R");
-    assert.equal(pickMovieCertification(results, "GB"), "18");
+    assert.deepEqual(pickMovieCertification(results), { rating: "R", region: "US" });
+    assert.deepEqual(pickMovieCertification(results, "GB"), { rating: "18", region: "GB" });
   });
 
   it("trims trailing whitespace on the certification", () => {
-    assert.equal(pickMovieCertification(results, "SG"), "M18");
+    assert.deepEqual(pickMovieCertification(results, "SG"), { rating: "M18", region: "SG" });
   });
 
-  it("falls back to any non-empty cert when the region is missing", () => {
-    assert.equal(pickMovieCertification(results, "FR"), "R");
+  it("falls back to the US when the region is missing, and says so", () => {
+    assert.deepEqual(pickMovieCertification(results, "FR"), { rating: "R", region: "US" });
+  });
+
+  // Bramayugam (/movie/1166133), live: regions come back alphabetically, and
+  // the US never rated it. Spain's "16" used to show, unlabelled.
+  const bramayugam = [
+    { iso_3166_1: "AU", release_dates: [{ certification: "", type: 1 }] },
+    { iso_3166_1: "ES", release_dates: [{ certification: "16", type: 3 }] },
+    { iso_3166_1: "FR", release_dates: [{ certification: "TP", type: 3 }] },
+    { iso_3166_1: "GB", release_dates: [{ certification: "15", type: 3 }] },
+    { iso_3166_1: "IN", release_dates: [{ certification: "U/A 16+", type: 3 }] },
+    { iso_3166_1: "SE", release_dates: [{ certification: "", type: 1 }] },
+  ];
+
+  it("takes the title's own country before the US and any other region (TM-08)", () => {
+    assert.deepEqual(pickMovieCertification(bramayugam, "US", ["IN"]), {
+      rating: "U/A 16+",
+      region: "IN",
+    });
+    assert.deepEqual(pickMovieCertification(bramayugam, "GB", ["IN"]), {
+      rating: "15",
+      region: "GB",
+    });
+  });
+
+  it("labels whichever region an any-region fallback came from", () => {
+    assert.deepEqual(pickMovieCertification(bramayugam, "US"), { rating: "16", region: "ES" });
   });
 
   it("falls back when the region exists but has only empty certs", () => {
@@ -46,7 +72,7 @@ describe("pickMovieCertification", () => {
       { iso_3166_1: "XX", release_dates: [{ certification: "   ", type: 1 }] },
       { iso_3166_1: "DE", release_dates: [{ certification: "16", type: 3 }] },
     ];
-    assert.equal(pickMovieCertification(withEmptyRegion, "XX"), "16");
+    assert.deepEqual(pickMovieCertification(withEmptyRegion, "XX"), { rating: "16", region: "DE" });
   });
 
   it("returns null for empty or all-empty input", () => {
@@ -71,16 +97,18 @@ describe("pickTvCertification", () => {
   ];
 
   it("prefers the requested region", () => {
-    assert.equal(pickTvCertification(results), "TV-MA");
-    assert.equal(pickTvCertification(results, "GB"), "18");
+    assert.deepEqual(pickTvCertification(results), { rating: "TV-MA", region: "US" });
+    assert.deepEqual(pickTvCertification(results, "GB"), { rating: "18", region: "GB" });
   });
 
   it("trims the rating", () => {
-    assert.equal(pickTvCertification(results, "SG"), "R21");
+    assert.deepEqual(pickTvCertification(results, "SG"), { rating: "R21", region: "SG" });
   });
 
-  it("falls back to the first non-empty rating for a missing region", () => {
-    assert.equal(pickTvCertification(results, "FR"), "16");
+  it("falls back to the origin country, then the US, then the first rating", () => {
+    assert.deepEqual(pickTvCertification(results, "FR", ["DE"]), { rating: "16", region: "DE" });
+    assert.deepEqual(pickTvCertification(results, "FR"), { rating: "TV-MA", region: "US" });
+    assert.deepEqual(pickTvCertification([results[0]], "FR"), { rating: "16", region: "DE" });
   });
 
   it("returns null for empty or all-empty input", () => {

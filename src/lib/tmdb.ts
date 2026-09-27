@@ -12,6 +12,7 @@ import {
   pickMovieCertification,
   pickTopCast,
   pickTvCertification,
+  type Certification,
   type TitleCastMember,
 } from "@/lib/tmdb-extras";
 // tmdb-match imports only a TYPE from this module, so there is no runtime cycle.
@@ -702,6 +703,9 @@ export interface TmdbCreatedBy {
 interface TmdbAppendedDetail {
   id: number;
   imdb_id?: string | null;
+  /** ISO 3166-1 codes. Both movie and TV details carry it. */
+  origin_country?: string[];
+  production_countries?: { iso_3166_1: string }[];
   created_by?: TmdbCreatedBy[];
   videos?: { results?: TmdbVideo[] };
   "watch/providers"?: { results?: Record<string, TmdbRegionProviders> };
@@ -722,10 +726,11 @@ export interface TitleBundle {
   /** Raw videos — feed to pickTrailer(videos). */
   videos: TmdbVideo[];
   /**
-   * Age/content certification for the viewer's streaming region (falls back
-   * to any region with data), or null.
+   * Age/content certification for the viewer's streaming region, falling back
+   * to the title's own country, then the US, then any region with data. Its
+   * `region` says whose rating it is. Null when no region has one.
    */
-  certification: string | null;
+  certification: Certification | null;
   /** Top-billed cast, ordered by billing and capped. */
   topCast: TitleCastMember[];
   /** Director(s) for movies; empty for TV. */
@@ -778,6 +783,9 @@ export async function getTitleBundle(
   const related = relatedRaw.map((r) => ({ ...r, media_type: kind }));
 
   const credits = kind === "movie" ? data.credits : data.aggregate_credits;
+  const origin = data.origin_country?.length
+    ? data.origin_country
+    : (data.production_countries ?? []).map((c) => c.iso_3166_1);
 
   return {
     providersResults: data["watch/providers"]?.results,
@@ -785,8 +793,8 @@ export async function getTitleBundle(
     videos: data.videos?.results ?? [],
     certification:
       kind === "movie"
-        ? pickMovieCertification(data.release_dates?.results, region)
-        : pickTvCertification(data.content_ratings?.results, region),
+        ? pickMovieCertification(data.release_dates?.results, region, origin)
+        : pickTvCertification(data.content_ratings?.results, region, origin),
     topCast: pickTopCast(credits),
     directors: kind === "movie" ? pickDirector(data.credits) : [],
     creators:

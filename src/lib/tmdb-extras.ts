@@ -181,40 +181,63 @@ function firstMovieCert(result: TmdbReleaseDatesResult | undefined): string | nu
   return null;
 }
 
+/** An age rating and the country whose board issued it. */
+export interface Certification {
+  rating: string;
+  /** ISO 3166-1 code of the issuing country. */
+  region: string;
+}
+
 /**
- * Pick a movie's age rating from `release_dates.results`. Prefers `region`
- * (default US), then falls back to any region that has a non-empty
- * certification. Returns a trimmed string or null.
+ * Where to look for a rating, in order: the viewer's region, then the title's
+ * own countries (a regional film is rated at home even when the viewer's
+ * country never rated it), then the US. Any other region comes after.
+ */
+function certificationRegions(region: string, origin: readonly string[]): string[] {
+  return [...new Set([region, ...origin, "US"])];
+}
+
+/**
+ * Pick a movie's age rating from `release_dates.results`: `region` (default
+ * US), then the title's `origin` countries, then the US, then any region with a
+ * non-empty certification. TMDB lists regions alphabetically, so "any" alone
+ * showed a US viewer Spain's rating for an Indian film. The issuing region is
+ * returned so the page can say whose rating it is.
  */
 export function pickMovieCertification(
   results: TmdbReleaseDatesResult[] | null | undefined,
   region = "US",
-): string | null {
+  origin: readonly string[] = [],
+): Certification | null {
   if (!results?.length) return null;
-  const preferred = firstMovieCert(results.find((r) => r.iso_3166_1 === region));
-  if (preferred) return preferred;
+  for (const code of certificationRegions(region, origin)) {
+    const rating = firstMovieCert(results.find((r) => r.iso_3166_1 === code));
+    if (rating) return { rating, region: code };
+  }
   for (const r of results) {
-    const cert = firstMovieCert(r);
-    if (cert) return cert;
+    const rating = firstMovieCert(r);
+    if (rating) return { rating, region: r.iso_3166_1 };
   }
   return null;
 }
 
 /**
- * Pick a TV show's age rating from `content_ratings.results`. Prefers `region`
- * (default US), then falls back to any region with a non-empty rating. Returns
- * a trimmed string or null.
+ * Pick a TV show's age rating from `content_ratings.results`, in the same
+ * order as pickMovieCertification.
  */
 export function pickTvCertification(
   results: TmdbContentRating[] | null | undefined,
   region = "US",
-): string | null {
+  origin: readonly string[] = [],
+): Certification | null {
   if (!results?.length) return null;
-  const preferred = results.find((r) => r.iso_3166_1 === region)?.rating?.trim();
-  if (preferred) return preferred;
+  for (const code of certificationRegions(region, origin)) {
+    const rating = results.find((r) => r.iso_3166_1 === code)?.rating?.trim();
+    if (rating) return { rating, region: code };
+  }
   for (const r of results) {
     const rating = r.rating?.trim();
-    if (rating) return rating;
+    if (rating) return { rating, region: r.iso_3166_1 };
   }
   return null;
 }
