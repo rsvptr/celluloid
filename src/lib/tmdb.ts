@@ -7,11 +7,13 @@
 import "server-only";
 import {
   imdbUrl,
+  isWatchRegion,
   pickCreators,
   pickDirector,
   pickMovieCertification,
   pickTopCast,
   pickTvCertification,
+  sortRegionsByName,
   type Certification,
   type TitleCastMember,
 } from "@/lib/tmdb-extras";
@@ -576,6 +578,22 @@ export async function getWatchProviders(region: string): Promise<TmdbProvider[]>
   ]);
 
   return mergeWatchProviderCatalogues([movies.results ?? [], tv.results ?? []], region);
+}
+
+/**
+ * Every region TMDB has streaming data for, ordered by English name (139
+ * live in 2026), for the region pickers. The list changes rarely, so it is
+ * cached for 30 days.
+ */
+export async function getWatchRegions(): Promise<string[]> {
+  const data = await tmdb<{ results?: { iso_3166_1?: string }[] }>(
+    "/watch/providers/regions",
+    { language: "en-US" },
+    { revalidate: 60 * 60 * 24 * 30 },
+  );
+  return sortRegionsByName(
+    (data.results ?? []).flatMap((r) => (isWatchRegion(r.iso_3166_1) ? [r.iso_3166_1] : [])),
+  );
 }
 
 /**

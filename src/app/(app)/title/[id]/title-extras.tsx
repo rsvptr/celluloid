@@ -3,7 +3,7 @@ import { cookies, headers } from "next/headers";
 import { ExternalLink, Play, UserRound } from "lucide-react";
 import { prisma } from "@/lib/prisma";
 import { getUserPrefs } from "@/lib/data";
-import { getTitleBundle } from "@/lib/tmdb";
+import { getTitleBundle, getWatchRegions } from "@/lib/tmdb";
 import {
   DEFAULT_WATCH_REGION,
   isWatchRegion,
@@ -68,7 +68,12 @@ export async function TitleExtras({
   // One append_to_response request carries everything below — down from
   // three separate round trips. The region localizes the certification badge
   // alongside the watch providers it sits next to.
-  const bundle = await getTitleBundle(kind, tmdbId, region, videoLanguages).catch(() => null);
+  // The picker's region list is its own long-cached request. Without it the
+  // picker still shows the current region.
+  const [bundle, watchRegions] = await Promise.all([
+    getTitleBundle(kind, tmdbId, region, videoLanguages).catch(() => null),
+    getWatchRegions().catch(() => [] as string[]),
+  ]);
   if (!bundle) return null;
 
   const watch = regionWatchInfo(bundle.providersResults, region);
@@ -149,7 +154,7 @@ export async function TitleExtras({
                 View on IMDb <ExternalLink size={11} aria-hidden />
               </a>
             )}
-            <RegionSelect region={region} />
+            <RegionSelect region={region} regions={watchRegions} />
           </div>
         </div>
 

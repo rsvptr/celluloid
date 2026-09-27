@@ -59,7 +59,7 @@ import {
   TAG_COLOR_META,
   tagChipClass,
 } from "@/lib/tag-colors";
-import { isWatchRegion, regionName, WATCH_REGIONS } from "@/lib/tmdb-extras";
+import { regionName, watchRegionOptions } from "@/lib/tmdb-extras";
 import { TMDB_IMAGE_BASE } from "@/lib/images";
 import { setRememberFiltersEnabled } from "@/lib/remembered-state-client";
 import { saveBlob } from "@/lib/save-blob";
@@ -99,6 +99,7 @@ export function SettingsClient({
   tags,
   timeZone,
   watchRegion,
+  watchRegions,
   myProviders,
   providers,
   providersUnavailable,
@@ -112,6 +113,8 @@ export function SettingsClient({
   tags: TagSummary[];
   timeZone: string;
   watchRegion: string;
+  /** TMDB's streaming regions, sorted by name. */
+  watchRegions: string[];
   myProviders: number[];
   providers: ProviderOption[];
   providersUnavailable: boolean;
@@ -125,7 +128,11 @@ export function SettingsClient({
   return (
     <div className="flex flex-col gap-5 lg:grid lg:grid-cols-2">
       <ProfileSection name={info.name} email={info.email} />
-      <PreferencesSection timeZone={timeZone} watchRegion={watchRegion} />
+      <PreferencesSection
+        timeZone={timeZone}
+        watchRegion={watchRegion}
+        watchRegions={watchRegions}
+      />
       <div className="lg:col-span-2">
         <MyServicesSection
           key={watchRegion}
@@ -354,9 +361,11 @@ const TIME_ZONES: string[] =
 function PreferencesSection({
   timeZone,
   watchRegion,
+  watchRegions,
 }: {
   timeZone: string;
   watchRegion: string;
+  watchRegions: string[];
 }) {
   const [tz, setTz] = useState(timeZone);
   const [region, setRegion] = useState(watchRegion);
@@ -368,9 +377,9 @@ function PreferencesSection({
   const timeZoneOptions: readonly string[] = TIME_ZONES.includes(tz)
     ? TIME_ZONES
     : [tz, ...TIME_ZONES];
-  const regionOptions: readonly string[] = isWatchRegion(region)
-    ? WATCH_REGIONS
-    : [region, ...WATCH_REGIONS];
+  // TMDB's full list, sorted by name so typing a country's first letters in
+  // the open picker jumps to it.
+  const regionOptions = watchRegionOptions(watchRegions, region);
 
   const dirty = tz !== timeZone || region !== watchRegion;
 

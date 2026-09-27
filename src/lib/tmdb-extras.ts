@@ -9,32 +9,17 @@ import type {
   TmdbVideo,
 } from "@/lib/tmdb";
 
-/** Regions offered in the streaming-region picker (ISO 3166-1 alpha-2). */
-export const WATCH_REGIONS = [
-  "US",
-  "GB",
-  "IN",
-  "CA",
-  "AU",
-  "DE",
-  "FR",
-  "ES",
-  "IT",
-  "NL",
-  "SE",
-  "JP",
-  "KR",
-  "BR",
-  "MX",
-  "AE",
-] as const;
+export const DEFAULT_WATCH_REGION = "US";
 
-export type WatchRegion = (typeof WATCH_REGIONS)[number];
-
-export const DEFAULT_WATCH_REGION: WatchRegion = "US";
-
-export function isWatchRegion(v: string | null | undefined): v is WatchRegion {
-  return !!v && (WATCH_REGIONS as readonly string[]).includes(v);
+/**
+ * Whether a stored or submitted value can be a streaming region: an ISO 3166-1
+ * alpha-2 code. Which regions the pickers offer comes from TMDB's own list
+ * (getWatchRegions, 139 in 2026), which grows over time, so this checks the
+ * shape rather than a copy of that list. A region TMDB doesn't cover is
+ * harmless: it has no providers and no ratings.
+ */
+export function isWatchRegion(v: string | null | undefined): v is string {
+  return !!v && /^[A-Z]{2}$/.test(v);
 }
 
 const regionDisplay =
@@ -48,6 +33,20 @@ export function regionName(code: string): string {
   } catch {
     return code;
   }
+}
+
+/** Region codes ordered by their English names, so a long picker reads A to Z. */
+export function sortRegionsByName(codes: readonly string[]): string[] {
+  return [...codes].sort((a, b) => regionName(a).localeCompare(regionName(b), "en"));
+}
+
+/**
+ * The options for a region picker: TMDB's list, plus the current region if the
+ * list lacks it (TMDB dropped it, or the list couldn't load), so the picker can
+ * always show what is selected.
+ */
+export function watchRegionOptions(regions: readonly string[], current: string): string[] {
+  return regions.includes(current) ? [...regions] : sortRegionsByName([...regions, current]);
 }
 
 export interface ProviderGroup {

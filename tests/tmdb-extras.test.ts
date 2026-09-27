@@ -5,7 +5,9 @@ import {
   isWatchRegion,
   pickTrailer,
   regionWatchInfo,
+  sortRegionsByName,
   trailerLanguages,
+  watchRegionOptions,
 } from "../src/lib/tmdb-extras";
 import type { TmdbProvider, TmdbVideo } from "../src/lib/tmdb";
 
@@ -160,11 +162,33 @@ describe("trailerLanguages", () => {
 });
 
 describe("isWatchRegion", () => {
-  it("accepts known regions and rejects junk", () => {
+  it("accepts any region code, including ones past the old list of 16", () => {
     assert.equal(isWatchRegion("IN"), true);
     assert.equal(isWatchRegion(DEFAULT_WATCH_REGION), true);
-    assert.equal(isWatchRegion("XX"), false);
-    assert.equal(isWatchRegion(""), false);
-    assert.equal(isWatchRegion(undefined), false);
+    // Portugal and Kosovo are in TMDB's list of 139.
+    assert.equal(isWatchRegion("PT"), true);
+    assert.equal(isWatchRegion("XK"), true);
+  });
+
+  it("rejects anything that isn't a two-letter upper-case code", () => {
+    for (const junk of ["us", "USA", "U1", "U", "", undefined, null]) {
+      assert.equal(isWatchRegion(junk), false, String(junk));
+    }
+  });
+});
+
+describe("region picker options", () => {
+  it("orders region codes by their English names", () => {
+    // Codes sort DE, IN, NL, US; names put the Netherlands before the US.
+    assert.deepEqual(sortRegionsByName(["US", "DE", "NL", "IN"]), ["DE", "IN", "NL", "US"]);
+    assert.deepEqual(sortRegionsByName(["GB", "US", "AE"]), ["AE", "GB", "US"]);
+    assert.deepEqual(sortRegionsByName(["CH", "SE"]), ["SE", "CH"]);
+  });
+
+  it("keeps the current region selectable when TMDB's list lacks it", () => {
+    const regions = ["DE", "IN", "US"];
+    assert.deepEqual(watchRegionOptions(regions, "IN"), regions);
+    assert.deepEqual(watchRegionOptions(regions, "PT"), ["DE", "IN", "PT", "US"]);
+    assert.deepEqual(watchRegionOptions([], "GB"), ["GB"]);
   });
 });
