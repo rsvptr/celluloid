@@ -1882,6 +1882,7 @@ export async function rematchTitle(
                   tmdbId: episode.tmdbId,
                   seasonNumber,
                   episodeNumber: episode.episodeNumber,
+                  withdrawn: episode.withdrawnAt !== null,
                 });
               }
             }
@@ -1941,6 +1942,7 @@ export async function rematchTitle(
                 id: true,
                 tmdbId: true,
                 episodeNumber: true,
+                withdrawnAt: true,
                 season: { select: { seasonNumber: true } },
               },
             });
@@ -1952,6 +1954,7 @@ export async function rematchTitle(
                 tmdbId: episode.tmdbId,
                 seasonNumber: episode.season.seasonNumber,
                 episodeNumber: episode.episodeNumber,
+                withdrawn: episode.withdrawnAt !== null,
               })),
             );
             // One statement per batch rather than one per watched episode,

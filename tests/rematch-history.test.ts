@@ -9,14 +9,14 @@ import {
 } from "../src/lib/rematch-history";
 
 const events = [
-  { eventId: "event-1", tmdbId: 101, seasonNumber: 1, episodeNumber: 1 },
-  { eventId: "event-2", tmdbId: 102, seasonNumber: 1, episodeNumber: 2 },
-  { eventId: "event-3", tmdbId: null, seasonNumber: 2, episodeNumber: 1 },
+  { eventId: "event-1", tmdbId: 101, seasonNumber: 1, episodeNumber: 1, withdrawn: false },
+  { eventId: "event-2", tmdbId: 102, seasonNumber: 1, episodeNumber: 2, withdrawn: false },
+  { eventId: "event-3", tmdbId: null, seasonNumber: 2, episodeNumber: 1, withdrawn: false },
 ];
 
 const freshEpisodes = [
-  { episodeId: "fresh-s1e1", tmdbId: 101, seasonNumber: 1, episodeNumber: 1 },
-  { episodeId: "fresh-s1e2", tmdbId: 102, seasonNumber: 1, episodeNumber: 2 },
+  { episodeId: "fresh-s1e1", tmdbId: 101, seasonNumber: 1, episodeNumber: 1, withdrawn: false },
+  { episodeId: "fresh-s1e2", tmdbId: 102, seasonNumber: 1, episodeNumber: 2, withdrawn: false },
 ];
 
 describe("rematch episode-history policy", () => {
@@ -62,9 +62,9 @@ describe("rematch episode-history policy", () => {
 
   it("moves an event with its TMDB episode when TMDB renumbers it", () => {
     const renumbered = [
-      { episodeId: "special", tmdbId: 100, seasonNumber: 1, episodeNumber: 1 },
-      { episodeId: "pilot", tmdbId: 101, seasonNumber: 1, episodeNumber: 2 },
-      { episodeId: "second", tmdbId: 102, seasonNumber: 1, episodeNumber: 3 },
+      { episodeId: "special", tmdbId: 100, seasonNumber: 1, episodeNumber: 1, withdrawn: false },
+      { episodeId: "pilot", tmdbId: 101, seasonNumber: 1, episodeNumber: 2, withdrawn: false },
+      { episodeId: "second", tmdbId: 102, seasonNumber: 1, episodeNumber: 3, withdrawn: false },
     ];
 
     assert.deepEqual(planEpisodeEventRelinks(true, events, renumbered), [
@@ -77,10 +77,54 @@ describe("rematch episode-history policy", () => {
     assert.deepEqual(
       planEpisodeEventRelinks(
         true,
-        [{ eventId: "legacy", tmdbId: null, seasonNumber: 1, episodeNumber: 1 }],
-        [{ episodeId: "fresh", tmdbId: 999, seasonNumber: 1, episodeNumber: 1 }],
+        [{ eventId: "legacy", tmdbId: null, seasonNumber: 1, episodeNumber: 1, withdrawn: false }],
+        [{ episodeId: "fresh", tmdbId: 999, seasonNumber: 1, episodeNumber: 1, withdrawn: false }],
       ),
       [{ eventId: "legacy", episodeId: "fresh" }],
+    );
+  });
+  // review-p2-sync.md, issue 2: a legacy row (no TMDB id) that was already
+  // withdrawn, whose number TMDB has since given to a new episode.
+  it("keeps an already-withdrawn legacy row's history on its recreated row", () => {
+    const withdrawnEvent = {
+      eventId: "history",
+      tmdbId: null,
+      seasonNumber: 1,
+      episodeNumber: 7,
+      withdrawn: true,
+    };
+    const fresh = [
+      { episodeId: "new-s1e7", tmdbId: 7777, seasonNumber: 1, episodeNumber: 7, withdrawn: false },
+      { episodeId: "kept-s1e7", tmdbId: null, seasonNumber: 1, episodeNumber: 2_000_007, withdrawn: true },
+    ];
+    assert.deepEqual(planEpisodeEventRelinks(true, [withdrawnEvent], fresh), [
+      { eventId: "history", episodeId: "kept-s1e7" },
+    ]);
+
+    // With its number still free, the row is recreated where it was.
+    assert.deepEqual(
+      planEpisodeEventRelinks(true, [withdrawnEvent], [
+        { episodeId: "kept-s1e7", tmdbId: null, seasonNumber: 1, episodeNumber: 7, withdrawn: true },
+      ]),
+      [{ eventId: "history", episodeId: "kept-s1e7" }],
+    );
+    // A row already in the reserved range stays there.
+    assert.deepEqual(
+      planEpisodeEventRelinks(true, [{ ...withdrawnEvent, episodeNumber: 2_000_007 }], fresh),
+      [{ eventId: "history", episodeId: "kept-s1e7" }],
+    );
+  });
+
+  it("leaves a withdrawn legacy event detached when its row wasn't recreated", () => {
+    // An unwatched withdrawn row isn't recreated; the new episode must not
+    // inherit its history.
+    assert.deepEqual(
+      planEpisodeEventRelinks(
+        true,
+        [{ eventId: "history", tmdbId: null, seasonNumber: 1, episodeNumber: 7, withdrawn: true }],
+        [{ episodeId: "new-s1e7", tmdbId: 7777, seasonNumber: 1, episodeNumber: 7, withdrawn: false }],
+      ),
+      [],
     );
   });
 });
