@@ -129,7 +129,12 @@ export function TmdbSearch({
           placeholder={placeholder}
           aria-label="Search The Movie Database"
           spellCheck={false}
-          className="h-12 pl-11 text-base"
+          // While the spinner shows, it takes the native clear button's
+          // place instead of sitting on top of it (JK-36).
+          className={cn(
+            "h-12 pl-11 text-base",
+            loading && "pr-11 [&::-webkit-search-cancel-button]:hidden",
+          )}
         />
         {loading && (
           <Spinner className="absolute right-4 top-1/2 -translate-y-1/2 text-muted" />

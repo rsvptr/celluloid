@@ -483,7 +483,7 @@ export function SeasonTracker({
                             </span>
                           )}
                         </button>
-                        {canWatchThrough && (
+                        {canWatchThrough ? (
                           <button
                             onClick={() => watchThrough(season, ep)}
                             title={`Mark everything watched through episode ${ep.episodeNumber}`}
@@ -492,6 +492,11 @@ export function SeasonTracker({
                           >
                             <ChevronsDown size={16} />
                           </button>
+                        ) : (
+                          // Hold the button's slot where the date column shows,
+                          // so the dates line up whether or not a row has one
+                          // (JK-36).
+                          <span aria-hidden="true" className="hidden w-11 shrink-0 sm:block" />
                         )}
                       </li>
                     );

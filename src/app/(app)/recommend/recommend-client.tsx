@@ -695,7 +695,8 @@ export function RecommendClient({
                     disabled={loading}
                     onChange={(event) => setCountStr(event.target.value)}
                     onBlur={() => setCountStr(String(count))}
-                    className="w-20 text-center tabular-nums"
+                    // sm:h-8 matches the 32px count pills beside it (JK-36).
+                    className="w-20 text-center tabular-nums sm:h-8"
                   />
                 </label>
               </div>

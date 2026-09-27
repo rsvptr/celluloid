@@ -65,7 +65,9 @@ export function StatsClient({
         </Card>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          {/* Seven KPIs: seven columns at lg, so Rewatches isn't orphaned
+              on a second row (JK-36). */}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
             <Kpi label="Titles" value={stats.total} />
             <Kpi label="Movies" value={stats.movies} />
             <Kpi label="TV shows" value={stats.tv} />
