@@ -253,6 +253,12 @@ label {
   outline: 2px solid var(--color-brand);
   outline-offset: 2px;
 }
+/* Full-bleed rows inside overflow-hidden lists (and content-visibility rows,
+   which contain paint) clip an outset ring at the list's edge, so draw it
+   inside the row instead (JK-37). Pair with .focus-ring. */
+.focus-ring-inset:focus-visible {
+  outline-offset: -2px;
+}
 
 /* Icon stroke follows the weight of the label beside it (JK-35, better-ui
    icons): 1.5 next to regular text, lucide's 2 next to medium, semibold or

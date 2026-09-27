@@ -451,7 +451,7 @@ export function SeasonTracker({
                           // min-h grows the whole row's hit target to >=44px on
                           // touch without inflating the h-5 w-5 checkbox glyph;
                           // sm:min-h-0 restores the original content-driven height.
-                          className="focus-ring flex min-h-11 flex-1 items-center gap-3 px-4 py-2.5 text-left hover:bg-surface-2/40 active:bg-surface-2/60 sm:min-h-0"
+                          className="focus-ring focus-ring-inset flex min-h-11 flex-1 items-center gap-3 px-4 py-2.5 text-left hover:bg-surface-2/40 active:bg-surface-2/60 sm:min-h-0"
                         >
                           <span
                             className={cn(
@@ -488,7 +488,7 @@ export function SeasonTracker({
                             onClick={() => watchThrough(season, ep)}
                             title={`Mark everything watched through episode ${ep.episodeNumber}`}
                             aria-label={`Mark everything watched through episode ${ep.episodeNumber}`}
-                            className="focus-ring flex min-h-11 w-11 shrink-0 items-center justify-center text-faint transition-colors hover:bg-surface-2/40 hover:text-foreground sm:min-h-0"
+                            className="focus-ring focus-ring-inset flex min-h-11 w-11 shrink-0 items-center justify-center text-faint transition-colors hover:bg-surface-2/40 hover:text-foreground sm:min-h-0"
                           >
                             <ChevronsDown size={16} />
                           </button>

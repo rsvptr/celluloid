@@ -68,7 +68,7 @@ function TitleRow({
   return (
     <Link
       href={`/title/${id}`}
-      className="focus-ring flex min-h-11 items-center gap-3 bg-surface px-3 py-2.5 transition-colors hover:bg-surface-2/50"
+      className="focus-ring focus-ring-inset flex min-h-11 items-center gap-3 bg-surface px-3 py-2.5 transition-colors hover:bg-surface-2/50"
     >
       <div className="w-9 shrink-0">
         <Poster

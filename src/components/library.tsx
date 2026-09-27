@@ -1565,7 +1565,7 @@ const ListRow = memo(function ListRow({
         onClick={() => onToggle(item.id)}
         aria-pressed={selected}
         className={cn(
-          "cv-auto focus-ring flex items-center gap-3 px-3 py-2.5 text-left transition-colors active:bg-surface-2/60 active:transition-none",
+          "cv-auto focus-ring focus-ring-inset flex items-center gap-3 px-3 py-2.5 text-left transition-colors active:bg-surface-2/60 active:transition-none",
           selected ? "bg-brand/10" : "bg-surface hover:bg-surface-2/50",
         )}
       >
@@ -1585,7 +1585,7 @@ const ListRow = memo(function ListRow({
   return (
     <IntentLink
       href={`/title/${item.id}`}
-      className="cv-auto focus-ring flex items-center gap-3 bg-surface px-3 py-2.5 transition-colors hover:bg-surface-2/50 active:bg-surface-2/60 active:transition-none"
+      className="cv-auto focus-ring focus-ring-inset flex items-center gap-3 bg-surface px-3 py-2.5 transition-colors hover:bg-surface-2/50 active:bg-surface-2/60 active:transition-none"
     >
       {inner}
     </IntentLink>
