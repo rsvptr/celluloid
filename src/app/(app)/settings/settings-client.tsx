@@ -275,7 +275,6 @@ function groupSecret(s: string): string {
 }
 
 function ProfileSection({ name, email }: { name: string; email: string }) {
-  const router = useRouter();
   const [value, setValue] = useState(name);
   const [msg, setMsg] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [pending, start] = useTransition();
@@ -295,7 +294,6 @@ function ProfileSection({ name, email }: { name: string; email: string }) {
                 setMsg({ kind: "error", text: r.error });
               } else {
                 setMsg({ kind: "ok", text: "Profile saved." });
-                router.refresh();
                 setTimeout(() => setMsg(null), 1500);
               }
             } catch {
@@ -349,7 +347,6 @@ function PreferencesSection({
   timeZone: string;
   watchRegion: string;
 }) {
-  const router = useRouter();
   const [tz, setTz] = useState(timeZone);
   const [region, setRegion] = useState(watchRegion);
   const [msg, setMsg] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
@@ -419,7 +416,6 @@ function PreferencesSection({
                   setMsg({ kind: "error", text: r.error });
                 } else {
                   setMsg({ kind: "ok", text: "Preferences saved." });
-                  router.refresh();
                   setTimeout(() => setMsg(null), 1500);
                 }
               } catch {
@@ -507,7 +503,6 @@ function MyServicesSection({
   providers: ProviderOption[];
   unavailable: boolean;
 }) {
-  const router = useRouter();
   const availableIds = useMemo(() => new Set(providers.map((provider) => provider.id)), [providers]);
   const availableInitialIds = useMemo(
     () => sortedProviderIds(initialProviderIds.filter((id) => availableIds.has(id))),
@@ -682,7 +677,6 @@ function MyServicesSection({
                   setSavedIds(selectedIds);
                   setUnavailableCount(0);
                   setMsg({ kind: "ok", text: "Services saved." });
-                  router.refresh();
                 } catch {
                   setMsg({
                     kind: "error",
@@ -708,7 +702,6 @@ function ApiKeySection({
   hasApiKey: boolean;
   hasServerKey: boolean;
 }) {
-  const router = useRouter();
   const [key, setKey] = useState("");
   const [saved, setSaved] = useState(hasApiKey);
   const [error, setError] = useState<string | null>(null);
@@ -737,7 +730,6 @@ function ApiKeySection({
                 setSaved(true);
                 setKey("");
                 setStatus(saved ? "API key replaced." : "API key saved.");
-                router.refresh();
               }
             } catch {
               setError("Celluloid couldn't save the API key. Check your connection and retry.");
@@ -797,7 +789,6 @@ function ApiKeySection({
                     }
                     setSaved(false);
                     setStatus("Personal API key removed.");
-                    router.refresh();
                   } catch {
                     setError("Celluloid couldn't remove the API key. Check your connection and retry.");
                   }
@@ -814,7 +805,6 @@ function ApiKeySection({
 }
 
 function SharedLinksSection({ shares }: { shares: ShareSummary[] }) {
-  const router = useRouter();
   const { confirm, dialog } = useConfirm();
   const [pendingAction, setPendingAction] = useState<string | null>(null);
 
@@ -837,7 +827,6 @@ function SharedLinksSection({ shares }: { shares: ShareSummary[] }) {
       const result = await revokeShareList(id);
       if (!result.ok) throw new Error();
       toast.success("Link revoked");
-      router.refresh();
     } catch {
       toast.error("Couldn't revoke that link. Please try again.");
     } finally {
@@ -851,7 +840,6 @@ function SharedLinksSection({ shares }: { shares: ShareSummary[] }) {
       const result = await restoreShareList(id);
       if (!result.ok) throw new Error();
       toast.success("Link restored. The same URL works again.");
-      router.refresh();
     } catch {
       toast.error("Couldn't restore that link. Please try again.");
     } finally {
@@ -876,7 +864,6 @@ function SharedLinksSection({ shares }: { shares: ShareSummary[] }) {
       const result = await deleteShareList(id);
       if (!result.ok) throw new Error();
       toast.success("Link deleted");
-      router.refresh();
     } catch {
       toast.error("Couldn't delete that link. Please try again.");
     } finally {
@@ -941,7 +928,6 @@ function ShareRow({
   onRestore: () => void;
   onDelete: () => void;
 }) {
-  const router = useRouter();
   const [manageOpen, setManageOpen] = useState(false);
   const [name, setName] = useState(s.name ?? "");
   const [titles, setTitles] = useState<SharedTitleSummary[] | null>(null);
@@ -992,7 +978,6 @@ function ShareRow({
         const result = await renameShareList(s.id, name);
         if (!result.ok) throw new Error();
         toast.success("Link renamed");
-        router.refresh();
       } catch {
         toast.error("Couldn't rename that link. Please try again.");
       }
@@ -1008,7 +993,6 @@ function ShareRow({
         );
         if (!result.ok) throw new Error();
         toast.success(value === "never" ? "Expiry removed" : "Expiry updated");
-        router.refresh();
       } catch {
         toast.error("Couldn't change the expiry. Please try again.");
       }
@@ -1192,7 +1176,6 @@ function ShareRow({
 }
 
 function TagsSection({ tags }: { tags: TagSummary[] }) {
-  const router = useRouter();
   const { confirm, dialog } = useConfirm();
   const [deleting, setDeleting] = useState<string | null>(null);
 
@@ -1217,7 +1200,6 @@ function TagsSection({ tags }: { tags: TagSummary[] }) {
         return;
       }
       toast.success(`Deleted the “${tag.name}” tag`);
-      router.refresh();
     } catch {
       toast.error("Couldn't delete that tag. Try again.");
     } finally {
@@ -1266,7 +1248,6 @@ function TagRow({
   deleting: boolean;
   onDelete: () => void;
 }) {
-  const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(tag.name);
   const [color, setColor] = useState<string | null>(tag.color);
@@ -1305,7 +1286,6 @@ function TagRow({
         }
         setEditing(false);
         toast.success("Tag updated");
-        router.refresh();
       } catch {
         setError("Couldn't update that tag. Try again.");
       }

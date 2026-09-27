@@ -108,7 +108,6 @@ export function TitleControls({
       const n = res?.watchCount ?? watchCount + 1;
       toast.success(`Logged. Watched ${n} ${n === 1 ? "time" : "times"}.`);
       setLogOpen(false);
-      router.refresh();
     });
   }
 
@@ -157,7 +156,7 @@ export function TitleControls({
   const immediateSavingRef = useRef(false);
 
   // CP-06: resync the immediate-commit fields (status/rating/favorite/date) when
-  // router.refresh() delivers fresh server props — e.g. the server auto-stamps
+  // fresh server props arrive (action or refresh) — e.g. the server auto-stamps
   // watchedAt when a title is marked WATCHED, and the date input must reflect it
   // instead of staying blank. Compare against the props we last applied, never
   // against local state, so an in-flight optimistic edit is never reverted; skip
@@ -205,6 +204,8 @@ export function TitleControls({
     if (immediateSavingRef.current) return; // a drain is already running
     immediateSavingRef.current = true;
     let errorMessage: string | null = null;
+    // Any failed pass: it returned no re-rendered page, so re-sync at the end.
+    let failed = false;
     let watchedUndo: {
       titleId: string;
       occurredAt: string;
@@ -247,6 +248,7 @@ export function TitleControls({
           // dirty and the loop sends it on the next pass.
           Object.assign(confirmedImmediateRef.current, sent);
         } catch (e) {
+          failed = true;
           // Roll a field back only when its optimistic value is still the one we
           // tried to persist — a newer edit since then owns the field, stays
           // dirty and is re-sent next pass rather than clobbered.
@@ -307,7 +309,7 @@ export function TitleControls({
         onError: () => router.refresh(),
       });
     }
-    router.refresh();
+    if (failed) router.refresh();
   }, [id, router]);
 
   // Kick the drain inside a transition so isPending stays true for its whole run
@@ -347,7 +349,6 @@ export function TitleControls({
         setSavedNotes(content);
       }
       setNotesStatus("saved");
-      router.refresh();
     } catch {
       // Keep the dirty text (savedNotesRef stays behind latest) and surface a
       // retry rather than silently dropping the edit.
@@ -355,7 +356,7 @@ export function TitleControls({
     } finally {
       savingRef.current = false;
     }
-  }, [id, router]);
+  }, [id]);
 
   // Flush immediately (blur / retry): cancel the pending debounce and save now.
   const flushNotes = useCallback(() => {
@@ -690,13 +691,11 @@ export function TitleControls({
                   undo: () => restoreTitle(id),
                   success: "Restored to your library",
                   failure: "Couldn't undo that. Restore the title from Trash.",
-                  onSuccess: () => {
-                    router.push(`/title/${id}`);
-                    router.refresh();
-                  },
+                  // The restore revalidated, which clears the router's
+                  // caches, so the push renders the title fresh.
+                  onSuccess: () => router.push(`/title/${id}`),
                 });
                 router.push("/");
-                router.refresh();
               } catch {
                 toast.error("Couldn't move this title to Trash. Please try again.");
               }

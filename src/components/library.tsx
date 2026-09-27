@@ -222,11 +222,11 @@ export function Library({
   // Adopt the server's filters when they actually change, adjusted during
   // render (React's "adjusting state when a prop changes" pattern, the same one
   // the Trash count uses below). <Library> used to be keyed on these filters
-  // instead: once any filter had been changed, the router.refresh() that ends
-  // every bulk and Trash action re-rendered the page from the params this
+  // instead: once any filter had been changed, the re-render that ends every
+  // bulk and Trash action re-rendered the page from the params this
   // component had itself mirrored with replaceState, the key changed, and the
   // remount threw away select mode, the selection, the open filters panel and
-  // Trash mode. That refresh now lands here with a key the last prop already
+  // Trash mode. That re-render now lands here with a key the last prop already
   // carried, or with the mirrored one whose setters are all no-ops, while
   // back/forward navigation still re-applies its URL.
   const incomingFilterKey = libraryFilterKey(initialFilters);
@@ -1145,18 +1145,19 @@ function BulkBar({
     verb: string,
   ) {
     start(async () => {
+      // A successful action already returns the re-rendered page. A failed or
+      // thrown one returns none, and may follow a partial write, so re-sync.
       try {
         const res = await fn();
         if (res.error) {
           toast.error(res.error);
+          router.refresh();
           return;
         }
         const changed = res.count ?? 0;
         toast.success(`${verb} ${changed} ${changed === 1 ? "title" : "titles"}`);
       } catch {
         toast.error("Couldn't update those titles. Try again.");
-      } finally {
-        // Always re-sync to the server so a partial failure can't leave stale UI.
         router.refresh();
       }
     });
@@ -1171,6 +1172,7 @@ function BulkBar({
         const res = await bulkRemoveTitles(removedIds);
         if (res.error) {
           toast.error(res.error);
+          router.refresh();
           return;
         }
         const removedCount = res.count ?? 0;
@@ -1195,7 +1197,6 @@ function BulkBar({
         });
       } catch {
         toast.error("Couldn't remove those titles. Try again.");
-      } finally {
         router.refresh();
       }
     });
@@ -1698,18 +1699,19 @@ function TrashView({
   function restore(item: TrashedTitle) {
     const neighbour = neighbourRowId(item.id);
     start(async () => {
+      // A successful action returns the re-rendered page; re-sync from the
+      // server only when it failed, so a failed action can't leave a stale row.
       try {
         const res = await restoreTitle(item.id);
         if (res.error) {
           toast.error(res.error);
+          router.refresh();
           return;
         }
         focusAfterRemovalId.current = neighbour;
         toast.success(`Restored ${item.name}`);
       } catch {
         toast.error("Couldn't restore that title. Try again.");
-      } finally {
-        // Re-sync from the server so a failed action can't leave a stale row.
         router.refresh();
       }
     });
@@ -1731,13 +1733,13 @@ function TrashView({
         const res = await purgeTitle(item.id);
         if (res.error) {
           toast.error(res.error);
+          router.refresh();
           return;
         }
         focusAfterRemovalId.current = neighbour;
         toast.success(`Deleted ${item.name}`);
       } catch {
         toast.error("Couldn't delete that title. Try again.");
-      } finally {
         router.refresh();
       }
     });
@@ -1759,6 +1761,7 @@ function TrashView({
         const res = await emptyTrash();
         if (res.error) {
           toast.error(res.error);
+          router.refresh();
           return;
         }
         const deletedCount = res.count ?? 0;
@@ -1767,7 +1770,6 @@ function TrashView({
         );
       } catch {
         toast.error("Couldn't empty Trash. Try again.");
-      } finally {
         router.refresh();
       }
     });

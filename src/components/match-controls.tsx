@@ -51,7 +51,6 @@ export function MatchControls({
       }
       toast.success(unmatched ? "Match saved" : "Match updated");
       setOpen(false);
-      router.refresh();
     });
   }
 
@@ -64,10 +63,7 @@ export function MatchControls({
         mediaType === "TV" ? "tv" : "movie",
       );
       if (res.error) toast.error(res.error);
-      else {
-        toast.success("Metadata refreshed");
-        router.refresh();
-      }
+      else toast.success("Metadata refreshed");
     });
   }
 

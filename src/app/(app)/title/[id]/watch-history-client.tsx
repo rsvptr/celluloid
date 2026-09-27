@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { Check, Pencil, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
-import { useRouter } from "next/navigation";
 import { Button, Card, Input } from "@/components/ui";
 import { useConfirm } from "@/components/confirm-dialog";
 import { deleteWatchEvent, updateWatchEvent } from "@/lib/actions";
@@ -63,7 +62,6 @@ export function WatchHistoryList({
    *  these dates in and stats bucket them in. */
   timeZone?: string;
 }) {
-  const router = useRouter();
   const [pending, start] = useTransition();
   const { confirm, dialog } = useConfirm();
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -138,7 +136,6 @@ export function WatchHistoryList({
       }
       closeEdit(event);
       toast.success("Watch updated");
-      router.refresh();
     });
   }
 
@@ -165,7 +162,6 @@ export function WatchHistoryList({
       }
       focusAfterRemoveId.current = neighbour;
       toast.success("Watch removed");
-      router.refresh();
     });
   }
 

@@ -225,7 +225,6 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
         }
       }
       close();
-      router.refresh();
     } catch {
       toast.error("Couldn't update that title. Try again.");
     } finally {

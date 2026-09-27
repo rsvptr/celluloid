@@ -146,10 +146,11 @@ export function SeasonTracker({
   // -instant optimistic UI. Now every click still applies its optimistic change
   // synchronously via applyWatched (outside the transition, so it never waits
   // its turn), but the network call it triggers is only queued; drainQueue
-  // drains one call at a time — never more than one in flight — and
-  // router.refresh() fires once, after the queue is empty, instead of once per
-  // click. Each queued job captures its own rollback (which episodes, and what
-  // to revert them to) and only applies it if nothing newer has since touched
+  // drains one call at a time — never more than one in flight. Each successful
+  // call returns the re-rendered page, so router.refresh() fires only after a
+  // failure, once the queue is empty. Each queued job captures its own rollback
+  // (which episodes, and what to revert them to) and only applies it if
+  // nothing newer has since touched
   // those same episodes — see the per-job supersession check in each handler —
   // so a slow failure can never clobber a later, already-settled change.
   const queueRef = useRef<Array<() => Promise<void>>>([]);
@@ -169,8 +170,10 @@ export function SeasonTracker({
     }
     const error = queueErrorRef.current;
     queueErrorRef.current = null;
-    if (error) toast.error(error);
-    router.refresh();
+    if (error) {
+      toast.error(error);
+      router.refresh();
+    }
   }
 
   // Kick the drain inside a transition so isPending stays true for its whole

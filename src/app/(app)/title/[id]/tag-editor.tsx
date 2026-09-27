@@ -1,7 +1,6 @@
 "use client";
 
 import { useId, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { Plus, Tag as TagIcon, X } from "lucide-react";
 import { toast } from "sonner";
 import { Input } from "@/components/ui";
@@ -21,7 +20,6 @@ export function TagEditor({
   current: TagVM[];
   all: TagVM[];
 }) {
-  const router = useRouter();
   const [, startTransition] = useTransition();
   const [tags, setTags] = useState<TagVM[]>(current);
   const [input, setInput] = useState("");
@@ -38,9 +36,7 @@ export function TagEditor({
         if (res.error) {
           setTags((t) => t.filter((x) => x.id !== tag.id));
           toast.error(res.error);
-          return;
         }
-        router.refresh();
       } catch {
         setTags((t) => t.filter((x) => x.id !== tag.id)); // roll back optimistic add
         toast.error(`Couldn't add “${tag.name}”. Please try again.`);
@@ -56,9 +52,7 @@ export function TagEditor({
         if (res.error) {
           setTags((t) => [...t, tag]);
           toast.error(res.error);
-          return;
         }
-        router.refresh();
       } catch {
         setTags((t) => [...t, tag]); // roll back optimistic remove
         toast.error(`Couldn't remove “${tag.name}”. Please try again.`);
@@ -106,7 +100,6 @@ export function TagEditor({
         return;
       }
       setTags((t) => [...t, { id, name: trimmed }]);
-      router.refresh();
     });
   }
 
