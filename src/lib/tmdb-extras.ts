@@ -8,6 +8,7 @@ import type {
   TmdbReleaseDatesResult,
   TmdbVideo,
 } from "@/lib/tmdb";
+import { REGION_NAMES } from "@/lib/region-names";
 
 export const DEFAULT_WATCH_REGION = "US";
 
@@ -22,17 +23,8 @@ export function isWatchRegion(v: string | null | undefined): v is string {
   return !!v && /^[A-Z]{2}$/.test(v);
 }
 
-const regionDisplay =
-  typeof Intl !== "undefined" && "DisplayNames" in Intl
-    ? new Intl.DisplayNames(["en"], { type: "region" })
-    : null;
-
 export function regionName(code: string): string {
-  try {
-    return regionDisplay?.of(code) ?? code;
-  } catch {
-    return code;
-  }
+  return REGION_NAMES[code] ?? code;
 }
 
 /** Region codes ordered by their English names, so a long picker reads A to Z. */

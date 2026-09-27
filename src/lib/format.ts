@@ -1,4 +1,5 @@
 import type { MediaType, WatchStatus } from "@/generated/prisma/client";
+import { LANGUAGE_NAMES } from "@/lib/language-names";
 
 export const STATUS_META: Record<
   WatchStatus,
@@ -119,18 +120,9 @@ export function fullDate(date: Date | string | null | undefined): string {
   });
 }
 
-const langDisplay =
-  typeof Intl !== "undefined" && "DisplayNames" in Intl
-    ? new Intl.DisplayNames(["en"], { type: "language" })
-    : null;
-
 export function languageName(code: string | null | undefined): string {
   if (!code) return "Unknown";
-  try {
-    return langDisplay?.of(code) ?? code.toUpperCase();
-  } catch {
-    return code.toUpperCase();
-  }
+  return LANGUAGE_NAMES[code] ?? code;
 }
 
 export function runtimeText(minutes: number | null | undefined): string {
