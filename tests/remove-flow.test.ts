@@ -7,8 +7,8 @@ async function source(path: string) {
 }
 
 /** The `<Button ...>...</Button>` whose children end with `label`. */
-function buttonLabelled(file: string, label: string): string {
-  const at = file.indexOf(label);
+function buttonLabelled(file: string, label: RegExp): string {
+  const at = file.search(label);
   assert.notEqual(at, -1, `label not found: ${label}`);
   return file.slice(file.lastIndexOf("<Button", at), at);
 }
@@ -19,7 +19,7 @@ describe("remove flow (EM-18)", () => {
   it("removes a single title without confirming, then offers Undo", async () => {
     const controls = await source("../src/app/(app)/title/[id]/title-controls.tsx");
     assert.doesNotMatch(controls, /from "@\/components\/confirm-dialog"|\bconfirm\(\{/);
-    const remove = buttonLabelled(controls, "<Trash2 size={15} />\n          Remove");
+    const remove = buttonLabelled(controls, /<Trash2 size=\{\d+\} \/>\s*Remove\n/);
     assert.match(remove, /await removeTitle\(id\)/);
     assert.match(remove, /undoToast\("Moved to Trash", \{\s*undo: \(\) => restoreTitle\(id\)/);
     // One remove per click burst, released again when it fails.
@@ -31,7 +31,7 @@ describe("remove flow (EM-18)", () => {
 
   it("still confirms a bulk remove", async () => {
     const library = await source("../src/components/library.tsx");
-    const remove = buttonLabelled(library, "<Trash2 size={14} /> Remove");
+    const remove = buttonLabelled(library, /<Trash2 size=\{\d+\} \/> Remove\n/);
     assert.match(remove, /await confirm\(\{[\s\S]*confirmLabel: "Remove"[\s\S]*removeSelected\(\)/);
   });
 });

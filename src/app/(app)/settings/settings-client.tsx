@@ -2005,7 +2005,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
         setError(error.message ?? "Couldn't disable 2FA. Try again.");
         return;
       }
-      // The panel, and the Disable 2FA button that had focus, give way to the
+      // The panel, and the Turn off 2FA button that had focus, give way to the
       // form that turns it back on.
       flushSync(() => {
         setOn(false);
