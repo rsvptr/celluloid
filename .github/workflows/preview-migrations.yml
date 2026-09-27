@@ -65,18 +65,11 @@ jobs:
     if: github.event.action != 'closed' && needs.config.outputs.ready == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 24
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
+      # The Neon API key can read production's connection URI, so the steps
+      # that use it run first, before the checkout, the npm cache or any
+      # install script reaches the runner. A compromised dependency that
+      # poisons later steps (through $GITHUB_ENV, $GITHUB_PATH or the cache)
+      # finds no step left that holds the key.
       - name: Compute branch expiry
         id: expiry
         run: echo "at=$(date -u -d '+14 days' +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
@@ -96,8 +89,9 @@ jobs:
       # The action's db_url and password outputs are not masked, and this log
       # prints expanded `run:` scripts and `env:` values, so using them would
       # publish the role's password (which branches share with production).
-      # The direct URL is fetched and masked inside the shell instead, and the
-      # API key stays out of the step that runs repository code.
+      # The direct URL is fetched and masked inside the shell instead. It goes
+      # to a file under $RUNNER_TEMP rather than $GITHUB_ENV, so it isn't in
+      # the environment of every later step, and only the migrate step reads it.
       - name: Fetch the branch's direct URL
         env:
           NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
@@ -116,10 +110,26 @@ jobs:
           echo "::add-mask::$uri"
           password=$(node -e 'process.stdout.write(decodeURIComponent(new URL(process.argv[1]).password))' "$uri")
           echo "::add-mask::$password"
-          echo "NEON_DIRECT_URL=$uri" >> "$GITHUB_ENV"
+          (umask 077 && printf '%s' "$uri" > "$RUNNER_TEMP/neon-direct-url")
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Apply the PR's migrations to the branch
-        run: DATABASE_URL="$NEON_DIRECT_URL" DIRECT_URL="$NEON_DIRECT_URL" npx prisma migrate deploy
+        run: |
+          set -euo pipefail
+          url=$(cat "$RUNNER_TEMP/neon-direct-url")
+          rm -f "$RUNNER_TEMP/neon-direct-url"
+          DATABASE_URL="$url" DIRECT_URL="$url" npx prisma migrate deploy
 
   cleanup:
     needs: config
