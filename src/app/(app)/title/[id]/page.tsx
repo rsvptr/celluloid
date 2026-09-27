@@ -99,7 +99,7 @@ export default async function TitlePage({
         href="/"
         className="focus-ring inline-flex w-fit items-center gap-1.5 rounded text-sm text-muted hover:text-foreground"
       >
-        <ArrowLeft size={15} /> Library
+        <ArrowLeft size={16} /> Library
       </Link>
 
       {/* Hero */}
@@ -168,7 +168,7 @@ export default async function TitlePage({
                 const Icon = m.icon;
                 return (
                   <span key={i} className="inline-flex items-center gap-1.5">
-                    <Icon size={14} /> {m.text}
+                    <Icon size={16} /> {m.text}
                   </span>
                 );
               })}

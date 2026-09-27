@@ -441,7 +441,7 @@ export function ImportReview({
                     : "text-muted ring-line hover:text-foreground",
                 )}
               >
-                <CheckSquare size={15} aria-hidden="true" />
+                <CheckSquare size={16} aria-hidden="true" />
                 {selectMode ? "Done selecting" : "Select rows"}
               </button>
             </div>
@@ -656,7 +656,7 @@ export function ImportReview({
               disabled={committing || !canCommit || closed}
               onClick={commit}
             >
-              {committing ? <Spinner /> : <Check size={14} aria-hidden="true" />}
+              {committing ? <Spinner /> : <Check size={16} aria-hidden="true" />}
               {committing
                 ? "Saving batches…"
                 : actionableCount > 0
@@ -680,7 +680,7 @@ export function ImportReview({
             className="fixed left-1/2 top-1/2 z-50 flex max-h-[85dvh] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col rounded-[var(--radius-card)] bg-surface p-5 ring-1 ring-line focus:outline-none"
           >
             <Dialog.Close className="absolute right-3 top-3 flex min-h-11 min-w-11 items-center justify-center rounded text-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-brand/60" aria-label="Close match search">
-              <X size={18} aria-hidden="true" />
+              <X size={20} aria-hidden="true" />
             </Dialog.Close>
             <Dialog.Title className="pr-10 text-sm font-semibold">
               Match “{matchingItem?.parsed.name ?? "import row"}”

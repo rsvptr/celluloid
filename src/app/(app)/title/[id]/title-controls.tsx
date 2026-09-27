@@ -446,7 +446,7 @@ export function TitleControls({
               className="absolute right-3 top-3 -m-3 flex min-h-11 min-w-11 items-center justify-center rounded text-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 sm:m-0 sm:min-h-0 sm:min-w-0"
               aria-label="Close"
             >
-              <X size={18} />
+              <X size={20} />
             </Dialog.Close>
             <Dialog.Title className="text-sm font-semibold">Log a watch</Dialog.Title>
             <Dialog.Description className="mt-1.5 text-sm text-muted">
@@ -665,7 +665,7 @@ export function TitleControls({
         >
           {/* A toggle keeps one label; aria-pressed, the fill and the heart
               carry the state (APG button pattern, JK-06). */}
-          <Heart size={15} className={cn(localFav && "fill-current")} />
+          <Heart size={16} className={cn(localFav && "fill-current")} />
           Favorite
         </Button>
         <Button
@@ -704,7 +704,7 @@ export function TitleControls({
             });
           }}
         >
-          <Trash2 size={15} />
+          <Trash2 size={16} />
           Remove
         </Button>
       </div>

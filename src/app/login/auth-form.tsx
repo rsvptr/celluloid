@@ -387,9 +387,9 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
               className="focus-ring absolute inset-y-0 right-0 flex min-w-11 items-center justify-center rounded-r-lg text-faint transition-colors hover:text-foreground"
             >
               {showPassword ? (
-                <EyeOff aria-hidden="true" size={17} />
+                <EyeOff aria-hidden="true" size={16} />
               ) : (
-                <Eye aria-hidden="true" size={17} />
+                <Eye aria-hidden="true" size={16} />
               )}
             </button>
           </div>

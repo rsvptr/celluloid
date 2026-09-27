@@ -989,7 +989,7 @@ export function RecommendClient({
                 disabled={pickEmpty}
                 className="focus-ring flex min-h-11 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0"
               >
-                <RefreshCw size={14} aria-hidden="true" />
+                <RefreshCw size={16} aria-hidden="true" />
                 Show different picks
               </button>
             )}
@@ -1110,7 +1110,7 @@ function RecCard({
               aria-label={`View ${nameWithTypeAndYear(rec.title, rec.mediaType, rec.year)} in your watchlist`}
               className="focus-ring flex min-h-11 items-center gap-1.5 rounded-lg bg-emerald-500/15 px-3 py-2 text-sm font-medium text-emerald-300 ring-1 ring-emerald-500/30 sm:min-h-0"
             >
-              <Check size={15} aria-hidden="true" /> {state.existing ? "In library" : "Added"}
+              <Check size={16} aria-hidden="true" /> {state.existing ? "In library" : "Added"}
             </Link>
           ) : (
             <button
@@ -1146,7 +1146,7 @@ function RecCard({
               }}
               className="focus-ring brand-gradient flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-on-accent hover:opacity-90 disabled:opacity-60 sm:min-h-0"
             >
-              {state.kind === "adding" ? <Spinner /> : <Plus size={15} aria-hidden="true" />}
+              {state.kind === "adding" ? <Spinner /> : <Plus size={16} aria-hidden="true" />}
               Watchlist
             </button>
           )
@@ -1168,7 +1168,7 @@ function RecCard({
             title="Seen it: keep this out of future suggestions"
             className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-lg text-muted ring-1 ring-line transition-colors hover:text-foreground sm:min-h-9 sm:min-w-9"
           >
-            <Eye size={15} aria-hidden="true" />
+            <Eye size={16} aria-hidden="true" />
           </button>
           <button
             type="button"
@@ -1177,7 +1177,7 @@ function RecCard({
             title="Not interested: keep this out of future suggestions"
             className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-lg text-muted ring-1 ring-line transition-colors hover:text-foreground sm:min-h-9 sm:min-w-9"
           >
-            <Ban size={15} aria-hidden="true" />
+            <Ban size={16} aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -1238,7 +1238,7 @@ function TitlePicker({
             Search your library titles
           </label>
           <Search
-            size={14}
+            size={16}
             aria-hidden="true"
             className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-faint"
           />
@@ -1316,7 +1316,7 @@ function TitlePicker({
                 >
                   {on && <Check size={11} aria-hidden="true" />}
                 </span>
-                <Icon size={14} aria-hidden="true" className="shrink-0 text-muted" />
+                <Icon size={16} aria-hidden="true" className="shrink-0 text-muted" />
                 <span className="min-w-0 flex-1 truncate">{t.name}</span>
                 {t.year ? (
                   <span className="shrink-0 text-xs text-faint">{t.year}</span>

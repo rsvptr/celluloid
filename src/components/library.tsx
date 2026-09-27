@@ -726,7 +726,7 @@ export function Library({
                 : "text-muted ring-line hover:text-foreground",
             )}
           >
-            <Clapperboard aria-hidden="true" size={15} />
+            <Clapperboard aria-hidden="true" size={16} />
             On my services
           </button>
           <button
@@ -743,7 +743,7 @@ export function Library({
                 : "text-muted ring-line hover:text-foreground",
             )}
           >
-            <SlidersHorizontal size={15} />
+            <SlidersHorizontal size={16} />
             Filters
             {advancedCount > 0 && (
               <span
@@ -912,7 +912,7 @@ export function Library({
                         onClick={() => setTrashMode(true)}
                         className="focus-ring flex min-h-11 items-center gap-1.5 rounded-lg px-2 text-sm text-muted transition-colors hover:text-foreground sm:min-h-0"
                       >
-                        <Trash2 size={14} /> Trash ({trashedCount})
+                        <Trash2 size={16} /> Trash ({trashedCount})
                       </button>
                     ) : (
                       <span />
@@ -923,7 +923,7 @@ export function Library({
                         title="Open Export with these filters applied"
                         className="focus-ring flex min-h-11 items-center gap-1.5 rounded-lg px-2 text-sm text-muted transition-colors hover:text-foreground sm:min-h-0"
                       >
-                        <Download size={14} /> Export these
+                        <Download size={16} /> Export these
                       </Link>
                     )}
                   </div>
@@ -949,7 +949,7 @@ export function Library({
                 : "text-muted ring-line hover:text-foreground",
             )}
           >
-            <CheckSquare size={15} />
+            <CheckSquare size={16} />
             <span className="hidden sm:inline">Select</span>
           </button>
           {!selectMode && items.length > 0 && (
@@ -962,7 +962,7 @@ export function Library({
                   aria-label="Surprise me"
                   className="focus-ring flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line press hover:text-foreground sm:min-h-8 sm:min-w-0 sm:justify-start"
                 >
-                  <Dices size={15} />
+                  <Dices size={16} />
                   <span className="hidden sm:inline">Surprise</span>
                 </button>
               )}
@@ -972,7 +972,7 @@ export function Library({
                 aria-label="Share your library"
                 className="focus-ring flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line press hover:text-foreground sm:min-h-8 sm:min-w-0 sm:justify-start"
               >
-                <Share2 size={15} />
+                <Share2 size={16} />
                 <span className="hidden sm:inline">Share</span>
               </button>
             </>
@@ -1281,7 +1281,7 @@ function BulkBar({
             >
               More
               <ChevronDown
-                size={14}
+                size={16}
                 aria-hidden
                 className={cn("transition-transform", showMore && "rotate-180")}
               />
@@ -1339,7 +1339,7 @@ function BulkBar({
                   aria-label="Add this tag to selected"
                   className={cn("min-h-11 min-w-11 sm:min-w-0", softDisabledClass)}
                 >
-                  <TagIcon size={14} />
+                  <TagIcon size={16} />
                 </Button>
                 <Button
                   size="sm"
@@ -1354,7 +1354,7 @@ function BulkBar({
                   aria-label="Remove this tag from selected"
                   className={cn("min-h-11 min-w-11 sm:min-w-0", softDisabledClass)}
                 >
-                  <Minus size={14} />
+                  <Minus size={16} />
                 </Button>
               </div>
 
@@ -1368,7 +1368,7 @@ function BulkBar({
                 }}
                 className={cn("min-h-11", softDisabledClass)}
               >
-                <Heart size={14} /> Favorite
+                <Heart size={16} /> Favorite
               </Button>
 
               <Button
@@ -1381,7 +1381,7 @@ function BulkBar({
                 }}
                 className={cn("min-h-11", softDisabledClass)}
               >
-                <Heart size={14} className="text-faint" /> Unfavorite
+                <Heart size={16} className="text-faint" /> Unfavorite
               </Button>
 
               <Button
@@ -1394,7 +1394,7 @@ function BulkBar({
                 }}
                 className={cn("min-h-11", softDisabledClass)}
               >
-                <Share2 size={14} /> Share
+                <Share2 size={16} /> Share
               </Button>
             </div>
 
@@ -1421,7 +1421,7 @@ function BulkBar({
                 }}
                 className={cn("min-h-11", softDisabledClass)}
               >
-                <Trash2 size={14} /> Remove
+                <Trash2 size={16} /> Remove
               </Button>
 
               <button
@@ -1825,7 +1825,7 @@ function TrashView({
             onClick={onExit}
             className="focus-ring flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground sm:min-h-8"
           >
-            <ArrowLeft size={15} /> Back to library
+            <ArrowLeft size={16} /> Back to library
           </button>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1843,7 +1843,7 @@ function TrashView({
               }}
               className={cn("shrink-0", softDisabledClass)}
             >
-              <Trash2 size={14} /> Empty trash
+              <Trash2 size={16} /> Empty trash
             </Button>
           )}
         </div>
@@ -1920,7 +1920,7 @@ function TrashRow({
           }}
           className={softDisabledClass}
         >
-          <RotateCcw size={14} /> Restore
+          <RotateCcw size={16} /> Restore
         </Button>
         <Button
           size="sm"
@@ -1932,7 +1932,7 @@ function TrashRow({
           }}
           className={softDisabledClass}
         >
-          <Trash2 size={14} />
+          <Trash2 size={16} />
           <span className="hidden sm:inline">Delete forever</span>
           <span className="sm:hidden">Delete</span>
         </Button>

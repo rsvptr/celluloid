@@ -115,7 +115,7 @@ export function TmdbSearch({
     <div className="@container flex flex-col gap-4" aria-busy={loading}>
       <div className="relative">
         <Search
-          size={18}
+          size={20}
           aria-hidden="true"
           className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-faint"
         />

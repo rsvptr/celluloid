@@ -368,7 +368,7 @@ export function ExportPanel({
                     : "text-muted ring-line hover:text-foreground",
                 )}
               >
-                {f.key === "ai" && <Sparkles size={14} aria-hidden="true" />}
+                {f.key === "ai" && <Sparkles size={16} aria-hidden="true" />}
                 {f.label}
               </button>
             ))}

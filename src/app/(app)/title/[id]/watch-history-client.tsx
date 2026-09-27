@@ -207,7 +207,7 @@ export function WatchHistoryList({
                       onClick={() => closeEdit(event)}
                       disabled={pending}
                     >
-                      <X size={14} /> Cancel
+                      <X size={16} /> Cancel
                     </Button>
                     <Button
                       type="submit"
@@ -215,7 +215,7 @@ export function WatchHistoryList({
                       variant="primary"
                       disabled={pending || !draftDate}
                     >
-                      <Check size={14} /> Save
+                      <Check size={16} /> Save
                     </Button>
                   </div>
                 </form>
@@ -256,7 +256,7 @@ export function WatchHistoryList({
                       aria-label={`Edit the watch on ${fullDateInZone(event.occurredAt, timeZone)}`}
                       className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-md text-faint press hover:text-foreground aria-disabled:cursor-not-allowed aria-disabled:opacity-50 sm:min-h-8 sm:min-w-8"
                     >
-                      <Pencil size={14} />
+                      <Pencil size={16} />
                     </button>
                     <button
                       type="button"
@@ -268,7 +268,7 @@ export function WatchHistoryList({
                       aria-label={`Remove the watch on ${fullDateInZone(event.occurredAt, timeZone)}`}
                       className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-md text-faint press hover:text-rose-300 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 sm:min-h-8 sm:min-w-8"
                     >
-                      <Trash2 size={14} />
+                      <Trash2 size={16} />
                     </button>
                   </div>
                 </div>

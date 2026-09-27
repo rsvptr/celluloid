@@ -114,7 +114,7 @@ function AddButton({
         aria-label={`View ${name} in your library`}
         className="focus-ring flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg bg-emerald-500/15 px-3 py-2 text-sm font-medium text-emerald-300 ring-1 ring-emerald-500/30 hover:bg-emerald-500/25 sm:min-h-0"
       >
-        <Check size={15} aria-hidden="true" />
+        <Check size={16} aria-hidden="true" />
         {state.kind === "added" ? "Added" : "In library"}
       </Link>
     );
@@ -145,7 +145,7 @@ function AddButton({
       aria-label={`Add ${name} to your library`}
       className="focus-ring brand-gradient flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-on-accent hover:opacity-90 disabled:opacity-60 sm:min-h-0"
     >
-      {state.kind === "adding" ? <Spinner /> : <Plus size={15} aria-hidden="true" />}
+      {state.kind === "adding" ? <Spinner /> : <Plus size={16} aria-hidden="true" />}
       Add
     </button>
   );

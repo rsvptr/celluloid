@@ -157,14 +157,14 @@ export default async function SharePage({
               </p>
               <span aria-hidden="true" className="hidden h-1 w-1 rounded-full bg-faint sm:block" />
               <p className="inline-flex items-center gap-2">
-                <LockKeyhole aria-hidden="true" size={15} />
+                <LockKeyhole aria-hidden="true" size={16} />
                 Read-only
               </p>
               {includeNotes ? (
                 <>
                   <span aria-hidden="true" className="hidden h-1 w-1 rounded-full bg-faint sm:block" />
                   <p className="inline-flex items-center gap-2">
-                    <MessageSquareQuote aria-hidden="true" size={15} />
+                    <MessageSquareQuote aria-hidden="true" size={16} />
                     Notes included
                   </p>
                 </>

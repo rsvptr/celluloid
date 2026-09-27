@@ -174,7 +174,7 @@ function Section({
     <Card className="h-full p-5">
       <div className="mb-4 flex items-start gap-3">
         <span aria-hidden="true" className="mt-0.5 text-brand">
-          <Icon size={18} />
+          <Icon size={20} />
         </span>
         <div>
           <h2 className="text-sm font-semibold">{title}</h2>
@@ -574,7 +574,7 @@ function MyServicesSection({
             <div className="relative min-w-0 sm:max-w-sm sm:flex-1">
               <Search
                 aria-hidden="true"
-                size={15}
+                size={16}
                 className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-faint"
               />
               <Input
@@ -1053,7 +1053,7 @@ function ShareRow({
             disabled={!active || busy}
             className="focus-ring flex min-h-11 min-w-11 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2/60 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35 sm:h-8 sm:min-h-0 sm:w-8 sm:min-w-0"
           >
-            <Copy aria-hidden="true" size={15} />
+            <Copy aria-hidden="true" size={16} />
           </button>
           <Button
             variant="ghost"
@@ -1064,7 +1064,7 @@ function ShareRow({
           >
             <ChevronDown
               aria-hidden="true"
-              size={14}
+              size={16}
               className={cn("transition-transform", manageOpen && "rotate-180")}
             />
             Manage
@@ -1330,7 +1330,7 @@ function TagRow({
             disabled={busy || deleting}
             onClick={() => (editing ? cancel() : setEditing(true))}
           >
-            <Pencil aria-hidden="true" size={14} />
+            <Pencil aria-hidden="true" size={16} />
             {editing ? "Cancel" : "Edit"}
           </Button>
           <Button
@@ -2128,7 +2128,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
             className="self-start"
             disabled={busy || !password}
           >
-            {busy ? <Spinner /> : <ShieldCheck size={15} />} Enable 2FA
+            {busy ? <Spinner /> : <ShieldCheck size={16} />} Enable 2FA
           </Button>
         </form>
       ) : (
@@ -2525,7 +2525,7 @@ function BackupSection({
               disabled={busy !== null}
               onClick={downloadBackup}
             >
-              {busy === "download" ? <Spinner /> : <Download aria-hidden="true" size={15} />}
+              {busy === "download" ? <Spinner /> : <Download aria-hidden="true" size={16} />}
               {busy === "download" ? "Preparing backup\u2026" : "Download backup"}
             </Button>
             <div className="mt-2">
@@ -2585,7 +2585,7 @@ function BackupSection({
                 disabled={!file || busy !== null}
                 onClick={previewRestore}
               >
-                {busy === "preview" ? <Spinner /> : <Upload aria-hidden="true" size={15} />}
+                {busy === "preview" ? <Spinner /> : <Upload aria-hidden="true" size={16} />}
                 {busy === "preview" ? "Checking backup\u2026" : "Preview restore"}
               </Button>
             </div>
@@ -2656,7 +2656,7 @@ function BackupSection({
                   void commitRestore();
                 }}
               >
-                {busy === "restore" ? <Spinner /> : <ArchiveRestore aria-hidden="true" size={15} />}
+                {busy === "restore" ? <Spinner /> : <ArchiveRestore aria-hidden="true" size={16} />}
                 {busy === "restore" ? "Restoring\u2026" : "Restore backup"}
               </Button>
             </div>
@@ -2771,7 +2771,7 @@ function DangerSection() {
           className={cn("mt-4", softDisabledClass)}
           aria-disabled={pending || !password}
         >
-          <Trash2 size={15} /> Delete my account
+          <Trash2 size={16} /> Delete my account
         </Button>
       </form>
       </Section>

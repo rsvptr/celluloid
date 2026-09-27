@@ -189,7 +189,7 @@ export function ImportUpload() {
         {file ? (
           <span className="flex w-full min-w-0 items-center justify-center gap-3">
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand/10 text-brand ring-1 ring-brand/30">
-              <FileSpreadsheet size={18} aria-hidden="true" />
+              <FileSpreadsheet size={20} aria-hidden="true" />
             </span>
             <span className="min-w-0 text-left">
               <span className="block max-w-56 truncate text-sm font-medium">{file.name}</span>
@@ -230,7 +230,7 @@ export function ImportUpload() {
         >
           <p>{activeError}</p>
           <Button type="button" variant="secondary" size="sm" onClick={retryActiveCheck}>
-            <RotateCcw size={14} aria-hidden="true" /> Retry check
+            <RotateCcw size={16} aria-hidden="true" /> Retry check
           </Button>
         </div>
       ) : null}
@@ -249,7 +249,7 @@ export function ImportUpload() {
         disabled={!file || uploadBlocked}
         onClick={upload}
       >
-        {loading ? <Spinner /> : <Upload size={15} aria-hidden="true" />}
+        {loading ? <Spinner /> : <Upload size={16} aria-hidden="true" />}
         {loading ? "Finding matches…" : "Review matches"}
       </Button>
     </Card>

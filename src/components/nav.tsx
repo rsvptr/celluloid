@@ -240,7 +240,7 @@ export function Nav({ userName }: { userName?: string | null }) {
               // reverts to the original content-sized pill at md+.
               className="focus-ring flex h-11 w-11 items-center justify-center gap-1.5 rounded-lg text-sm text-muted ring-1 ring-line press hover:text-foreground lg:h-auto lg:w-auto lg:justify-start lg:px-2 lg:py-1.5"
             >
-              <Search size={15} />
+              <Search size={16} />
               <span className="hidden items-center gap-0.5 text-xs text-faint lg:flex">
                 {isMac ? <CommandIcon size={11} /> : <span>Ctrl</span>}K
               </span>
@@ -285,7 +285,7 @@ export function Nav({ userName }: { userName?: string | null }) {
                 title="More"
                 className="focus-ring flex h-11 w-11 items-center justify-center rounded-lg text-muted press hover:bg-surface-2/60 hover:text-foreground"
               >
-                <MoreHorizontal size={18} />
+                <MoreHorizontal size={20} />
               </button>
               <AnimatePresence>
                   {moreOpen && (
@@ -363,7 +363,7 @@ export function Nav({ userName }: { userName?: string | null }) {
                 {active && (
                   <span aria-hidden className="absolute inset-x-0 top-0 mx-auto w-8 border-t-2 border-foreground" />
                 )}
-                <Icon size={19} aria-hidden />
+                <Icon size={20} aria-hidden />
                 {l.label}
               </Link>
             );

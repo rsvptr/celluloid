@@ -490,7 +490,7 @@ export function SeasonTracker({
                             aria-label={`Mark everything watched through episode ${ep.episodeNumber}`}
                             className="focus-ring flex min-h-11 w-11 shrink-0 items-center justify-center text-faint transition-colors hover:bg-surface-2/40 hover:text-foreground sm:min-h-0"
                           >
-                            <ChevronsDown size={15} />
+                            <ChevronsDown size={16} />
                           </button>
                         )}
                       </li>

@@ -147,7 +147,7 @@ export function StatsClient({
                   </div>
                   <div className="flex items-center gap-4 text-xs text-muted">
                     <span className="flex items-center gap-1.5">
-                      <Flame size={14} className="text-amber-400" />
+                      <Flame size={16} className="text-amber-400" />
                       Longest streak:{" "}
                       <span className="tabular-nums">{formatCount(stats.longestStreak)}</span>{" "}
                       {stats.longestStreak === 1 ? "day" : "days"}

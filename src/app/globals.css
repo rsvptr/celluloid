@@ -254,6 +254,20 @@ label {
   outline-offset: 2px;
 }
 
+/* Icon stroke follows the weight of the label beside it (JK-35, better-ui
+   icons): 1.5 next to regular text, lucide's 2 next to medium, semibold or
+   bold (Button is font-medium). Only icons still on lucide's default stroke
+   ("2") change, so explicit strokeWidth glyphs such as the 3px checkmarks
+   keep theirs. In the base layer, so a stroke-* utility still wins. */
+@layer base {
+  svg.lucide[stroke-width="2"] {
+    stroke-width: 1.5;
+  }
+  :is(.font-medium, .font-semibold, .font-bold) > svg.lucide[stroke-width="2"] {
+    stroke-width: 2;
+  }
+}
+
 /* Press feedback (emil-design-eng): scale on pointer-down. It replaces
    transition-colors on a control, so it keeps that property list and adds
    opacity and scale. An @utility (not a bare class) stays in Tailwind's
