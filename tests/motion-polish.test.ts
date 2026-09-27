@@ -78,4 +78,18 @@ describe("motion polish", () => {
     const shimmer = css.slice(css.indexOf(".shimmer::after {"), css.indexOf("}", css.indexOf(".shimmer::after {")));
     assert.match(shimmer, /animation: shimmer 1\.6s linear infinite;/);
   });
+
+  it("scrubs the rating with the first finger only (EM-17)", async () => {
+    const stars = await source("components/rating-stars.tsx");
+    const handler = (name: string) => {
+      const start = stars.indexOf(`function ${name}(`);
+      assert.notEqual(start, -1, name);
+      return stars.slice(start, stars.indexOf("\n  }\n", start));
+    };
+    assert.match(handler("onPointerDown"), /if \(disabled \|\| e\.button > 0 \|\| !e\.isPrimary\) return;/);
+    assert.match(handler("onPointerMove"), /if \(disabled \|\| !e\.isPrimary\) return;/);
+    assert.match(handler("onPointerUp"), /if \(disabled \|\| !e\.isPrimary \|\| !draggingRef\.current\) return;/);
+    // A second finger lifting or cancelling must not end the first one's scrub.
+    assert.match(handler("onPointerCancel"), /^function onPointerCancel\([^)]*\) \{\s*if \(!e\.isPrimary\) return;/);
+  });
 });
