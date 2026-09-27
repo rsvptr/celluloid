@@ -272,7 +272,7 @@ export function Nav({ userName }: { userName?: string | null }) {
                       animate={{ opacity: 1, y: 0, scale: 1 }}
                       exit={{ opacity: 0, y: -6, scale: 0.97 }}
                       transition={{ duration: 0.15, ease: EASE_OUT }}
-                      className="absolute right-0 top-[calc(100%+0.5rem)] z-50 w-48 overflow-hidden rounded-xl bg-surface p-1.5 shadow-xl ring-1 ring-line"
+                      className="absolute right-0 top-[calc(100%+0.5rem)] z-50 w-48 origin-top-right overflow-hidden rounded-xl bg-surface p-1.5 shadow-xl ring-1 ring-line"
                     >
                       <Link
                         href="/export"
