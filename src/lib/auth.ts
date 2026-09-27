@@ -74,7 +74,11 @@ export const auth = betterAuth({
   // Profile names have one validated write path (`updateProfile`). The server
   // action still calls auth.api.updateUser internally so Better Auth refreshes
   // the session cookie, while the public HTTP endpoint stays unavailable.
-  disabledPaths: ["/update-user"],
+  // Nothing calls /verify-password or /two-factor/get-totp-uri (turning 2FA on
+  // returns the TOTP URI itself), and both check the password, so a stolen
+  // session gets two fewer places to guess it. Disabled paths answer 404 over
+  // HTTP before the rate limiter runs; auth.api calls still reach them.
+  disabledPaths: ["/update-user", "/verify-password", "/two-factor/get-totp-uri"],
 
   emailAndPassword: {
     enabled: true,
@@ -105,11 +109,10 @@ export const auth = betterAuth({
     modelName: "rateLimit",
     window: 60,
     max: 100,
-    // Every endpoint that checks a password or a 2FA code gets a tight per-IP
-    // budget, including ones the UI never calls (/verify-password,
-    // /two-factor/get-totp-uri): a stolen session could otherwise guess the
-    // password there at the global 100/min, or 18/min on the plugin's 3-per-10s
-    // /two-factor/* default. Keep windows at 60 s: Better Auth prunes rows idle
+    // Every enabled endpoint that checks a password or a 2FA code gets a tight
+    // per-IP budget: a stolen session could otherwise guess the password there
+    // at the global 100/min, or 18/min on the plugin's 3-per-10s /two-factor/*
+    // default. Keep windows at 60 s: Better Auth prunes rows idle
     // longer than its own longest window (60 s) and ignores these rules when it
     // does, so a longer window would reset early.
     customRules: {
@@ -119,11 +122,9 @@ export const auth = betterAuth({
       "/two-factor/verify-totp": { window: 60, max: 10 },
       "/two-factor/verify-backup-code": { window: 60, max: 5 },
       "/delete-user": { window: 60, max: 5 },
-      "/verify-password": { window: 60, max: 5 },
       "/two-factor/enable": { window: 60, max: 5 },
       "/two-factor/disable": { window: 60, max: 5 },
       "/two-factor/generate-backup-codes": { window: 60, max: 5 },
-      "/two-factor/get-totp-uri": { window: 60, max: 5 },
       "/two-factor/verify-otp": { window: 60, max: 5 },
       // `false` skips the limiter entirely. The endpoint takes no guessable
       // input (the token sits in an HMAC-signed cookie) and returns early
