@@ -98,10 +98,40 @@ function summaryRecord(value: Prisma.JsonValue | null): Record<string, unknown> 
     : null;
 }
 
+/**
+ * What review, reconcile and commit read of a job and its rows. It leaves out
+ * each row's `raw` JSON, a copy of the uploaded row kept only for diagnosis,
+ * which these reads loaded for every row and never used (PR-09).
+ */
+const importJobSelect = {
+  id: true,
+  filename: true,
+  status: true,
+  summary: true,
+  createdAt: true,
+  committedAt: true,
+  items: {
+    select: {
+      id: true,
+      rowNumber: true,
+      normalized: true,
+      proposedTmdbId: true,
+      proposedMediaType: true,
+      matchScore: true,
+      action: true,
+      titleId: true,
+      errorCode: true,
+      warning: true,
+      attempts: true,
+    },
+    orderBy: { rowNumber: "asc" },
+  },
+} satisfies Prisma.ImportJobSelect;
+
 async function findImportJob(userId: string, jobId: string) {
   return prisma.importJob.findFirst({
     where: { id: jobId, userId },
-    include: { items: { orderBy: { rowNumber: "asc" } } },
+    select: importJobSelect,
   });
 }
 
@@ -170,7 +200,7 @@ export async function getActiveImportJobView(
       status: { in: ["PARSING", "READY_FOR_REVIEW", "COMMITTING", "PARTIAL"] },
     },
     orderBy: { createdAt: "desc" },
-    include: { items: { orderBy: { rowNumber: "asc" } } },
+    select: importJobSelect,
   });
   return job ? serializeImportJob(job) : null;
 }
@@ -534,6 +564,14 @@ export async function updateImportItemReview(input: {
       jobId: input.jobId,
       job: { userId: input.userId, status: { in: ["READY_FOR_REVIEW", "PARTIAL"] } },
     },
+    select: {
+      id: true,
+      rowNumber: true,
+      normalized: true,
+      matchScore: true,
+      titleId: true,
+      attempts: true,
+    },
   });
   if (!item || item.titleId) return null;
 
@@ -814,6 +852,7 @@ async function commitOneImportItem(
 ): Promise<CommittedItemPatch> {
   const item = await prisma.importItem.findFirst({
     where: { id: itemId, job: { userId } },
+    select: { id: true, normalized: true, action: true, titleId: true, attempts: true },
   });
   if (!item || item.action === "SKIP" || item.action === "CONFLICT") {
     return null;
