@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { register } from "node:module";
 import { describe, it } from "node:test";
 
@@ -234,5 +235,87 @@ describe("auth rate limits", { concurrency: false }, () => {
       where: [{ field: "key", value: `${ip}|/get-session` }],
     });
     assert.deepEqual(rows, []);
+  });
+});
+
+/** A browser with its own cookie jar, calling the auth API from `ip`. */
+function device(ip: string) {
+  const cookies = new Map<string, string>();
+  return async (path: string, body?: unknown, method = "POST") => {
+    const response = await auth.handler(
+      new Request(`${origin}/api/auth${path}`, {
+        method,
+        headers: {
+          "content-type": "application/json",
+          origin,
+          "x-forwarded-for": ip,
+          cookie: [...cookies].map(([name, value]) => `${name}=${value}`).join("; "),
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      }),
+    );
+    for (const raw of response.headers.getSetCookie()) {
+      const [pair, ...attributes] = raw.split(";");
+      const separator = pair.indexOf("=");
+      const name = pair.slice(0, separator).trim();
+      const value = pair.slice(separator + 1);
+      if (value === "" || attributes.some((a) => /max-age=0/i.test(a.trim()))) cookies.delete(name);
+      else cookies.set(name, value);
+    }
+    const text = await response.text();
+    return { status: response.status, json: (text ? JSON.parse(text) : null) as unknown };
+  };
+}
+
+/** The current 6-digit code for an otpauth:// URI (RFC 6238, SHA-1, 30 s). */
+function totpCode(uri: string): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  const bits = [...(new URL(uri).searchParams.get("secret") ?? "")]
+    .map((char) => alphabet.indexOf(char).toString(2).padStart(5, "0"))
+    .join("");
+  const key = Buffer.from((bits.match(/.{8}/g) ?? []).map((byte) => parseInt(byte, 2)));
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30_000)));
+  const mac = createHmac("sha1", key).update(counter).digest();
+  const offset = mac[mac.length - 1] & 15;
+  return String((mac.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(6, "0");
+}
+
+describe("two-factor account changes", { concurrency: false }, () => {
+  const password = "synthetic-password-67890";
+  const email = "two-factor-sessions@example.test";
+
+  it("turning 2FA on and then revoking other sessions keeps only this device (BA-07)", async () => {
+    const laptop = device("192.0.2.10");
+    const stolen = device("192.0.2.66");
+    assert.equal(
+      (await laptop("/sign-up/email", { inviteCode: "test-invite", name: "Owner", email, password }))
+        .status,
+      200,
+    );
+    assert.equal((await stolen("/sign-in/email", { email, password })).status, 200);
+
+    // The Settings flow: enable with the password, verify a code, then revoke.
+    const enabled = await laptop("/two-factor/enable", { password });
+    assert.equal(enabled.status, 200);
+    const { totpURI } = enabled.json as { totpURI: string };
+    assert.equal((await laptop("/two-factor/verify-totp", { code: totpCode(totpURI) })).status, 200);
+    assert.equal((await laptop("/revoke-other-sessions", {})).status, 200);
+
+    const current = await laptop("/get-session?disableCookieCache=true", undefined, "GET");
+    const { user, session } = current.json as {
+      user: { id: string; twoFactorEnabled: boolean };
+      session: { token: string };
+    };
+    assert.equal(user.twoFactorEnabled, true);
+    const { internalAdapter } = await auth.$context;
+    const remaining = await internalAdapter.listSessions(user.id);
+    assert.deepEqual(
+      remaining.map((row) => row.token),
+      [session.token],
+      "only the session verifyTotp issued to this device survives",
+    );
+    const other = await stolen("/get-session?disableCookieCache=true", undefined, "GET");
+    assert.equal(other.json, null);
   });
 });

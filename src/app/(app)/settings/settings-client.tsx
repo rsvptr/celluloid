@@ -142,7 +142,9 @@ export function SettingsClient({
       <TwoFactorSection enabled={info.twoFactorEnabled} />
       <PasswordSection />
       <div className="lg:col-span-2">
-        <DevicesSection />
+        {/* Turning 2FA on or off replaces this device's session, and turning
+            it on signs out the others, so reload the list when it flips. */}
+        <DevicesSection key={info.twoFactorEnabled ? "2fa-on" : "2fa-off"} />
       </div>
       <div className="lg:col-span-2">
         <MetadataSyncSection failures={metadataFailures} />
@@ -1859,9 +1861,23 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
         setError(error.message ?? "That code didn't work. Check your authenticator app and try again.");
         return;
       }
+      // A session stolen before 2FA was on would otherwise keep working, so
+      // sign out every other device, as a password change does. verifyTotp
+      // has already replaced this device's session; the new one is kept.
+      const signedOutOthers = await authClient.revokeOtherSessions().then(
+        (result) => !result.error,
+        () => false,
+      );
       setOn(true);
       setPhase("idle");
       reset();
+      if (signedOutOthers) {
+        toast.success("Two-factor authentication is on. Other devices were signed out.");
+      } else {
+        setError(
+          "Two-factor authentication is on, but Celluloid couldn't sign out your other devices. Use Sign out everywhere else under Devices.",
+        );
+      }
       router.refresh();
     } catch {
       setError("Celluloid couldn't verify that code. Check your connection and retry.");
