@@ -19,7 +19,7 @@ interface DeviceSession {
   userAgent?: string | null;
 }
 
-function deviceLabel(userAgent: string | null | undefined): string {
+export function deviceLabel(userAgent: string | null | undefined): string {
   if (!userAgent) return "Unknown device";
 
   const browser = /Edg\//.test(userAgent)

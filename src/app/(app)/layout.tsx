@@ -4,6 +4,7 @@ import { Nav } from "@/components/nav";
 import { MotionProvider } from "@/components/motion";
 import { LazyCommandPalette } from "@/components/command-palette-lazy";
 import { RouteStatus } from "@/components/route-status";
+import { SessionSlide } from "@/components/session-slide";
 
 export default async function AppLayout({
   children,
@@ -36,6 +37,7 @@ export default async function AppLayout({
       </main>
       <RouteStatus />
       <LazyCommandPalette />
+      <SessionSlide />
       <Toaster
         theme="dark"
         position="bottom-right"

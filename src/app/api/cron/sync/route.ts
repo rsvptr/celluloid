@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { pruneAuthEvents } from "@/lib/auth-events";
 import { runScheduledSync, summarizeScheduledRun } from "@/lib/metadata-sync";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 
@@ -92,8 +93,13 @@ export async function GET(request: Request) {
   }
 
   const runStartedAt = new Date();
+  // The daily prune of auth audit rows older than 90 days: one DELETE. It
+  // counts against the run's budget, which starts above, and it never throws,
+  // so it can't stop the sync.
+  await pruneAuthEvents();
+
   try {
-    const result = await runScheduledSync({ deadline: Date.now() + RUN_BUDGET_MS });
+    const result = await runScheduledSync({ deadline: runStartedAt.getTime() + RUN_BUDGET_MS });
     // A totally-failed run must not report 200 — see summarizeScheduledRun.
     const { totalFailure, degraded } = summarizeScheduledRun(result);
     // One machine-readable line per authorized run. Keeping the full per-user

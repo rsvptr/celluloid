@@ -49,6 +49,7 @@ model User {
   sessions   Session[]
   accounts   Account[]
   twofactors TwoFactor[]
+  authEvents AuthEvent[]
 
   // App relations
   titles       Title[]
@@ -210,6 +211,25 @@ model RateLimit {
   lastRequest BigInt
 
   @@map("rateLimit")
+}
+
+// Auth audit trail (BA-15): one row per sign-in, sign-out and security change,
+// written by the hooks in src/lib/auth.ts through src/lib/auth-events.ts. The
+// session rows can't serve, because a password change or "Sign out everywhere
+// else" deletes them. `type` is a short event name that the code validates
+// (AUTH_EVENT_TYPES). No email and no secrets are stored, and the user agent is
+// cut to 200 characters. The nightly cron deletes rows older than 90 days.
+model AuthEvent {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  // Settings lists a user's latest events.
+  @@index([userId, createdAt])
 }
 
 // One global reservation counter per UTC day for recommendation runs that use

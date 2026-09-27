@@ -1,5 +1,6 @@
 "use client";
 
+import type { AuthEventSummary } from "@/lib/auth-events";
 import type { AccountInfo, ShareSummary } from "@/lib/data";
 import { ProfileSection } from "./profile-section";
 import { PreferencesSection } from "./preferences-section";
@@ -11,6 +12,7 @@ import { TagsSection, type TagSummary } from "./tags-section";
 import { TwoFactorSection } from "./two-factor-section";
 import { PasswordSection } from "./password-section";
 import { DevicesSection } from "./devices-section";
+import { AccountActivitySection } from "./account-activity-section";
 import {
   MetadataSyncSection,
   type MetadataFailureSummary,
@@ -35,6 +37,7 @@ export function SettingsClient({
   lastBackupAt,
   backupAgeDays,
   rememberFilters,
+  authEvents,
 }: {
   info: AccountInfo;
   shares: ShareSummary[];
@@ -52,6 +55,8 @@ export function SettingsClient({
   /** Whole days since that backup, measured server-side. Null when there is none. */
   backupAgeDays: number | null;
   rememberFilters: boolean;
+  /** The latest auth events, newest first. Null when they couldn't be read. */
+  authEvents: AuthEventSummary[] | null;
 }) {
   return (
     <div className="flex flex-col gap-5 lg:grid lg:grid-cols-2">
@@ -80,6 +85,9 @@ export function SettingsClient({
         {/* Turning 2FA on or off replaces this device's session, and turning
             it on signs out the others, so reload the list when it flips. */}
         <DevicesSection key={info.twoFactorEnabled ? "2fa-on" : "2fa-off"} />
+      </div>
+      <div className="lg:col-span-2">
+        <AccountActivitySection events={authEvents} timeZone={timeZone} />
       </div>
       <div className="lg:col-span-2">
         <MetadataSyncSection failures={metadataFailures} />

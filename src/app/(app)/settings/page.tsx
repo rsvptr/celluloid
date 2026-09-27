@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { requireUser } from "@/lib/session";
+import { getRecentAuthEvents } from "@/lib/auth-events";
 import { prisma } from "@/lib/prisma";
 import { getAccountInfo, getUserPrefs, getUserShareLists } from "@/lib/data";
 import { getWatchProviders, getWatchRegions } from "@/lib/tmdb";
@@ -109,6 +110,7 @@ export default async function SettingsPage() {
     cookieStore,
     metadataFailures,
     watchRegions,
+    authEvents,
   ] = await Promise.all([
     getAccountInfo(user.id),
     getUserShareLists(user.id),
@@ -118,6 +120,8 @@ export default async function SettingsPage() {
     cookies(),
     metadataFailuresPromise,
     watchRegionsPromise,
+    // Never throws; null renders a load error in Account activity.
+    getRecentAuthEvents(user.id),
   ]);
   return (
     // Full shell width (D-UI-17 amendment): no per-page cap.
@@ -139,6 +143,7 @@ export default async function SettingsPage() {
         rememberFilters={isRememberFiltersEnabled(
           cookieStore.get(REMEMBER_FILTERS_TOGGLE_COOKIE)?.value,
         )}
+        authEvents={authEvents}
       />
     </div>
   );
