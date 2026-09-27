@@ -89,7 +89,7 @@ export function BulkBar({
   }, [open]);
 
   function run(
-    fn: () => Promise<{ count?: number; tag?: string; error?: string }>,
+    fn: () => Promise<{ count?: number; tag?: string; error?: string; failed?: number }>,
     verb: string,
   ) {
     start(async () => {
@@ -103,6 +103,14 @@ export function BulkBar({
           return;
         }
         const changed = res.count ?? 0;
+        // Some titles were saved and some weren't. The action still returns the
+        // re-rendered page, so the library already shows which.
+        if (res.failed) {
+          toast.error(
+            `${verb} ${changed} ${changed === 1 ? "title" : "titles"}. ${res.failed} couldn't be updated.`,
+          );
+          return;
+        }
         toast.success(`${verb} ${changed} ${changed === 1 ? "title" : "titles"}`);
       } catch {
         toast.error("Couldn't update those titles. Try again.");
@@ -145,7 +153,9 @@ export function BulkBar({
     const status = bulkStatus;
     run(async () => {
       const result = await bulkSetStatus(ids, status);
-      if (!result.error) setBulkStatus("");
+      // A partial failure keeps the chosen status, so Apply can retry. That's
+      // harmless for the titles already saved: WATCHED is only entered once.
+      if (!result.error && !result.failed) setBulkStatus("");
       return result;
     }, "Updated");
   }

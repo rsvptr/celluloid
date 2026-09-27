@@ -55,9 +55,11 @@ const fakePrisma = {
       if (data.status) job.status = data.status;
       return { count: 1 };
     },
-    findFirst: async ({ select }: { select?: { status?: boolean } }) => {
-      if (select?.status) stateReads += 1;
-      return select?.status ? { status: "COMMITTING" } : job;
+    findFirst: async ({ select }: { select?: { status?: boolean; items?: unknown } }) => {
+      // The per-item state read selects only the status; the job read, its rows too.
+      const stateRead = Boolean(select?.status) && !select?.items;
+      if (stateRead) stateReads += 1;
+      return stateRead ? { status: "COMMITTING" } : job;
     },
   },
   importItem: {

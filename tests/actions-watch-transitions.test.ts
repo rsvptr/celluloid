@@ -3,6 +3,7 @@ import { register } from "node:module";
 import { describe, it } from "node:test";
 import {
   MediaType,
+  Prisma,
   WatchEventKind,
   WatchEventSource,
   WatchStatus,
@@ -314,7 +315,10 @@ const mockModules = new Map<string, string>([
     "@/lib/session",
     'export async function getSession() { return globalThis.__CELLULOID_ACTIONS_SIGNED_IN__ ? { user: { id: "user-1" } } : null; }',
   ],
-  ["next/cache", "export function revalidatePath() {}"],
+  [
+    "next/cache",
+    "export function revalidatePath(path) { globalThis.__CELLULOID_ACTIONS_REVALIDATED__?.push(path); }",
+  ],
   [
     "@/lib/tmdb",
     "export async function getMovie() { throw new Error('unused'); }\n" +
@@ -1140,6 +1144,72 @@ describe("watch transition locking", { concurrency: false }, () => {
     assert.deepEqual(await bulkSetStatus(ids, WatchStatus.WATCHED), { count: ids.length });
     assert.equal(peak, PRISMA_POOL_MAX - 1);
     assert.deepEqual(maxWaits, ids.map(() => 10_000));
+  });
+
+  /** Bulk WATCHED over `ids`, where the titles in `failing` throw P2028. */
+  function failingBulkDb(ids: string[], failing: ReadonlySet<string>) {
+    activeDb = new FakeWatchDb();
+    const saved: string[] = [];
+    Object.assign(activeDb.prisma, {
+      title: { ...activeDb.prisma.title, findMany: async () => ids.map((id) => ({ id })) },
+      $transaction: async (
+        operation: (tx: {
+          $queryRaw: (strings: TemplateStringsArray, titleId: string) => Promise<unknown[]>;
+        }) => Promise<unknown>,
+      ) =>
+        operation({
+          $queryRaw: async (_strings, titleId) => {
+            await new Promise((resolve) => setTimeout(resolve, 5));
+            if (failing.has(titleId)) {
+              throw new Prisma.PrismaClientKnownRequestError(
+                "Unable to start a transaction in the given time.",
+                { code: "P2028", clientVersion: "7.10.0" },
+              );
+            }
+            saved.push(titleId);
+            // An empty lock read is the "title vanished" early return.
+            return [];
+          },
+        }),
+    });
+    const revalidated: string[] = [];
+    Object.assign(globalThis, { __CELLULOID_ACTIONS_REVALIDATED__: revalidated });
+    return { saved, revalidated };
+  }
+
+  it("saves the rest of a bulk WATCHED and reports the titles that failed (PR-01)", async () => {
+    const ids = Array.from({ length: 12 }, (_, index) => `title-${index}`);
+    // The first title fails before any other finishes.
+    const failing = new Set(["title-0", "title-7"]);
+    const { saved, revalidated } = failingBulkDb(ids, failing);
+    try {
+      assert.deepEqual(await bulkSetStatus(ids, WatchStatus.WATCHED), {
+        count: 10,
+        failed: 2,
+      });
+      // Every other title was attempted before the action returned, and the
+      // pages were revalidated for the ones that saved.
+      assert.deepEqual(
+        saved.sort(),
+        ids.filter((id) => !failing.has(id)).sort(),
+      );
+      assert.ok(revalidated.includes("/"));
+    } finally {
+      Object.assign(globalThis, { __CELLULOID_ACTIONS_REVALIDATED__: undefined });
+    }
+  });
+
+  it("returns an error when a bulk WATCHED saves none of them (PR-01)", async () => {
+    const ids = ["title-1", "title-2"];
+    const { revalidated } = failingBulkDb(ids, new Set(ids));
+    try {
+      assert.deepEqual(await bulkSetStatus(ids, WatchStatus.WATCHED), {
+        error: "Couldn't update those titles. Try again.",
+      });
+      assert.ok(revalidated.includes("/"));
+    } finally {
+      Object.assign(globalThis, { __CELLULOID_ACTIONS_REVALIDATED__: undefined });
+    }
   });
 });
 

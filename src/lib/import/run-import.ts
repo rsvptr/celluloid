@@ -11,7 +11,7 @@ import {
 } from "@/lib/tmdb";
 import { pickBest } from "@/lib/tmdb-match";
 import { mapLimit } from "@/lib/async";
-import { chunks, tvRuntime } from "@/lib/rematch-history";
+import { ACTIVE_EPISODE_FILTER, chunks, tvRuntime } from "@/lib/rematch-history";
 import { parseWatchedWorkbook, type ParsedTitle } from "./parse-excel";
 
 export interface ImportResult {
@@ -643,10 +643,13 @@ async function writeTv(
 
       // Reconcile denormalized counters from the source of truth (the episode
       // rows) so totalEpisodes matches watchedEpisodes' basis and stays correct
-      // on re-imports that add newly-aired episodes.
+      // on re-imports that add newly-aired episodes. Withdrawn episodes are left
+      // out of both, as every other writer does (PR-11).
       const [epTotal, epWatched] = await Promise.all([
-        tx.episode.count({ where: { season: { titleId: title.id } } }),
-        tx.episode.count({ where: { season: { titleId: title.id }, watched: true } }),
+        tx.episode.count({ where: { season: { titleId: title.id }, ...ACTIVE_EPISODE_FILTER } }),
+        tx.episode.count({
+          where: { season: { titleId: title.id }, watched: true, ...ACTIVE_EPISODE_FILTER },
+        }),
       ]);
       await tx.title.update({
         where: { id: title.id },
