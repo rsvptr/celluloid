@@ -787,6 +787,54 @@ describe("watch transition locking", { concurrency: false }, () => {
     }
   });
 
+  it("leaves a status chosen after the mark alone on a show with no Episode rows", async () => {
+    for (const later of [WatchStatus.DROPPED, WatchStatus.WATCHLIST]) {
+      activeDb = aggregateTitle(WatchStatus.ON_HOLD, 30);
+      const result = await updateTitle("title-1", { status: WatchStatus.WATCHED });
+      assert.ok(result.undo);
+      await updateTitle("title-1", { status: later });
+
+      assert.deepEqual(await undoFromToken(result.undo), { ok: true });
+      assert.equal(activeDb.status, later);
+      // The rest of the undo still runs.
+      assert.equal(activeDb.watchedEpisodes, 30);
+      assert.equal(activeDb.watchedAt, null);
+      assert.deepEqual(activeDb.events, []);
+    }
+
+    // Episode rows too, even where a recount would move it: Watchlist chosen over
+    // a run that was fully ticked before the mark stays Watchlist.
+    activeDb = new FakeWatchDb();
+    activeDb.status = WatchStatus.ON_HOLD;
+    activeDb.episodeWatched = true;
+    activeDb.watchedEpisodes = 1;
+    const result = await updateTitle("title-1", { status: WatchStatus.WATCHED });
+    assert.ok(result.undo);
+    await updateTitle("title-1", { status: WatchStatus.WATCHLIST });
+    assert.deepEqual(await undoFromToken(result.undo), { ok: true });
+    assert.equal(activeDb.status, WatchStatus.WATCHLIST);
+    assert.equal(activeDb.watchedEpisodes, 1);
+  });
+
+  it("still restores the prior status when only other fields changed after the mark", async () => {
+    const shapes = [
+      () => Object.assign(new FakeWatchDb(), { status: WatchStatus.ON_HOLD }),
+      () => aggregateTitle(WatchStatus.ON_HOLD, 30),
+    ];
+    for (const shape of shapes) {
+      activeDb = shape();
+      const result = await updateTitle("title-1", { status: WatchStatus.WATCHED });
+      assert.ok(result.undo);
+      // A rating save leaves the title WATCHED, so the guard lets the restore through.
+      await updateTitle("title-1", { rating: 8 });
+      assert.equal(activeDb.status, WatchStatus.WATCHED);
+
+      assert.deepEqual(await undoFromToken(result.undo), { ok: true });
+      assert.equal(activeDb.status, WatchStatus.ON_HOLD);
+      assert.equal(activeDb.watchedAt, null);
+    }
+  });
+
   it("keeps a date entered before the title transitions to WATCHED", async () => {
     activeDb = new FakeWatchDb();
     activeDb.mediaType = MediaType.MOVIE;
