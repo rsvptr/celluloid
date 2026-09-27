@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { formatCount } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 // --- Horizontal bar rows ---------------------------------------------------
@@ -32,7 +33,7 @@ export function BarRow({
         />
       </div>
       <span className="w-8 shrink-0 text-right text-xs tabular-nums text-muted">
-        {value}
+        {formatCount(value)}
       </span>
     </div>
   );
@@ -56,7 +57,7 @@ export function ColumnChart({
   return (
     <div
       role="img"
-      aria-label={data.map((d) => `${d.label}: ${d.value}`).join(", ")}
+      aria-label={data.map((d) => `${d.label}: ${formatCount(d.value)}`).join(", ")}
       className="flex items-end gap-1.5"
       style={{ height }}
     >
@@ -65,23 +66,25 @@ export function ColumnChart({
         return (
           <div
             key={d.label}
-            className="flex flex-1 flex-col items-center justify-end gap-1"
+            className="flex min-w-0 flex-1 flex-col items-center justify-end gap-1"
           >
             {d.value > 0 && (
-              <span className="text-xs tabular-nums text-faint">{d.value}</span>
+              <span className="text-xs tabular-nums text-faint">{formatCount(d.value)}</span>
             )}
             <div
-              title={`${d.label}: ${d.value}`}
+              title={`${d.label}: ${formatCount(d.value)}`}
               className="w-full rounded-t-md brand-gradient motion-safe:animate-[grow-y_300ms_var(--ease-out)]"
               style={{ height: px, transformOrigin: "bottom" }}
             />
-            {/* Past 8 buckets, labels collide at narrow widths; drop every
-                other one but keep its slot (invisible, not unmounted) so bars
-                stay on a common baseline. */}
+            {/* From 7 buckets, 12px labels collide at narrow widths; drop
+                every other one but keep its slot (invisible, not unmounted)
+                so bars stay on a common baseline. min-w-0 above lets columns
+                shrink below their label's width, so the chart never widens
+                its card (320px reflow). */}
             <span
               className={cn(
                 "text-xs text-faint",
-                data.length > 8 && i % 2 !== 0 && "invisible",
+                data.length > 6 && i % 2 !== 0 && "invisible",
               )}
             >
               {d.label}

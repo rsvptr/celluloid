@@ -30,4 +30,12 @@ describe("text size floor (JK-26)", () => {
     const charts = await readFile(join(SRC, "components/charts.tsx"), "utf8");
     assert.match(charts, /const barArea = height - 40;/);
   });
+
+  it("the column chart's 12px labels can't widen its card at 320px", async () => {
+    const charts = await readFile(join(SRC, "components/charts.tsx"), "utf8");
+    // Columns shrink below their label's width, and from 7 buckets every
+    // other label is hidden so the visible ones don't collide.
+    assert.match(charts, /className="flex min-w-0 flex-1 flex-col items-center justify-end gap-1"/);
+    assert.match(charts, /data\.length > 6 && i % 2 !== 0 && "invisible"/);
+  });
 });
