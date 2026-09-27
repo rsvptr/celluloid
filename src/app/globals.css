@@ -313,11 +313,4 @@ label {
     animation-duration: 0.001ms !important;
     transition-duration: 0.001ms !important;
   }
-  /* Neutralizing the duration still lets the hover lift jump. Tailwind v4 moves
-     the card via the `translate` property fed by --tw-translate-y, so zero that
-     out (a plain `translate: none` gets stripped by the CSS minifier). */
-  .hover\:-translate-y-1:hover {
-    --tw-translate-y: 0 !important;
-    transform: none !important;
-  }
 }
