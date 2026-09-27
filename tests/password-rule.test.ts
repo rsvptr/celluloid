@@ -51,3 +51,34 @@ describe("password rule is visible and explained (JK-12)", () => {
     );
   });
 });
+
+// The number is written in three UI places and enforced by Better Auth. This
+// fails as soon as either side changes without the other (review nit 4).
+describe("the password rule's length matches Better Auth's", () => {
+  it("states and checks auth.ts's minPasswordLength everywhere", async () => {
+    const [auth, settings, form] = await Promise.all([
+      source("../src/lib/auth.ts"),
+      source("../src/app/(app)/settings/settings-client.tsx"),
+      source("../src/app/login/auth-form.tsx"),
+    ]);
+    const configured = auth.match(/emailAndPassword:\s*\{[^}]*?\bminPasswordLength:\s*(\d+)/)?.[1];
+    assert.ok(configured, "minPasswordLength not found in auth.ts's emailAndPassword");
+    const min = Number(configured);
+
+    const section = settings.slice(
+      settings.indexOf("function PasswordSection()"),
+      settings.indexOf("interface DeviceSession"),
+    );
+    const stated = [section, form].flatMap((file) =>
+      [...file.matchAll(/Use at least (\d+) characters/g)].map((match) => Number(match[1])),
+    );
+    // Change password's help text and sign-up's.
+    assert.equal(stated.length, 2);
+    assert.deepEqual(stated, [min, min]);
+
+    // Change password's submit check and the check that clears its error.
+    const checked = [...section.matchAll(/\.length (?:<|>=) (\d+)/g)].map((match) => Number(match[1]));
+    assert.equal(checked.length, 2);
+    assert.deepEqual(checked, [min, min]);
+  });
+});
