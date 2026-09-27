@@ -202,6 +202,7 @@ export function TitleControls({
       titleId: string;
       occurredAt: string;
       restoreWatchedAt: string | null;
+      restoreStatus: WatchStatus;
     } | null = null;
     try {
       while (
@@ -294,6 +295,7 @@ export function TitleControls({
               undo.titleId,
               undo.occurredAt,
               undo.restoreWatchedAt,
+              undo.restoreStatus,
             )
               .then((result) => {
                 if (result.error) toast.error(result.error);

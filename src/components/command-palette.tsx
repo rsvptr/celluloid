@@ -217,6 +217,7 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
                       undo.titleId,
                       undo.occurredAt,
                       undo.restoreWatchedAt,
+                      undo.restoreStatus,
                     )
                       .then((undoResult) => {
                         if (undoResult.error) toast.error(undoResult.error);

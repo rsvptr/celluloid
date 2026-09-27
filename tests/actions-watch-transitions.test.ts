@@ -78,6 +78,7 @@ class FakeWatchDb {
             status: this.status,
             watchedAt: this.watchedAt,
             watchedEpisodes: this.watchedEpisodes,
+            totalEpisodes: this.totalEpisodes,
             mediaType: this.mediaType,
           },
         ];
@@ -383,11 +384,25 @@ describe("watch transition locking", { concurrency: false }, () => {
     assert.deepEqual(await updateTitle("", { status: WatchStatus.WATCHED }), invalid);
     assert.deepEqual(await setEpisodeWatched("", true), invalid);
     assert.deepEqual(
-      await undoWatchedTransition("", new Date().toISOString(), null),
+      await undoWatchedTransition("", new Date().toISOString(), null, WatchStatus.ON_HOLD),
       invalid,
     );
     assert.deepEqual(
-      await undoWatchedTransition("title-1", new Date().toISOString(), "not a date"),
+      await undoWatchedTransition(
+        "title-1",
+        new Date().toISOString(),
+        "not a date",
+        WatchStatus.ON_HOLD,
+      ),
+      invalid,
+    );
+    assert.deepEqual(
+      await undoWatchedTransition(
+        "title-1",
+        new Date().toISOString(),
+        null,
+        "PAUSED" as WatchStatus,
+      ),
       invalid,
     );
     assert.deepEqual(
@@ -551,11 +566,13 @@ describe("watch transition locking", { concurrency: false }, () => {
         result.undo.titleId,
         transitionAt,
         result.undo.restoreWatchedAt,
+        result.undo.restoreStatus,
       ),
       { ok: true },
     );
     assert.equal(activeDb.episodeWatched, false);
-    assert.equal(activeDb.status, WatchStatus.WATCHLIST);
+    // The fixture starts WATCHING at 0 of 1, and undo puts that status back.
+    assert.equal(activeDb.status, WatchStatus.WATCHING);
     assert.equal(activeDb.watchedAt, null, "watchedAt left stamped after undo");
     assert.equal(
       activeDb.events.filter((event) => event.occurredAt.toISOString() === transitionAt)
@@ -579,10 +596,11 @@ describe("watch transition locking", { concurrency: false }, () => {
         result.undo.titleId,
         result.undo.occurredAt,
         result.undo.restoreWatchedAt,
+        result.undo.restoreStatus,
       ),
       { ok: true },
     );
-    assert.equal(activeDb.status, WatchStatus.WATCHLIST);
+    assert.equal(activeDb.status, WatchStatus.WATCHING);
     assert.equal(activeDb.watchedAt?.toISOString(), entered);
 
     // Entered in the same save as the status (Arrow-staged status, then a date).
@@ -597,6 +615,7 @@ describe("watch transition locking", { concurrency: false }, () => {
         result.undo.titleId,
         result.undo.occurredAt,
         result.undo.restoreWatchedAt,
+        result.undo.restoreStatus,
       ),
       { ok: true },
     );
@@ -613,6 +632,7 @@ describe("watch transition locking", { concurrency: false }, () => {
         result.undo.titleId,
         result.undo.occurredAt,
         result.undo.restoreWatchedAt,
+        result.undo.restoreStatus,
       ),
       { ok: true },
     );
@@ -634,6 +654,7 @@ describe("watch transition locking", { concurrency: false }, () => {
         result.undo.titleId,
         result.undo.occurredAt,
         result.undo.restoreWatchedAt,
+        result.undo.restoreStatus,
       ),
       { ok: true },
     );
@@ -642,6 +663,128 @@ describe("watch transition locking", { concurrency: false }, () => {
       [[WatchEventKind.REWATCH, WatchEventSource.MANUAL]],
     );
     assert.equal(activeDb.watchedAt?.toISOString(), `${today}T00:00:00.000Z`);
+  });
+
+  /** Undo from a mark-watched token, passed through as the title page and palette do. */
+  function undoFromToken(undo: {
+    titleId: string;
+    occurredAt: string;
+    restoreWatchedAt: string | null;
+    restoreStatus: WatchStatus;
+  }) {
+    return undoWatchedTransition(
+      undo.titleId,
+      undo.occurredAt,
+      undo.restoreWatchedAt,
+      undo.restoreStatus,
+    );
+  }
+
+  /** A TV title with no Episode rows, only an imported watched-of-62 counter. */
+  function aggregateTitle(status: WatchStatus, watchedEpisodes: number): FakeWatchDb {
+    const db = new FakeWatchDb();
+    db.status = status;
+    db.episodeRows = 0;
+    db.totalEpisodes = 62;
+    db.watchedEpisodes = watchedEpisodes;
+    return db;
+  }
+
+  it("puts On hold back when a TV mark-watched is undone", async () => {
+    activeDb = new FakeWatchDb();
+    activeDb.status = WatchStatus.ON_HOLD;
+    let result = await updateTitle("title-1", { status: WatchStatus.WATCHED });
+    assert.ok(result.undo);
+    assert.equal(result.undo.restoreStatus, WatchStatus.ON_HOLD);
+    assert.equal(activeDb.status, WatchStatus.WATCHED);
+    assert.equal(activeDb.watchedEpisodes, 1);
+
+    assert.deepEqual(await undoFromToken(result.undo), { ok: true });
+    assert.equal(activeDb.status, WatchStatus.ON_HOLD);
+    assert.equal(activeDb.episodeWatched, false);
+    assert.equal(activeDb.watchedEpisodes, 0);
+    assert.equal(activeDb.watchedAt, null);
+    assert.deepEqual(activeDb.events, []);
+
+    activeDb = aggregateTitle(WatchStatus.ON_HOLD, 30);
+    result = await updateTitle("title-1", { status: WatchStatus.WATCHED });
+    assert.ok(result.undo);
+    assert.deepEqual(await undoFromToken(result.undo), { ok: true });
+    assert.equal(activeDb.status, WatchStatus.ON_HOLD);
+    assert.equal(activeDb.watchedEpisodes, 30);
+
+    // A movie's mark-watched offers no undo, so there is no status to carry.
+    activeDb = new FakeWatchDb();
+    activeDb.mediaType = MediaType.MOVIE;
+    activeDb.totalEpisodes = null;
+    activeDb.status = WatchStatus.ON_HOLD;
+    result = await updateTitle("title-1", { status: WatchStatus.WATCHED });
+    assert.equal(result.undo, undefined);
+  });
+
+  it("puts Watching and Watchlist back, from Episode rows or an aggregate count", async () => {
+    const fixtures = [
+      { label: "Watching at 0 of 1", db: () => new FakeWatchDb() },
+      {
+        label: "Watchlist at 0 of 1",
+        db: () => Object.assign(new FakeWatchDb(), { status: WatchStatus.WATCHLIST }),
+      },
+      { label: "Watching at 0 of 62", db: () => aggregateTitle(WatchStatus.WATCHING, 0) },
+      { label: "Watching at 30 of 62", db: () => aggregateTitle(WatchStatus.WATCHING, 30) },
+      { label: "Watchlist at 0 of 62", db: () => aggregateTitle(WatchStatus.WATCHLIST, 0) },
+    ];
+    for (const { label, db } of fixtures) {
+      activeDb = db();
+      const before = activeDb.status;
+      const result = await updateTitle("title-1", { status: WatchStatus.WATCHED });
+      assert.ok(result.undo, label);
+      assert.equal(activeDb.status, WatchStatus.WATCHED, label);
+      assert.deepEqual(await undoFromToken(result.undo), { ok: true }, label);
+      assert.equal(activeDb.status, before, label);
+    }
+  });
+
+  it("recounts instead when the prior status contradicts the progress left by Undo", async () => {
+    // Watchlist over 30 watched episodes: the progress rule calls that Watching.
+    activeDb = aggregateTitle(WatchStatus.WATCHLIST, 30);
+    let result = await updateTitle("title-1", { status: WatchStatus.WATCHED });
+    assert.ok(result.undo);
+    assert.deepEqual(await undoFromToken(result.undo), { ok: true });
+    assert.equal(activeDb.status, WatchStatus.WATCHING);
+
+    // Watching over a run already fully watched: Undo unticks nothing, so the
+    // recount keeps WATCHED, and restoring does not log a fresh completion.
+    activeDb = new FakeWatchDb();
+    activeDb.episodeWatched = true;
+    activeDb.watchedEpisodes = 1;
+    result = await updateTitle("title-1", { status: WatchStatus.WATCHED });
+    assert.ok(result.undo);
+    assert.equal(result.undo.restoreStatus, WatchStatus.WATCHING);
+    assert.deepEqual(await undoFromToken(result.undo), { ok: true });
+    assert.equal(activeDb.episodeWatched, true);
+    assert.equal(activeDb.status, WatchStatus.WATCHED);
+    assert.deepEqual(activeDb.events, []);
+  });
+
+  it("keeps a status chosen after marking watched instead of the token's", async () => {
+    for (const later of [WatchStatus.DROPPED, WatchStatus.WATCHING]) {
+      activeDb = new FakeWatchDb();
+      activeDb.status = WatchStatus.ON_HOLD;
+      const result = await updateTitle("title-1", { status: WatchStatus.WATCHED });
+      assert.ok(result.undo);
+      await updateTitle("title-1", { status: later });
+
+      assert.deepEqual(await undoFromToken(result.undo), { ok: true });
+      assert.equal(activeDb.status, later);
+      assert.equal(activeDb.episodeWatched, false);
+
+      // A spent token changes nothing, including a status set after the undo.
+      await updateTitle("title-1", { status: WatchStatus.WATCHLIST });
+      assert.deepEqual(await undoFromToken(result.undo), {
+        error: "That watched change is no longer available to undo.",
+      });
+      assert.equal(activeDb.status, WatchStatus.WATCHLIST);
+    }
   });
 
   it("keeps a date entered before the title transitions to WATCHED", async () => {
