@@ -402,15 +402,29 @@ export function TwoFactorSection({ enabled }: { enabled: boolean }) {
                 <div className="flex items-center justify-between gap-2">
                   <p>2. Keep these backup codes somewhere safe.</p>
                   {backupCodes.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        copyText(backupCodes.join("\n"), "Backup codes copied")
-                      }
-                      className="focus-ring rounded flex shrink-0 items-center gap-1 text-xs font-medium text-muted transition-colors hover:text-foreground"
-                    >
-                      <Copy size={12} /> Copy all
-                    </button>
+                    <div className="flex shrink-0 items-center gap-4">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          copyText(backupCodes.join("\n"), "Backup codes copied")
+                        }
+                        className="focus-ring rounded flex shrink-0 items-center gap-1 text-xs font-medium text-muted transition-colors hover:text-foreground"
+                      >
+                        <Copy size={12} /> Copy all
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          saveBlob(
+                            new Blob([`${backupCodes.join("\n")}\n`], { type: "text/plain" }),
+                            "celluloid-backup-codes.txt",
+                          )
+                        }
+                        className="focus-ring rounded flex shrink-0 items-center gap-1 text-xs font-medium text-muted transition-colors hover:text-foreground"
+                      >
+                        <Download size={12} /> Download
+                      </button>
+                    </div>
                   )}
                 </div>
                 <div className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-xs text-foreground/90">
