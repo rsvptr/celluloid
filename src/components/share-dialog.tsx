@@ -147,7 +147,7 @@ export function ShareDialog({
               </Dialog.Description>
               <label className="flex flex-col gap-1.5">
                 <span className="text-xs font-medium text-muted">
-                  Title (optional)
+                  List name (optional)
                 </span>
                 <Input
                   ref={titleInputRef}
@@ -194,7 +194,7 @@ export function ShareDialog({
                   Include my ratings and notes
                 </label>
                 <p className="pl-6 text-xs text-faint">
-                  Your star rating and favorite stay private unless this is checked.
+                  Your ratings, notes and favorites stay private unless this is checked.
                 </p>
               </div>
               {wholeLibrary && (

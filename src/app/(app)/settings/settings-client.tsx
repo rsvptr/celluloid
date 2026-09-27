@@ -1934,7 +1934,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
       !(await confirm({
         title: "Turn off two-factor authentication?",
         body: "Your account will only need a password to sign in.",
-        confirmLabel: "Disable 2FA",
+        confirmLabel: "Turn off 2FA",
         destructive: true,
       }))
     )
@@ -2087,7 +2087,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
               className={cn("self-start", softDisabledClass)}
               aria-disabled={busy || !password}
             >
-              {busy ? <Spinner /> : null} Disable 2FA
+              {busy ? <Spinner /> : null} Turn off 2FA
             </Button>
           </form>
         </div>

@@ -337,7 +337,7 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
           </Command.Group>
         ) : (
           <>
-            <Command.Group heading="Do" className={groupClass}>
+            <Command.Group heading="Actions" className={groupClass}>
               {ACTIONS.map((a) => {
                 const Icon = a.icon;
                 return (

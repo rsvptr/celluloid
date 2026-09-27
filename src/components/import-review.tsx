@@ -299,6 +299,8 @@ export function ImportReview({
       title: "Cancel this import?",
       body: "Rows already committed stay in your library. Uncommitted rows will be abandoned.",
       confirmLabel: "Cancel import",
+      // "Cancel" beside "Cancel import" read as the same action (JK-32).
+      cancelLabel: "Keep importing",
       destructive: true,
     });
     if (!approved) return;

@@ -245,7 +245,7 @@ export function RecommendClient({
   const [warnings, setWarnings] = useState<string[]>([]);
   const [recs, setRecs] = useState<Recommendation[] | null>(null);
   const [receivedAny, setReceivedAny] = useState(false);
-  // Titles shown this session, so "Show different" can ask for fresh ones.
+  // Titles shown this session, so "Show different picks" can ask for fresh ones.
   const seen = useRef<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
   const dismissedRef = useRef<Set<string>>(new Set());
@@ -378,7 +378,7 @@ export function RecommendClient({
   }) {
     const useFocus = over?.focus ?? focus;
     const useType = over?.type ?? type;
-    // A fresh run (button/preset) starts over; "Show different" keeps excluding.
+    // A fresh run (button/preset) starts over; "Show different picks" keeps excluding.
     if (over?.reset) seen.current = new Set();
     abortRef.current?.abort();
     const ac = new AbortController();
@@ -639,9 +639,9 @@ export function RecommendClient({
               <div className="flex flex-wrap gap-1.5">
                 {(
                   [
-                    ["all", "Movies & TV"],
+                    ["all", "All"],
                     ["movie", "Movies"],
-                    ["tv", "TV"],
+                    ["tv", "TV shows"],
                   ] as const
                 ).map(([value, label]) => (
                   <button
@@ -990,7 +990,7 @@ export function RecommendClient({
                 className="focus-ring flex min-h-11 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted ring-1 ring-line transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0"
               >
                 <RefreshCw size={14} aria-hidden="true" />
-                Show different
+                Show different picks
               </button>
             )}
           </div>
@@ -1036,7 +1036,7 @@ export function RecommendClient({
       {!loading && recs && recs.length === 0 && !error && (
         <p className="py-8 text-center text-sm text-muted">
           {receivedAny
-            ? "You've hidden every suggestion from this run. Try Show different for another batch."
+            ? "You've hidden every suggestion from this run. Try “Show different picks” for another batch."
             : "No suggestions came back. Try a different focus or count."}
         </p>
       )}
