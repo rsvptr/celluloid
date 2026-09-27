@@ -6,13 +6,61 @@ import type { ParsedTitle } from "../src/lib/import/parse-excel";
 type Call = { fn: string; arg: unknown; signal: unknown };
 type TmdbState = {
   calls: Call[];
-  imdb: { titles: unknown[]; episodeShowIds: number[] };
+  imdb: unknown[];
   tvdb: unknown[];
   tv: Record<number, unknown>;
+  search: unknown[];
 };
 
-const tmdbState: TmdbState = { calls: [], imdb: { titles: [], episodeShowIds: [] }, tvdb: [], tv: {} };
+const tmdbState: TmdbState = { calls: [], imdb: [], tvdb: [], tv: {}, search: [] };
 Object.assign(globalThis, { __CELLULOID_EXACT_ID_TMDB__: tmdbState });
+
+// An in-memory import job, enough for staging and committing one to run.
+type ItemRow = Record<string, unknown> & { id: string };
+const db: { items: ItemRow[]; libraryTvIds: number[] } = { items: [], libraryTvIds: [] };
+const fakePrisma = {
+  importItem: {
+    createMany: async ({ data }: { data: Record<string, unknown>[] }) => {
+      db.items = data.map((row, index) => ({
+        id: `item-${index + 1}`,
+        titleId: null,
+        attempts: 0,
+        ...row,
+      }));
+      return { count: data.length };
+    },
+    updateMany: async ({
+      where,
+      data,
+    }: {
+      where: { id: { in: string[] } };
+      data: Record<string, unknown>;
+    }) => {
+      const hit = db.items.filter((item) => where.id.in.includes(item.id));
+      for (const item of hit) Object.assign(item, data);
+      return { count: hit.length };
+    },
+  },
+  importJob: {
+    update: async () => ({}),
+    updateMany: async () => ({ count: 1 }),
+    findFirst: async () => ({
+      id: "job-1",
+      userId: "user-1",
+      filename: "ratings.csv",
+      status: "READY_FOR_REVIEW",
+      createdAt: new Date("2026-09-27T00:00:00.000Z"),
+      committedAt: null,
+      summary: null,
+      items: db.items,
+    }),
+  },
+  title: {
+    findMany: async () => db.libraryTvIds.map((tmdbId) => ({ mediaType: "TV", tmdbId })),
+  },
+  $transaction: async (writes: Promise<unknown>[]) => Promise.all(writes),
+};
+Object.assign(globalThis, { __CELLULOID_EXACT_ID_PRISMA__: fakePrisma });
 
 const loader = `
 export async function resolve(specifier, context, nextResolve) {
@@ -28,7 +76,7 @@ export async function resolve(specifier, context, nextResolve) {
     shortCircuit: true,
   });
   if (specifier === "@/lib/prisma" || normalized.endsWith("/src/lib/prisma")) {
-    return stub("export const prisma = {};");
+    return stub("export const prisma = globalThis.__CELLULOID_EXACT_ID_PRISMA__;");
   }
   if (specifier === "@/lib/actions" || normalized.endsWith("/src/lib/actions")) {
     return stub(
@@ -44,7 +92,7 @@ export async function resolve(specifier, context, nextResolve) {
       "export async function findTvByTvdbId(id, options) { record('findTvByTvdbId', id, options); return s.tvdb; }" +
       "export async function getMovie(id, options) { record('getMovie', id, options); throw new Error('TMDB 404'); }" +
       "export async function getTv(id, options) { record('getTv', id, options); if (!s.tv[id]) throw new Error('TMDB 404'); return s.tv[id]; }" +
-      "export async function searchByType() { throw new Error('unexpected search'); }",
+      "export async function searchByType(kind, name, page, options) { record('searchByType', name, options); return s.search; }",
     );
   }
   return nextResolve(specifier, context);
@@ -52,7 +100,9 @@ export async function resolve(specifier, context, nextResolve) {
 `;
 register(`data:text/javascript,${encodeURIComponent(loader)}`, import.meta.url);
 
-const { resolveByExactId } = await import("../src/lib/import-staging");
+const { commitImportJobChunk, resolveByExactId, stageParsedImport } = await import(
+  "../src/lib/import-staging"
+);
 
 const row = (overrides: Partial<ParsedTitle>): ParsedTitle => ({
   source: "upload",
@@ -76,29 +126,26 @@ const friends = {
 
 beforeEach(() => {
   tmdbState.calls.length = 0;
-  tmdbState.imdb = { titles: [], episodeShowIds: [] };
+  tmdbState.imdb = [];
   tmdbState.tvdb = [];
   tmdbState.tv = {};
+  tmdbState.search = [];
+  db.items = [];
+  db.libraryTvIds = [];
 });
 
 describe("resolveByExactId (TM-12)", { concurrency: false }, () => {
-  it("resolves an IMDb episode id to its series", async () => {
-    // Live, /find/tt0583459 (Friends S1E1) returns only tv_episode_results.
-    tmdbState.imdb = { titles: [], episodeShowIds: [1668] };
-    tmdbState.tv = { 1668: friends };
+  it("leaves an IMDb episode id unresolved rather than matching its series", async () => {
+    // Live, /find/tt2301451 (Breaking Bad S5E14) returns only
+    // tv_episode_results, which findByImdbId reports as no titles.
     const signal = new AbortController().signal;
 
-    const found = await resolveByExactId(row({ imdbId: "tt0583459" }), signal);
+    const found = await resolveByExactId(row({ name: "Ozymandias", imdbId: "tt2301451" }), signal);
 
-    assert.equal(found?.id, 1668);
-    assert.equal(found?.media_type, "tv");
-    assert.equal(found?.name, "Friends");
+    assert.equal(found, null);
     assert.deepEqual(
       tmdbState.calls.map((call) => [call.fn, call.arg, call.signal === signal]),
-      [
-        ["findByImdbId", "tt0583459", true],
-        ["getTv", 1668, true],
-      ],
+      [["findByImdbId", "tt2301451", true]],
     );
   });
 
@@ -139,4 +186,60 @@ describe("resolveByExactId (TM-12)", { concurrency: false }, () => {
       ],
     );
   });
+});
+
+describe("an IMDb episode-id row in a ratings export (TM-12 regression)", { concurrency: false }, () => {
+  const breakingBad = {
+    id: 1396,
+    media_type: "tv",
+    name: "Breaking Bad",
+    original_name: "Breaking Bad",
+    first_air_date: "2008-01-20",
+    poster_path: "/bb.jpg",
+    original_language: "en",
+  };
+  // "Title Type: TV Episode", "Date Rated" and "Your Rating" parse to a
+  // watched, rated TV row whose IMDb id names one episode.
+  const episodeRow = row({
+    name: "Ozymandias",
+    imdbId: "tt2301451",
+    status: "WATCHED",
+    rating: 10,
+    ratingText: "10",
+    watchedAt: "2024-03-01",
+  });
+
+  for (const [label, libraryTvIds] of [
+    ["the show is new to the library", []],
+    ["the show is already on the watchlist", [1396]],
+  ] as const) {
+    it(`matches no show and writes nothing when ${label}`, async () => {
+      db.libraryTvIds = [...libraryTvIds];
+      tmdbState.tv = { 1396: breakingBad };
+      // Even when the name search surfaces the show, the episode's title
+      // doesn't match it.
+      tmdbState.search = [breakingBad];
+
+      const staged = await stageParsedImport({
+        userId: "user-1",
+        jobId: "job-1",
+        parsed: [episodeRow],
+        summary: {},
+      });
+
+      assert.equal(tmdbState.calls.some((call) => call.fn === "getTv"), false);
+      const [item] = staged.items;
+      assert.equal(item.proposed, null);
+      assert.equal(item.matchScore, null);
+      assert.equal(item.action, "CONFLICT");
+      assert.equal(db.items[0].proposedTmdbId, null);
+
+      // Committing touches no title: addFromTmdb and rematchTitle throw if
+      // called, so no watched status or rating can reach a show.
+      const committed = await commitImportJobChunk("user-1", "job-1");
+      assert.equal(committed?.items[0].titleId, null);
+      assert.equal(committed?.summary?.created, 0);
+      assert.equal(committed?.summary?.updated, 0);
+    });
+  }
 });

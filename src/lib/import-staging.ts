@@ -354,14 +354,11 @@ export async function resolveByExactId(
   }
   if (parsed.imdbId) {
     try {
-      const { titles, episodeShowIds } = await findByImdbId(parsed.imdbId, { signal });
-      const title = titles.find((item) => item.media_type === parsed.mediaType) ?? titles[0];
+      const found = await findByImdbId(parsed.imdbId, { signal });
+      // An episode's id finds no title, so the row falls back to the name
+      // search rather than importing the episode's status as its show's.
+      const title = found.find((item) => item.media_type === parsed.mediaType) ?? found[0];
       if (title) return title;
-      // An episode-level export: the episode's id names its series. Several
-      // episodes of one show become duplicate-match conflicts in review.
-      if (episodeShowIds.length > 0) {
-        return tvAsSearchItem(await getTv(episodeShowIds[0], { signal }));
-      }
     } catch {
       // Fall through to the TVDB id, then the name search.
     }
