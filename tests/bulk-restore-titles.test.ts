@@ -133,7 +133,7 @@ describe("bulkRestoreTitles (VE-01)", { concurrency: false }, () => {
 
   it("is what the library's bulk Undo calls, once for the whole selection", async () => {
     const library = await readFile(
-      new URL("../src/components/library.tsx", import.meta.url),
+      new URL("../src/components/library-bulk-bar.tsx", import.meta.url),
       "utf8",
     );
     const removeSelected = library.slice(

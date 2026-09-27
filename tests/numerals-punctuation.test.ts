@@ -18,12 +18,13 @@ describe("numerals and punctuation (JK-28)", () => {
   });
 
   it("uses an en dash and a real ellipsis", async () => {
-    const [library, controls] = await Promise.all([
-      source("../src/components/library.tsx"),
+    const [panel, toolbar, controls] = await Promise.all([
+      source("../src/components/library-filter-panel.tsx"),
+      source("../src/components/library-toolbar.tsx"),
       source("../src/app/(app)/title/[id]/title-controls.tsx"),
     ]);
-    assert.match(library, /"Name \(A–Z\)"/);
-    assert.match(library, /\{formatCount\(filtered\.length\)\}/);
+    assert.match(panel, /"Name \(A–Z\)"/);
+    assert.match(toolbar, /\{formatCount\(filtered\.length\)\}/);
     assert.match(controls, /placeholder="Watched with…"/);
   });
 });

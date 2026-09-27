@@ -11,7 +11,7 @@ async function source(path: string) {
 // identity between those renders.
 describe("library list rows (VE-04)", () => {
   it("memoizes ListRow and hands it only stable props", async () => {
-    const library = await source("../src/components/library.tsx");
+    const library = await source("../src/components/library-results.tsx");
     assert.match(library, /const ListRow = memo\(function ListRow\(/);
 
     const at = library.indexOf("<ListRow");
@@ -20,19 +20,23 @@ describe("library list rows (VE-04)", () => {
     assert.match(row, /tagColors=\{tagColors\}/);
     assert.match(row, /selectMode=\{selectMode\}/);
     assert.match(row, /selected=\{selected\.has\(it\.id\)\}/);
-    assert.match(row, /onToggle=\{toggle\}/);
+    assert.match(row, /onToggle=\{onToggle\}/);
     // No inline callback or object literal, which would be new every render.
     assert.doesNotMatch(row, /=\{\(|=\{\{/);
 
-    // The callback is created once.
+    // The callback is created once, and Library hands it to the results as is.
+    const entry = await source("../src/components/library.tsx");
+    const results = entry.slice(entry.indexOf("<LibraryResults"), entry.indexOf("/>", entry.indexOf("<LibraryResults")));
+    assert.match(results, /onToggle=\{toggle\}/);
+    assert.match(results, /tagColors=\{tagColors\}/);
     assert.match(
-      library,
+      entry,
       /const toggle = useCallback\(\(id: string\) => \{[\s\S]*?\n {2}\}, \[\]\);/,
     );
   });
 
   it("prefetches rows on intent, not on viewport entry (VE-06)", async () => {
-    const library = await source("../src/components/library.tsx");
+    const library = await source("../src/components/library-results.tsx");
     const start = library.indexOf("const ListRow = memo(function ListRow(");
     const listRow = library.slice(start, library.indexOf("\n});", start));
     // The href is built inside the row, so no new prop reaches the memo.

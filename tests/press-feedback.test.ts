@@ -77,7 +77,7 @@ describe("press feedback (EM-01)", () => {
   });
 
   it("presses the rest of the library toolbar and Add title", async () => {
-    const library = await source("components/library.tsx");
+    const library = (await Promise.all(["library", "library-toolbar", "library-bulk-bar"].map((name) => source(`components/${name}.tsx`)))).join("\n");
     const classOf = (anchor: string) => {
       const at = library.indexOf(anchor);
       assert.notEqual(at, -1, anchor);
@@ -98,7 +98,7 @@ describe("press feedback (EM-01)", () => {
   });
 
   it("tints library list rows instantly instead of scaling them", async () => {
-    const library = await source("components/library.tsx");
+    const library = await source("components/library-results.tsx");
     const rows = [...library.matchAll(/"(cv-auto focus-ring focus-ring-inset flex items-center gap-3 [^"]*)"/g)];
     assert.equal(rows.length, 2);
     for (const [, row] of rows) {

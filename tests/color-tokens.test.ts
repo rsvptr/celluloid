@@ -56,7 +56,8 @@ describe("status color tokens (JK-16)", () => {
   it("text on a filled accent uses the on-accent token", async () => {
     const files = [
       "../src/components/ui.tsx",
-      "../src/components/library.tsx",
+      "../src/components/library-toolbar.tsx",
+      "../src/components/library-results.tsx",
       "../src/components/title-card.tsx",
       "../src/app/(app)/add/add-search.tsx",
       "../src/app/(app)/title/[id]/season-tracker.tsx",

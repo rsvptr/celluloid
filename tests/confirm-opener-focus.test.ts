@@ -52,7 +52,7 @@ describe("confirm openers keep focus after confirming (JK-03)", () => {
   });
 
   it("Empty trash and Cancel import soft-disable", async () => {
-    const library = await source("../src/components/library.tsx");
+    const library = await source("../src/components/library-trash.tsx");
     assertSoftDisabled(buttonAround(library, "void purgeAll()"), "Empty trash");
     const review = await source("../src/components/import-review.tsx");
     assertSoftDisabled(buttonAround(review, "void cancel()"), "Cancel import");
@@ -68,7 +68,8 @@ describe("soft-disabled styling", () => {
     );
     for (const path of [
       "../src/app/(app)/settings/settings-client.tsx",
-      "../src/components/library.tsx",
+      "../src/components/library-bulk-bar.tsx",
+      "../src/components/library-trash.tsx",
       "../src/components/import-review.tsx",
     ]) {
       const file = await source(path);
