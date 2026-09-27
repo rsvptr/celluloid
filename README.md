@@ -284,6 +284,24 @@ This is your data on your infrastructure.
 - A recommendation run scoped to part of your library sends Anthropic that part's details only. Every other title appears in the prompt as a bare name and year on an exclusion list, so notes and ratings outside the chosen scope stay home.
 - Server side input validation bounds every free text field. The runtime dependency tree has no known advisories; the `prisma` CLI carries transitive advisories (`deepmerge-ts`, `mysql2`) that do not reach application code.
 
+### Rotating `BETTER_AUTH_SECRET`
+
+`BETTER_AUTH_SECRET` does more than sign sessions. Better Auth encrypts every two factor secret and backup code with it, Celluloid derives its restore-preview key from it, and wherever `ENCRYPTION_KEY` is unset (local and preview deployments; production requires it) it also encrypts stored Anthropic keys. Replacing the value outright:
+
+- Signs everyone out, which is expected.
+- Locks out every account with two factor on. Its secret and backup codes no longer decrypt, so sign-in can't finish, and turning two factor off needs a session. The only way back is editing the database by hand.
+- Makes stored Anthropic keys unreadable wherever `ENCRYPTION_KEY` is unset. Recommendations fall back to the server key until each person saves theirs again. Changing `ENCRYPTION_KEY` itself does the same.
+- Voids restore previews and two factor sign-in challenges in flight. Both expire within 15 minutes anyway.
+
+To rotate safely, keep the old value and add the new one as a versioned secret:
+
+1. Generate a new secret with `npx auth@latest secret` (at least 32 characters).
+2. Leave `BETTER_AUTH_SECRET` unchanged and add `BETTER_AUTH_SECRETS=2:<new secret>` (in the Vercel project settings for production), then redeploy.
+3. Better Auth now signs sessions and encrypts new two factor data with the new secret, and still decrypts existing two factor data with `BETTER_AUTH_SECRET`. Everyone signs in once more. Two factor, Anthropic keys and restore previews keep working, because `BETTER_AUTH_SECRET` itself did not change.
+4. Next time, put the newest secret first and keep the earlier ones: `BETTER_AUTH_SECRETS=3:<newest>,2:<new secret>`. Remove a version only when no `twoFactor` row's `secret` or `backupCodes` still starts with `$ba$<version>$`.
+
+Keep `BETTER_AUTH_SECRET` at its original value after that: it remains the only key for two factor data created before the first rotation. Turning two factor off and on again re-encrypts an account's data under the current secret.
+
 ## Architecture
 
 Celluloid is a normal Next.js App Router application. Pages render on the server, talk to Postgres through a Prisma driver adapter, and reach two outside services: TMDB for metadata and Anthropic for recommendations. There is no separate API server to run.
