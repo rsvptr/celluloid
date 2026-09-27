@@ -14,6 +14,7 @@ import { createInterface } from "node:readline/promises";
 import { pathToFileURL } from "node:url";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client.ts";
+import { resolveMigrationTarget } from "./db-urls.mjs";
 import { loadEnv } from "./load-env.mjs";
 
 /** Credentials and query parameters are deliberately excluded. */
@@ -47,10 +48,14 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const unknown = argv.filter((arg) => arg !== "--yes");
   if (unknown.length > 0) throw new Error(`Unknown argument: ${unknown[0]}`);
 
-  const connectionString = env.DIRECT_URL ?? env.DATABASE_URL;
+  // Same direct URL as migrations. A DIRECT_URL or DATABASE_URL_UNPOOLED on
+  // another branch than DATABASE_URL is refused rather than warned about: this
+  // writes data, and nothing else would stop it from landing on that branch.
+  const { url: connectionString, mismatch } = resolveMigrationTarget(env);
+  if (mismatch) throw new Error(`Refusing to backfill. ${mismatch}`);
   if (!connectionString) {
     throw new Error(
-      "Neither DIRECT_URL nor DATABASE_URL is set in .env.local, .env, or the process environment.",
+      "None of DIRECT_URL, DATABASE_URL_UNPOOLED or DATABASE_URL is set in .env.local, .env, or the process environment.",
     );
   }
 

@@ -424,7 +424,8 @@ values still missing.
 | Variable | Required | What it is |
 | --- | --- | --- |
 | `DATABASE_URL` | Yes | Neon pooled connection string (host contains `-pooler`). Used at runtime. |
-| `DIRECT_URL` | For migrations | Neon direct connection string (no pooler). Used only for migrations. Falls back to `DATABASE_URL` if unset. |
+| `DIRECT_URL` | For migrations | Neon direct connection string: the same branch's host without `-pooler`, from the Connect dialog with pooling turned off. Used for migrations, `db:indexes` and the backfill script, never at runtime, because Prisma Migrate takes a session-level lock that Neon's pooler can't hold. When it is unset or blank, `DATABASE_URL_UNPOOLED` is used, then `DATABASE_URL` with `-pooler` removed, never the pooled string itself. It must point at the same Neon branch as `DATABASE_URL`: if the endpoints differ, Prisma commands that connect to a database and those scripts refuse to run. |
+| `DATABASE_URL_UNPOOLED` | Optional | The direct string under the name `neon env pull` and Neon's Vercel integration write. Used for migrations when `DIRECT_URL` is unset, with the same same-branch check. |
 | `TMDB_ACCESS_TOKEN` | Yes | The TMDB v4 API Read Access Token (the long token starting with `eyJ`). Server side only. |
 | `BETTER_AUTH_SECRET` | Yes | Signs sessions. At least 32 characters; generate with `npx auth@latest secret`. |
 | `BETTER_AUTH_URL` | Yes | The app base URL. Local is `http://localhost:3000`, production is your deployed URL. |
@@ -509,7 +510,7 @@ A short checklist for a clean first deploy:
 
 - [ ] Use fresh secrets in production. Rotate anything that has been on a local machine: the Neon password, the TMDB token, the Anthropic key, `BETTER_AUTH_SECRET`, and `ENCRYPTION_KEY`.
 - [ ] Both `BETTER_AUTH_URL` and `NEXT_PUBLIC_SITE_URL` point at the production URL.
-- [ ] `DATABASE_URL` is the pooled string and `DIRECT_URL` is the direct one.
+- [ ] `DATABASE_URL` is the pooled string and `DIRECT_URL` is the direct one, for the same Neon branch. If their endpoints differ, the build's `prisma migrate deploy` refuses to run.
 - [ ] Set a fresh `SIGNUP_INVITE_CODE`, create your account on the live site, then rotate or remove the code when everyone you invited has joined.
 - [ ] Set `CRON_SECRET` if you want the nightly metadata sync. `vercel.json` registers the schedule; without the variable the endpoint refuses to run. A run where every account fails returns a non-200 status, so a broken night shows up red in Vercel's cron dashboard instead of passing silently.
 - [ ] Scope the Preview environment's `DATABASE_URL` to its own Neon branch. Preview builds do not run migrations, so a Preview deployment pointed at the production database can run new code against an unmigrated schema.

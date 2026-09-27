@@ -14,14 +14,22 @@
 
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client.ts";
+import { resolveMigrationTarget } from "./db-urls.mjs";
 import { loadEnv } from "./load-env.mjs";
 
 loadEnv();
 
-const connectionString = process.env.DIRECT_URL ?? process.env.DATABASE_URL;
+// DDL takes the same direct URL as migrations, and refuses outright when
+// DIRECT_URL or DATABASE_URL_UNPOOLED names a different branch than
+// DATABASE_URL, rather than altering a database nobody meant to touch.
+const { url: connectionString, mismatch } = resolveMigrationTarget();
+if (mismatch) {
+  console.error(`ensure-indexes: refusing to run. ${mismatch}`);
+  process.exit(1);
+}
 if (!connectionString) {
   console.error(
-    "ensure-indexes: neither DIRECT_URL nor DATABASE_URL is set in .env.local, .env, or the process environment.",
+    "ensure-indexes: none of DIRECT_URL, DATABASE_URL_UNPOOLED or DATABASE_URL is set in .env.local, .env, or the process environment.",
   );
   process.exit(1);
 }

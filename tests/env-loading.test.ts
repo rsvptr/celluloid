@@ -43,7 +43,19 @@ describe("discovered-at backfill guardrails", () => {
 
   it("fails before connecting when configuration or arguments are invalid", async () => {
     const env = { NODE_ENV: "test" as const };
-    await assert.rejects(() => runBackfill([], env), /Neither DIRECT_URL nor DATABASE_URL/);
+    await assert.rejects(
+      () => runBackfill([], env),
+      /None of DIRECT_URL, DATABASE_URL_UNPOOLED or DATABASE_URL/,
+    );
     await assert.rejects(() => runBackfill(["--force"], env), /Unknown argument/);
+  });
+
+  it("refuses before connecting when DIRECT_URL names another Neon branch", async () => {
+    const env = {
+      NODE_ENV: "test" as const,
+      DATABASE_URL: "postgresql://u:pw@ep-dev-1-pooler.eu-west-2.aws.neon.tech/celluloid",
+      DIRECT_URL: "postgresql://u:pw@ep-prod-1.eu-west-2.aws.neon.tech/celluloid",
+    };
+    await assert.rejects(() => runBackfill(["--yes"], env), /Refusing to backfill\. DIRECT_URL/);
   });
 });
