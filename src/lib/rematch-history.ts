@@ -131,6 +131,31 @@ function startOfUtcDay(now: Date): Date {
 }
 
 /**
+ * A TV show's typical episode length in minutes, or null when nothing says.
+ *
+ * TMDB's `episode_run_time` is empty for most current shows, so the median of
+ * the loaded episodes' own runtimes stands in for it: the median rather than
+ * the mean, so a double-length finale or a short special doesn't skew it.
+ * Zero and missing runtimes are TMDB not knowing, never a length.
+ */
+export function tvRuntime(
+  episodeRunTime: readonly number[] | null | undefined,
+  seasons: readonly TmdbSeasonDetails[],
+): number | null {
+  const stated = episodeRunTime?.[0];
+  if (stated && stated > 0) return stated;
+  const runtimes = seasons
+    .flatMap((season) => (season.episodes ?? []).map((ep) => ep.runtime))
+    .filter((runtime): runtime is number => typeof runtime === "number" && runtime > 0)
+    .sort((a, b) => a - b);
+  if (runtimes.length === 0) return null;
+  const middle = Math.floor(runtimes.length / 2);
+  return runtimes.length % 2 === 1
+    ? runtimes[middle]
+    : Math.round((runtimes[middle - 1] + runtimes[middle]) / 2);
+}
+
+/**
  * Reconnect historical events to replacement Episode rows after a same-series
  * refresh. A TMDB id follows the episode through renumbering; only legacy rows
  * without one use their old coordinate as a best-effort fallback.

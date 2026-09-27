@@ -10,7 +10,14 @@ type Row = Record<string, unknown>;
 type TmdbStub = {
   calls: Array<{ kind: string; options: unknown; count?: number }>;
   tvId: number;
-  episodes: Array<{ id: number; episode_number: number; name: string; air_date: string }>;
+  episodes: Array<{
+    id: number;
+    episode_number: number;
+    name: string;
+    air_date: string;
+    /** Defaults to 45 when left out. */
+    runtime?: number | null;
+  }>;
   /** Fields merged over the stubbed TV detail. */
   tv?: Row;
   /** When set, getMovie returns these fields instead of throwing. */
@@ -56,7 +63,7 @@ export async function resolve(specifier, context, nextResolve) {
       "export async function getMovie(id, options) { state.calls.push({kind:'movie', options}); if (!state.movie) throw new Error('unused movie'); return {id,...state.movie}; }" +
       "export async function getTv(id, options) { state.calls.push({kind:'tv', options}); return {id,name:'Series',original_name:'',overview:'',first_air_date:'2012-01-01',poster_path:null,backdrop_path:null,original_language:'en',vote_average:8,episode_run_time:[45],genres:[],number_of_seasons:1,seasons:[{season_number:1}],...state.tv}; }" +
       "export const MAX_APPENDED_SEASONS = 20;" +
-      "export async function getSeasons(_id, seasons, options) { state.calls.push({kind:'seasons', options, count: seasons.length}); if (seasons.some(s=>state.failSeasons?.includes(s.season_number))) throw new Error('seasons unavailable'); return seasons.map(({season_number:n})=>({n,sd:{id:500+n,season_number:n,name:'Season '+n,overview:'',air_date:'2012-01-01',poster_path:null,episodes:state.episodes.map(e=>({...e,id:e.id+(n-1)*1000,season_number:n,overview:'',runtime:45,still_path:null,vote_average:0}))}})); }"
+      "export async function getSeasons(_id, seasons, options) { state.calls.push({kind:'seasons', options, count: seasons.length}); if (seasons.some(s=>state.failSeasons?.includes(s.season_number))) throw new Error('seasons unavailable'); return seasons.map(({season_number:n})=>({n,sd:{id:500+n,season_number:n,name:'Season '+n,overview:'',air_date:'2012-01-01',poster_path:null,episodes:state.episodes.map(e=>({...e,id:e.id+(n-1)*1000,season_number:n,overview:'',runtime:e.runtime===undefined?45:e.runtime,still_path:null,vote_average:0}))}})); }"
     );
   }
   return nextResolve(specifier, context);
@@ -595,6 +602,62 @@ describe("rematchTitle sync fields", { concurrency: false }, () => {
     assert.equal(state.title.metadataSyncState, null);
     assert.deepEqual(state.title.streamProviderIds, [8, 337]);
     assert.equal(state.title.providersRegion, "GB");
+  });
+});
+
+describe("rematchTitle TV runtime", { concurrency: false }, () => {
+  const episodesWithRuntimes = (...runtimes: Array<number | null>) =>
+    runtimes.map((runtime, index) => ({
+      id: 2001 + index,
+      episode_number: index + 1,
+      name: `Episode ${index + 1}`,
+      air_date: "2012-01-01",
+      runtime,
+    }));
+
+  it("keeps the stored runtime on a refresh when nothing states one", async () => {
+    const state = createRematchDb({ currentTmdbId: 200, status: "WATCHING", title: { runtime: 50 } });
+    const tmdb = globalThis.__CELLULOID_C1_TMDB__;
+    tmdb.tv = { episode_run_time: [] };
+    tmdb.episodes = episodesWithRuntimes(null, 0);
+    Object.assign(globalThis.__CELLULOID_C1_DB__, state.db);
+
+    assert.deepEqual(await rematchTitle("title-1", 200, "tv"), { ok: true });
+    assert.equal(state.title.runtime, 50);
+  });
+
+  it("uses the episodes' median runtime when TMDB's episode_run_time is empty", async () => {
+    const state = createRematchDb({ currentTmdbId: 200, status: "WATCHING", title: { runtime: 50 } });
+    const tmdb = globalThis.__CELLULOID_C1_TMDB__;
+    tmdb.tv = { episode_run_time: [] };
+    tmdb.episodes = episodesWithRuntimes(58, 90, 60, null, 0);
+    Object.assign(globalThis.__CELLULOID_C1_DB__, state.db);
+
+    assert.deepEqual(await rematchTitle("title-1", 200, "tv"), { ok: true });
+    // The median, so the 90-minute finale doesn't pull it to the mean (69).
+    assert.equal(state.title.runtime, 60);
+  });
+
+  it("prefers the runtime TMDB states", async () => {
+    const state = createRematchDb({ currentTmdbId: 200, status: "WATCHING", title: { runtime: 50 } });
+    const tmdb = globalThis.__CELLULOID_C1_TMDB__;
+    tmdb.tv = { episode_run_time: [42] };
+    tmdb.episodes = episodesWithRuntimes(60);
+    Object.assign(globalThis.__CELLULOID_C1_DB__, state.db);
+
+    assert.deepEqual(await rematchTitle("title-1", 200, "tv"), { ok: true });
+    assert.equal(state.title.runtime, 42);
+  });
+
+  it("drops the old entry's runtime on a re-match to a show that states none", async () => {
+    const state = createRematchDb({ currentTmdbId: 100, status: "WATCHING", title: { runtime: 50 } });
+    const tmdb = globalThis.__CELLULOID_C1_TMDB__;
+    tmdb.tv = { episode_run_time: [] };
+    tmdb.episodes = episodesWithRuntimes(null);
+    Object.assign(globalThis.__CELLULOID_C1_DB__, state.db);
+
+    assert.deepEqual(await rematchTitle("title-1", 200, "tv"), { ok: true });
+    assert.equal(state.title.runtime, null);
   });
 });
 

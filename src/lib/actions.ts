@@ -33,6 +33,7 @@ import {
   planEpisodeEventRelinks,
   preservesEpisodeHistory,
   RELINK_BATCH_SIZE,
+  tvRuntime,
   WITHDRAWN_EPISODE_NUMBER_OFFSET,
   type EpisodeEventCoordinate,
 } from "@/lib/rematch-history";
@@ -1721,6 +1722,10 @@ export async function rematchTitle(
             "Couldn't load all season data from TMDB. Nothing was changed, please try again.",
         };
       }
+      const runtime = tvRuntime(
+        tv.episode_run_time,
+        seasons.map((s) => s.sd),
+      );
 
       const found = await prisma.$transaction(
         async (tx) => {
@@ -1835,7 +1840,11 @@ export async function rematchTitle(
               backdropPath: tv.backdrop_path,
               language: tv.original_language || null,
               tmdbRating: tv.vote_average ?? null,
-              runtime: tv.episode_run_time?.[0] ?? null,
+              // A refresh of the same show keeps its stored runtime when
+              // neither TMDB nor the episodes state one, as the nightly sync
+              // does. After a genuine re-match the stored value belongs to the
+              // old entry, so it is cleared instead.
+              ...(runtime !== null || !preserveEpisodes ? { runtime } : {}),
               genres: tv.genres?.map((g) => g.name) ?? [],
               totalSeasons: tv.number_of_seasons ?? null,
               // Every season was just loaded (a partial load aborted above), so
