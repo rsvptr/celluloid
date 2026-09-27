@@ -187,7 +187,7 @@ export function WatchHistoryList({
                     value={draftDate}
                     onChange={(e) => setDraftDate(e.target.value)}
                     aria-label="Date watched"
-                    className="h-11 w-full rounded-lg bg-surface-2 px-3 text-base text-foreground ring-1 ring-line-strong focus:outline-none focus:ring-2 focus:ring-brand/60 sm:h-10 sm:text-sm [color-scheme:dark]"
+                    className="h-11 w-full rounded-lg bg-surface-2 px-3 text-base text-foreground ring-1 ring-line-strong focus:outline-hidden focus:ring-2 focus:ring-brand/60 forced-colors:border sm:h-10 sm:text-sm [color-scheme:dark]"
                   />
                   <Input
                     value={draftNote}

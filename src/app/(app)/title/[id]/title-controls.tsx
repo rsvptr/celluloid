@@ -449,7 +449,7 @@ export function TitleControls({
                   type="date"
                   value={logDate}
                   onChange={(e) => setLogDate(e.target.value)}
-                  className="h-11 w-full rounded-lg bg-surface-2 px-3 text-base text-foreground ring-1 ring-line-strong focus:outline-none focus:ring-2 focus:ring-brand/60 sm:h-10 sm:text-sm [color-scheme:dark]"
+                  className="h-11 w-full rounded-lg bg-surface-2 px-3 text-base text-foreground ring-1 ring-line-strong focus:outline-hidden focus:ring-2 focus:ring-brand/60 forced-colors:border sm:h-10 sm:text-sm [color-scheme:dark]"
                 />
               </div>
               <div className="flex flex-col gap-1.5">
@@ -561,7 +561,7 @@ export function TitleControls({
             latestImmediateRef.current.watchedAt = v;
             commitImmediate();
           }}
-          className="h-11 w-full rounded-lg bg-surface-2 px-3 text-base text-foreground ring-1 ring-line-strong focus:outline-none focus:ring-2 focus:ring-brand/60 sm:h-10 sm:text-sm [color-scheme:dark]"
+          className="h-11 w-full rounded-lg bg-surface-2 px-3 text-base text-foreground ring-1 ring-line-strong focus:outline-hidden focus:ring-2 focus:ring-brand/60 forced-colors:border sm:h-10 sm:text-sm [color-scheme:dark]"
         />
       </Field>
 
