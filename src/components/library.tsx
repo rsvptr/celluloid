@@ -6,6 +6,7 @@ import {
   useDeferredValue,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   useTransition,
@@ -13,9 +14,22 @@ import {
 import {
   filtersToParams,
   type LibraryFilters,
+  type RatingFilter,
   type SortKey,
   type TypeFilter,
 } from "@/lib/library-filters";
+import {
+  hasFiltersBesidesSearch,
+  hasLibraryFilters,
+  libraryExportHref,
+  libraryFilterChips,
+  libraryFiltersReducer,
+  libraryMirrorFilters,
+  libraryResultsKey,
+  toLibraryFilterState,
+  type LibraryFilterUpdate,
+  type LibraryResultCriteria,
+} from "@/lib/library-filter-state";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -195,19 +209,26 @@ export function Library({
   // adjustment below (React's "adjusting state when a prop changes" pattern) runs
   // its setState exactly once per actual count change instead of looping.
   const [reconciledTrashedCount, setReconciledTrashedCount] = useState(trashedCount);
-  const [query, setQuery] = useState(initialFilters.query);
-  const [type, setType] = useState<TypeFilter>(initialFilters.type);
-  const [status, setStatus] = useState<WatchStatus | "all">(initialFilters.status);
-  const [language, setLanguage] = useState<string>(initialFilters.language);
-  const [tag, setTag] = useState<string>(initialFilters.tag);
-  const [genre, setGenre] = useState<string>(initialFilters.genre);
-  const [rating, setRating] = useState<string>(initialFilters.rating);
-  const [sort, setSort] = useState<SortKey>(initialFilters.sort);
-  const [view, setView] = useState<"grid" | "list">(initialFilters.view);
-  const [onlyUnmatched, setOnlyUnmatched] = useState(initialFilters.onlyUnmatched);
-  const [onlyOnServices, setOnlyOnServices] = useState(
-    initialFilters.onlyOnServices ?? false,
+  const [filters, dispatchFilters] = useReducer(
+    libraryFiltersReducer,
+    initialFilters,
+    toLibraryFilterState,
   );
+  const {
+    query,
+    type,
+    status,
+    language,
+    tag,
+    genre,
+    rating,
+    sort,
+    view,
+    onlyUnmatched,
+    onlyOnServices,
+  } = filters;
+  const setFilters = (update: LibraryFilterUpdate) =>
+    dispatchFilters({ type: "set", update });
   // The filters the server last handed down, so a genuinely new set can be told
   // from the same set arriving again.
   const [appliedFilterKey, setAppliedFilterKey] = useState(() =>
@@ -222,22 +243,13 @@ export function Library({
   // component had itself mirrored with replaceState, the key changed, and the
   // remount threw away select mode, the selection, the open filters panel and
   // Trash mode. That re-render now lands here with a key the last prop already
-  // carried, or with the mirrored one whose setters are all no-ops, while
-  // back/forward navigation still re-applies its URL.
+  // carried, or with the mirrored one whose adopt is a no-op (the reducer
+  // keeps the same state), while back/forward navigation still re-applies its
+  // URL.
   const incomingFilterKey = libraryFilterKey(initialFilters);
   if (incomingFilterKey !== appliedFilterKey) {
     setAppliedFilterKey(incomingFilterKey);
-    setQuery(initialFilters.query);
-    setType(initialFilters.type);
-    setStatus(initialFilters.status);
-    setLanguage(initialFilters.language);
-    setTag(initialFilters.tag);
-    setGenre(initialFilters.genre);
-    setRating(initialFilters.rating);
-    setSort(initialFilters.sort);
-    setView(initialFilters.view);
-    setOnlyUnmatched(initialFilters.onlyUnmatched);
-    setOnlyOnServices(initialFilters.onlyOnServices ?? false);
+    dispatchFilters({ type: "adopt", filters: initialFilters });
   }
 
   // The single advanced-filters disclosure (all widths); collapsed by default.
@@ -275,19 +287,7 @@ export function Library({
   const mirrorPendingRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    const currentFilters: LibraryFilters = {
-      query: query.trim(),
-      type,
-      status,
-      language,
-      tag,
-      genre,
-      rating: rating as LibraryFilters["rating"],
-      sort,
-      view,
-      onlyUnmatched,
-      onlyOnServices,
-    };
+    const currentFilters = libraryMirrorFilters(filters);
 
     // Captured while mounted on the library route. A debounced (or
     // unmount-flushed) mirror can fire after an SPA navigation has already
@@ -328,20 +328,9 @@ export function Library({
         mirrorTimeoutRef.current = null;
       }
     };
-  }, [
-    query,
-    type,
-    status,
-    language,
-    tag,
-    genre,
-    rating,
-    sort,
-    view,
-    onlyUnmatched,
-    onlyOnServices,
-    rememberFilters,
-  ]);
+    // The reducer returns the same state when nothing changed, so this runs
+    // exactly when a filter does, as it did with a dependency per filter.
+  }, [filters, rememberFilters]);
 
   // Flushes a still-pending debounced mirror on unmount so the last keystroke's
   // filters aren't lost — the cleanup above only cancels a stale timer between
@@ -357,49 +346,10 @@ export function Library({
     };
   }, []);
 
-  const filtersBesidesSearch =
-    type !== "all" ||
-    status !== "all" ||
-    language !== "all" ||
-    tag !== "all" ||
-    genre !== "all" ||
-    rating !== "all" ||
-    onlyUnmatched ||
-    onlyOnServices;
-  const hasFilters = query !== "" || filtersBesidesSearch;
+  const filtersBesidesSearch = hasFiltersBesidesSearch(filters);
+  const hasFilters = hasLibraryFilters(filters);
 
-  // Active advanced facets, one removable chip each. Excludes type (its own
-  // quick-filter) and sort (ordering, not a filter), so the chip set and the
-  // disclosure badge count stay in step with what actually narrows the results.
-  const facetChips: { key: string; label: string; clear: () => void }[] = [];
-  if (status !== "all")
-    facetChips.push({
-      key: "status",
-      label: `Status: ${STATUS_META[status].label}`,
-      clear: () => setStatus("all"),
-    });
-  if (language !== "all")
-    facetChips.push({
-      key: "language",
-      label: `Language: ${languageName(language)}`,
-      clear: () => setLanguage("all"),
-    });
-  if (genre !== "all")
-    facetChips.push({ key: "genre", label: `Genre: ${genre}`, clear: () => setGenre("all") });
-  if (rating !== "all")
-    facetChips.push({
-      key: "rating",
-      label: rating === "unrated" ? "Rating: Unrated" : `Rating: ${rating}+`,
-      clear: () => setRating("all"),
-    });
-  if (tag !== "all")
-    facetChips.push({ key: "tag", label: `Tag: ${tag}`, clear: () => setTag("all") });
-  if (onlyUnmatched)
-    facetChips.push({
-      key: "unmatched",
-      label: "Needs match",
-      clear: () => setOnlyUnmatched(false),
-    });
+  const facetChips = libraryFilterChips(filters);
   const advancedCount = facetChips.length;
 
   // Folded search text per title, computed once per library rather than once per
@@ -417,7 +367,10 @@ export function Library({
   // the live result count derived from it — catches up a beat behind typing.
   const deferredQuery = useDeferredValue(query);
 
+  const resultsKey = libraryResultsKey(filters);
   const { filtered, uncheckedServiceCount } = useMemo(() => {
+    const { type, status, language, tag, genre, rating, sort, onlyUnmatched, onlyOnServices } =
+      JSON.parse(resultsKey) as LibraryResultCriteria;
     const q = fold(deferredQuery.trim());
     const list: LibraryItem[] = [];
     let unchecked = 0;
@@ -458,22 +411,7 @@ export function Library({
       }
     });
     return { filtered: list, uncheckedServiceCount: unchecked };
-  }, [
-    items,
-    searchIndex,
-    deferredQuery,
-    type,
-    status,
-    language,
-    tag,
-    genre,
-    rating,
-    sort,
-    onlyUnmatched,
-    onlyOnServices,
-    myProviderIds,
-    accountRegion,
-  ]);
+  }, [items, searchIndex, deferredQuery, resultsKey, myProviderIds, accountRegion]);
 
   // The brief intentionally defines staleness from the newest cached result:
   // if even that row is older than a week, the whole visible answer is old.
@@ -568,15 +506,7 @@ export function Library({
   }
 
   function clearFilters() {
-    setQuery("");
-    setType("all");
-    setStatus("all");
-    setLanguage("all");
-    setTag("all");
-    setGenre("all");
-    setRating("all");
-    setOnlyUnmatched(false);
-    setOnlyOnServices(false);
+    dispatchFilters({ type: "clear" });
   }
 
   // useCallback so React.memo(TitleCard) holds and search-as-you-type doesn't
@@ -615,19 +545,7 @@ export function Library({
     router.push(`/title/${pick.id}`);
   }
 
-  // Deep link to /export with the current filters pre-applied (query and the
-  // needs-match toggle have no export equivalent; sort doesn't affect content).
-  const exportHref = useMemo(() => {
-    const p = new URLSearchParams();
-    if (type !== "all") p.set("type", type === "MOVIE" ? "movie" : "tv");
-    if (status !== "all") p.set("status", status);
-    if (tag !== "all") p.set("tag", tag);
-    if (genre !== "all") p.set("genre", genre);
-    if (language !== "all") p.set("lang", language);
-    if (rating !== "all" && rating !== "unrated") p.set("min", rating);
-    const qs = p.toString();
-    return qs ? `/export?${qs}` : "/export";
-  }, [type, status, tag, genre, language, rating]);
+  const exportHref = libraryExportHref(filters);
 
   if (trashMode) {
     return <TrashView trashed={trashed} onExit={() => setTrashMode(false)} />;
@@ -655,7 +573,7 @@ export function Library({
             <Input
               ref={searchInputRef}
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => setFilters({ query: e.target.value })}
               placeholder="Search your library…"
               aria-label="Search your library"
               spellCheck={false}
@@ -689,7 +607,7 @@ export function Library({
               <button
                 key={opt.value}
                 type="button"
-                onClick={() => setType(opt.value)}
+                onClick={() => setFilters({ type: opt.value })}
                 aria-pressed={type === opt.value}
                 className={cn(
                   "focus-ring flex min-h-11 items-center justify-center rounded-md px-3 text-sm press sm:min-h-8",
@@ -704,7 +622,7 @@ export function Library({
           </div>
           <button
             type="button"
-            onClick={() => setOnlyOnServices((value) => !value)}
+            onClick={() => setFilters((f) => ({ onlyOnServices: !f.onlyOnServices }))}
             aria-pressed={onlyOnServices}
             title={
               myProviders.length > 0
@@ -756,7 +674,7 @@ export function Library({
               <button
                 key={chip.key}
                 type="button"
-                onClick={chip.clear}
+                onClick={() => setFilters(chip.clear)}
                 aria-label={`Remove ${chip.label} filter`}
                 className="focus-ring flex min-h-11 min-w-0 items-center gap-1.5 rounded-full bg-surface-2 px-3 text-xs text-foreground ring-1 ring-line press hover:text-foreground sm:min-h-0 sm:py-1"
               >
@@ -799,7 +717,7 @@ export function Library({
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                   <Select
                     value={status}
-                    onChange={(e) => setStatus(e.target.value as WatchStatus | "all")}
+                    onChange={(e) => setFilters({ status: e.target.value as WatchStatus | "all" })}
                     aria-label="Filter by status"
                     className="w-full"
                   >
@@ -813,7 +731,7 @@ export function Library({
                   {languages.length > 1 && (
                     <Select
                       value={language}
-                      onChange={(e) => setLanguage(e.target.value)}
+                      onChange={(e) => setFilters({ language: e.target.value })}
                       aria-label="Filter by language"
                       className="w-full"
                     >
@@ -828,7 +746,7 @@ export function Library({
                   {genres.length > 1 && (
                     <Select
                       value={genre}
-                      onChange={(e) => setGenre(e.target.value)}
+                      onChange={(e) => setFilters({ genre: e.target.value })}
                       aria-label="Filter by genre"
                       className="w-full"
                     >
@@ -842,7 +760,7 @@ export function Library({
                   )}
                   <Select
                     value={rating}
-                    onChange={(e) => setRating(e.target.value)}
+                    onChange={(e) => setFilters({ rating: e.target.value as RatingFilter })}
                     aria-label="Filter by rating"
                     className="w-full"
                   >
@@ -857,7 +775,7 @@ export function Library({
                   {tags.length > 0 && (
                     <Select
                       value={tag}
-                      onChange={(e) => setTag(e.target.value)}
+                      onChange={(e) => setFilters({ tag: e.target.value })}
                       aria-label="Filter by tag"
                       className="w-full"
                     >
@@ -871,7 +789,7 @@ export function Library({
                   )}
                   <Select
                     value={sort}
-                    onChange={(e) => setSort(e.target.value as SortKey)}
+                    onChange={(e) => setFilters({ sort: e.target.value as SortKey })}
                     aria-label="Sort titles"
                     className="w-full"
                   >
@@ -883,7 +801,7 @@ export function Library({
                   </Select>
                   <button
                     type="button"
-                    onClick={() => setOnlyUnmatched((v) => !v)}
+                    onClick={() => setFilters((f) => ({ onlyUnmatched: !f.onlyUnmatched }))}
                     title="Show titles with no TMDB match"
                     aria-pressed={onlyUnmatched}
                     className={cn(
@@ -972,14 +890,14 @@ export function Library({
           <div className="flex items-center gap-1 rounded-lg bg-surface-2 p-0.5 ring-1 ring-line">
             <ViewToggle
               active={view === "grid"}
-              onClick={() => setView("grid")}
+              onClick={() => setFilters({ view: "grid" })}
               label="Grid view"
             >
               <LayoutGrid size={16} />
             </ViewToggle>
             <ViewToggle
               active={view === "list"}
-              onClick={() => setView("list")}
+              onClick={() => setFilters({ view: "list" })}
               label="List view"
             >
               <List size={16} />
@@ -1021,7 +939,7 @@ export function Library({
           hasItems={items.length > 0}
           query={query}
           searchOnly={query !== "" && !filtersBesidesSearch}
-          onClearSearch={() => setQuery("")}
+          onClearSearch={() => setFilters({ query: "" })}
           onClear={clearFilters}
           onlyOnServices={onlyOnServices}
           hasConfiguredProviders={myProviders.length > 0}
