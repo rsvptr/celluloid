@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import {
   Ban,
@@ -36,6 +36,12 @@ import {
   type RecommendRememberedState,
   writeRememberedCookie,
 } from "@/lib/remembered-state-client";
+import {
+  initialRecommendState,
+  recommendationIdentity,
+  recommendReducer,
+  type StreamPhase,
+} from "./recommend-state";
 
 // Neutral and graded by emphasis, not hue: emerald, amber and slate are the
 // Watched, Watching and On hold statuses, and a "Medium" pick must not read as
@@ -52,12 +58,10 @@ const CONFIDENCE_LABELS: Record<Recommendation["confidence"], string> = {
   low: "Low",
 };
 
-type Phase = "idle" | "starting" | "thinking" | "generating";
-
 /** Why a suggestion was hidden — mirrors SuppressionReason in the Prisma schema. */
 type DismissReason = "NOT_INTERESTED" | "SEEN_ELSEWHERE";
 
-const PHASE_LABEL: Record<Exclude<Phase, "idle">, string> = {
+const PHASE_LABEL: Record<StreamPhase, string> = {
   starting: "Reading your taste brief…",
   thinking: "Thinking about what fits your taste…",
   generating: "Picking titles…",
@@ -95,19 +99,6 @@ async function readStreamChunk(
   }
 }
 
-function recommendationIdentity(rec: Recommendation): string {
-  return rec.tmdbId != null
-    ? `${rec.mediaType}:tmdb:${rec.tmdbId}`
-    : `${rec.mediaType}:name:${rec.title.trim().toLocaleLowerCase()}:${rec.year ?? "?"}`;
-}
-
-function visibleRecommendations(
-  recommendations: Recommendation[],
-  dismissed: Set<string>,
-): Recommendation[] {
-  return recommendations.filter((rec) => !dismissed.has(recommendationIdentity(rec)));
-}
-
 function rememberSeenTitle(seen: Set<string>, title: string) {
   seen.delete(title);
   seen.add(title);
@@ -123,43 +114,6 @@ function recommendationError(error: unknown): string {
     return "Celluloid couldn't reach the recommendation service. Check your connection and retry.";
   }
   return message || "Celluloid couldn't generate recommendations. Check your connection and retry.";
-}
-
-/**
- * Final ordering once the stream completes: preference-confirmed picks first
- * (language/era verified via TMDB), then by the model's confidence, keeping
- * stream order as the tiebreak. Mirrors the ranking the batch API used to do.
- */
-function rankRecs(
-  list: Recommendation[],
-  prefLang?: string,
-  prefEra?: RecEraId | "",
-): Recommendation[] {
-  const confRank = { high: 0, medium: 1, low: 2 } as const;
-  const range = prefEra ? REC_ERAS.find((e) => e.id === prefEra)?.range : null;
-  const prefScore = (r: Recommendation) =>
-    (prefLang && r.language === prefLang ? 2 : 0) +
-    (range && r.year != null && r.year >= range[0] && r.year <= range[1] ? 1 : 0);
-  return list
-    .map((r, i) => ({ r, i, s: prefScore(r), c: confRank[r.confidence] ?? 3 }))
-    .sort((a, b) => b.s - a.s || a.c - b.c || a.i - b.i)
-    .map((x) => x.r);
-}
-
-/**
- * Put a dismissed card back at the position it was removed from, so Undo
- * restores the list as it was instead of appending the title to the end. A
- * suggestion that is somehow already back is left alone rather than duplicated.
- */
-function restoreAt(
-  list: Recommendation[] | null,
-  rec: Recommendation,
-  index: number,
-): Recommendation[] {
-  const next = [...(list ?? [])];
-  if (next.includes(rec)) return next;
-  next.splice(Math.min(index, next.length), 0, rec);
-  return next;
 }
 
 // Mood presets that pre-fill the focus field (and optionally narrow the type).
@@ -236,19 +190,13 @@ export function RecommendClient({
   const [genre, setGenre] = useState(initialGenre);
   const [era, setEra] = useState(initialEra);
   const [model, setModel] = useState(initialModel);
-  const [loading, setLoading] = useState(false);
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [error, setError] = useState<string | null>(null);
-  // A single run can emit more than one distinct warning (e.g. a key-fallback
-  // notice up front, then a max-tokens partial notice at the end) — keep them
-  // all instead of the last one clobbering the rest.
-  const [warnings, setWarnings] = useState<string[]>([]);
-  const [recs, setRecs] = useState<Recommendation[] | null>(null);
-  const [receivedAny, setReceivedAny] = useState(false);
+  const [run, dispatch] = useReducer(recommendReducer, initialRecommendState);
+  const loading = run.status === "streaming";
+  const { recs, error, warnings } = run;
+  const receivedAny = run.received.length > 0;
   // Titles shown this session, so "Show different picks" can ask for fresh ones.
   const seen = useRef<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
-  const dismissedRef = useRef<Set<string>>(new Set());
   const resultsRef = useRef<HTMLDivElement>(null);
   // Bumped whenever the "not interested" list changes, so an open review panel
   // reloads instead of showing a list the owner has already moved on from.
@@ -327,11 +275,7 @@ export function RecommendClient({
   async function dismiss(rec: Recommendation, index: number, reason: DismissReason) {
     // Remove the card first: the write is fast and the toast carries Undo, so
     // waiting on the round trip would only make the page feel unresponsive.
-    const identity = recommendationIdentity(rec);
-    dismissedRef.current.add(identity);
-    setRecs((current) =>
-      (current ?? []).filter((item) => recommendationIdentity(item) !== identity),
-    );
+    dispatch({ type: "dismiss", identity: recommendationIdentity(rec) });
     let res: { id?: string; error?: string };
     try {
       res = await suppressSuggestion({
@@ -349,8 +293,7 @@ export function RecommendClient({
     if (!res.id) {
       // Nothing was recorded, so leaving the card hidden would misrepresent what
       // future runs will do — put it back and say so.
-      dismissedRef.current.delete(identity);
-      setRecs((current) => restoreAt(current, rec, index));
+      dispatch({ type: "restore", rec, index });
       toast.error(res.error ?? "Couldn't hide that suggestion. Please try again.");
       return;
     }
@@ -364,8 +307,7 @@ export function RecommendClient({
           : { error: "Couldn't undo that. Restore it under Not interested." },
       failure: "Celluloid couldn't undo that. Check your connection and retry.",
       onSuccess: () => {
-        dismissedRef.current.delete(identity);
-        setRecs((current) => restoreAt(current, rec, index));
+        dispatch({ type: "restore", rec, index });
         setSuppressionsKey((value) => value + 1);
       },
     });
@@ -383,14 +325,7 @@ export function RecommendClient({
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
-    dismissedRef.current = new Set();
-    setLoading(true);
-    setPhase("starting");
-    setError(null);
-    setWarnings([]);
-    setReceivedAny(false);
-    setRecs([]);
-    const got: Recommendation[] = [];
+    dispatch({ type: "start" });
     try {
       const res = await fetch("/api/recommend", {
         method: "POST",
@@ -416,12 +351,14 @@ export function RecommendClient({
       if (!res.ok || !res.body) {
         // Pre-stream failures (auth, rate limit) come back as plain JSON.
         const data = await res.json().catch(() => null);
-        setError(
-          data?.error ??
+        dispatch({
+          type: "fail",
+          error:
+            data?.error ??
             (res.status === 429
               ? "You're going a bit fast. Please wait a moment and try again."
               : `Request failed (${res.status}). Please try again.`),
-        );
+        });
         return;
       }
 
@@ -434,19 +371,15 @@ export function RecommendClient({
       const handle = (ev: RecStreamEvent) => {
         if (abortRef.current !== ac) return;
         if (ev.type === "status") {
-          setPhase(ev.phase);
+          dispatch({ type: "phase", phase: ev.phase });
         } else if (ev.type === "rec") {
-          got.push(ev.rec);
-          setReceivedAny(true);
+          dispatch({ type: "rec", rec: ev.rec });
           rememberSeenTitle(seen.current, ev.rec.title);
-          setRecs(visibleRecommendations(got, dismissedRef.current));
         } else if (ev.type === "warning") {
-          setWarnings((prev) =>
-            prev.includes(ev.message) ? prev : [...prev, ev.message],
-          );
+          dispatch({ type: "warning", message: ev.message });
         } else if (ev.type === "error") {
           receivedTerminalEvent = true;
-          setError(ev.error);
+          dispatch({ type: "fail", error: ev.error });
         } else if (ev.type === "done") {
           receivedTerminalEvent = true;
         }
@@ -476,35 +409,31 @@ export function RecommendClient({
       }
       handleLine(buf.trim());
       if (!receivedTerminalEvent && !ac.signal.aborted) {
-        setError(
-          "This recommendation run was cut short. Anything already suggested is kept; try again for the rest.",
-        );
+        dispatch({
+          type: "fail",
+          error:
+            "This recommendation run was cut short. Anything already suggested is kept; try again for the rest.",
+        });
       }
     } catch (e) {
-      if (e instanceof StreamStallError) setError(e.message);
-      else if ((e as Error).name !== "AbortError") setError(recommendationError(e));
+      if (e instanceof StreamStallError) dispatch({ type: "fail", error: e.message });
+      else if ((e as Error).name !== "AbortError") {
+        dispatch({ type: "fail", error: recommendationError(e) });
+      }
     } finally {
-      // Ranking runs on whatever arrived — full run, stopped early, or errored
-      // partway (partial results stay useful alongside the error message).
       if (abortRef.current === ac) {
-        if (got.length > 0) {
-          setRecs(
-            rankRecs(
-              visibleRecommendations(got, dismissedRef.current),
-              language || undefined,
-              era as RecEraId | "",
-            ),
-          );
-        }
-        setLoading(false);
-        setPhase("idle");
+        dispatch({
+          type: "finish",
+          language: language || undefined,
+          era: era as RecEraId | "",
+        });
       }
     }
   }
 
   // Bring results into view as soon as the first suggestion streams in (on
   // mobile they sit below the form).
-  const recCount = recs?.length ?? 0;
+  const recCount = recs.length;
   const hasResults = recCount > 0;
   useEffect(() => {
     if (hasResults) {
@@ -926,9 +855,7 @@ export function RecommendClient({
               <span>{warning}</span>
               <button
                 type="button"
-                onClick={() =>
-                  setWarnings((current) => current.filter((item) => item !== warning))
-                }
+                onClick={() => dispatch({ type: "dismissWarning", warning })}
                 aria-label="Dismiss warning"
                 className="focus-ring min-h-11 shrink-0 rounded px-2 font-medium text-amber-200/80 hover:text-amber-100 sm:min-h-0"
               >
@@ -947,7 +874,7 @@ export function RecommendClient({
         </form>
       </Card>
 
-      {(loading || (recs && recs.length > 0) || receivedAny) && (
+      {(loading || recs.length > 0 || receivedAny) && (
         <div ref={resultsRef} className="flex scroll-mt-20 flex-col gap-3">
           <div className="flex items-center justify-between gap-3">
             {/* One live region for the whole run. Swapping it for a plain
@@ -960,10 +887,10 @@ export function RecommendClient({
               aria-live="polite"
               className="flex items-center gap-2 text-xs text-muted"
             >
-              {loading && phase !== "idle" ? (
+              {run.status === "streaming" ? (
                 <>
                   <Spinner className="shrink-0" />
-                  {PHASE_LABEL[phase]}
+                  {PHASE_LABEL[run.phase]}
                   {recCount > 0 ? (
                     <span className="tabular-nums">
                       {recCount} of {count} found
@@ -1001,7 +928,7 @@ export function RecommendClient({
             {/* popLayout takes a dismissed card out of the flow as its exit
                 starts, so the others move at once instead of after it (EM-12). */}
             <AnimatePresence initial={false} mode="popLayout">
-                {(recs ?? []).map((r, index) => (
+                {recs.map((r, index) => (
                   <motion.div
                     key={recommendationIdentity(r)}
                     // MO-06: measure only when the list changes, not on every
@@ -1029,7 +956,7 @@ export function RecommendClient({
             </AnimatePresence>
 
             {loading &&
-              Array.from({ length: Math.min(2, Math.max(1, count - (recs?.length ?? 0))) }).map(
+              Array.from({ length: Math.min(2, Math.max(1, count - recs.length)) }).map(
                 (_, i) => (
                   <Card key={`skeleton-${i}`} className="flex min-w-0 items-start gap-3 p-3">
                     <Shimmer className="h-[84px] w-14 shrink-0" />
@@ -1045,7 +972,7 @@ export function RecommendClient({
         </div>
       )}
 
-      {!loading && recs && recs.length === 0 && !error && (
+      {run.status === "done" && recs.length === 0 && (
         <p className="py-8 text-center text-sm text-muted">
           {receivedAny
             ? "You've hidden every suggestion from this run. Try “Show different picks” for another batch."
