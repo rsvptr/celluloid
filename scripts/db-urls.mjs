@@ -45,7 +45,7 @@ export function toDirectUrl(url) {
 }
 
 function describeEndpoint(endpointId) {
-  return endpointId ? `Neon endpoint ${endpointId}` : "a non-Neon host";
+  return endpointId ? `Neon endpoint ${endpointId}` : "an unparseable or non-Neon URL";
 }
 
 // Only called on URLs that matchNeonHost already parsed.

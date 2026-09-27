@@ -2036,7 +2036,7 @@ export async function bulkSetStatus(ids: string[], status: WatchStatus) {
     // One fewer at a time than the pool holds, so the instance's other requests
     // keep a connection. A start can still queue behind those requests, so it
     // may wait 10 s for a connection instead of Prisma's 2 s default.
-    await mapLimit(owned, PRISMA_POOL_MAX - 1, ({ id: titleId }) =>
+    await mapLimit(owned, Math.max(1, PRISMA_POOL_MAX - 1), ({ id: titleId }) =>
       prisma.$transaction(async (tx) => {
         const rows = await tx.$queryRaw<
           { status: WatchStatus; mediaType: MediaType; watchedAt: Date | null }[]

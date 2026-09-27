@@ -133,7 +133,7 @@ jobs:
         run: |
           set -euo pipefail
           id=$(curl -fsS --get -H "Authorization: Bearer $NEON_API_KEY" \
-            --data-urlencode "search=$NEON_BRANCH" "$NEON_API/branches" |
+            --data-urlencode "search=$NEON_BRANCH" --data-urlencode "limit=10000" "$NEON_API/branches" |
             jq -r --arg name "$NEON_BRANCH" '.branches[] | select(.name == $name) | .id')
           if [ -z "$id" ]; then echo "No Neon branch named $NEON_BRANCH; nothing to delete."; exit 0; fi
           curl -fsS -X DELETE -H "Authorization: Bearer $NEON_API_KEY" "$NEON_API/branches/$id" > /dev/null
