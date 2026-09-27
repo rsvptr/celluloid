@@ -121,6 +121,8 @@ export function Nav({ userName }: { userName?: string | null }) {
 
   // Close on outside click / Escape; Escape also returns focus to the trigger
   // (outside click leaves focus wherever the user clicked, which is correct).
+  // Focus moving outside (Tab past "Sign out") closes it too, so it never
+  // floats over the page with focus elsewhere (JK-25).
   useEffect(() => {
     if (!moreOpen) return;
     function onPointerDown(e: PointerEvent) {
@@ -133,6 +135,15 @@ export function Nav({ userName }: { userName?: string | null }) {
       }
       setMoreOpen(false);
     }
+    function onFocusIn(e: FocusEvent) {
+      const target = e.target as Node;
+      if (
+        !morePopoverRef.current?.contains(target) &&
+        !moreTriggerRef.current?.contains(target)
+      ) {
+        setMoreOpen(false);
+      }
+    }
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
         setMoreOpen(false);
@@ -141,9 +152,11 @@ export function Nav({ userName }: { userName?: string | null }) {
     }
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("focusin", onFocusIn);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("focusin", onFocusIn);
     };
   }, [moreOpen]);
 
@@ -233,7 +246,11 @@ export function Nav({ userName }: { userName?: string | null }) {
               </span>
             </button>
             {userName && (
-              <span className="hidden text-sm text-muted lg:inline">{userName}</span>
+              // Names run to 80 characters: cap and truncate so a long one
+              // can't wrap out of the 56px header (JK-30).
+              <span className="hidden max-w-40 truncate text-sm text-muted lg:inline" title={userName}>
+                {userName}
+              </span>
             )}
             <Link
               href="/settings"
@@ -275,7 +292,6 @@ export function Nav({ userName }: { userName?: string | null }) {
                     <motion.div
                       ref={morePopoverRef}
                       id="nav-more-menu"
-                      aria-label="More options"
                       data-motion-enter
                       initial={{ opacity: 0, y: -6, scale: 0.97 }}
                       animate={{ opacity: 1, y: 0, scale: 1 }}
