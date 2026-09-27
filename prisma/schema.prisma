@@ -49,6 +49,7 @@ model User {
   sessions   Session[]
   accounts   Account[]
   twofactors TwoFactor[]
+  authEvents AuthEvent[]
 
   // App relations
   titles       Title[]
@@ -63,11 +64,9 @@ model User {
 
 /**
  * A suggestion the owner explicitly does not want to see again.
- *
  * The recommend page used to hold rejections in a component ref, so they died on
  * reload and a title turned down last week came straight back — burning API
  * budget re-deriving a pick already refused. This makes the refusal durable.
- *
  * Keyed by `matchKey` rather than tmdbId because a suggestion may never resolve
  * to a TMDB entry (regional titles often don't), and those are exactly the ones
  * worth suppressing. The key is "tmdb:<MediaType>:<id>" when matched and
@@ -100,15 +99,15 @@ enum SuppressionReason {
 // A public, read-only snapshot/view of a user's library or a selection of it.
 // Reached via an unguessable slug at /s/[slug] (no auth).
 model ShareList {
-  id           String   @id @default(cuid())
-  slug         String   @unique
-  userId       String
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  name         String?
-  titleIds     String[] @default([]) // empty = whole library; else explicit selection
-  includeNotes Boolean  @default(false)
+  id               String   @id @default(cuid())
+  slug             String   @unique
+  userId           String
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name             String?
+  titleIds         String[] @default([]) // empty = whole library; else explicit selection
+  includeNotes     Boolean  @default(false)
   // Whole-library shares hide not-yet-watched WATCHLIST titles unless this is set.
-  includeWatchlist Boolean @default(false)
+  includeWatchlist Boolean  @default(false)
 
   // Scope + lifecycle. `titleIds` is retained during the transition to
   // ShareListItem and will be dropped in a later migration.
@@ -212,6 +211,25 @@ model RateLimit {
   @@map("rateLimit")
 }
 
+// Auth audit trail (BA-15): one row per sign-in, sign-out and security change,
+// written by the hooks in src/lib/auth.ts through src/lib/auth-events.ts. The
+// session rows can't serve, because a password change or "Sign out everywhere
+// else" deletes them. `type` is a short event name that the code validates
+// (AUTH_EVENT_TYPES). No email and no secrets are stored, and the user agent is
+// cut to 200 characters. The nightly cron deletes rows older than 90 days.
+model AuthEvent {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  // Settings lists a user's latest events.
+  @@index([userId, createdAt])
+}
+
 // One global reservation counter per UTC day for recommendation runs that use
 // the deployment's shared Anthropic key. Personal-key runs never touch it.
 model SharedAiDailyUsage {
@@ -289,9 +307,9 @@ model Title {
   // These ride along on a request the sync makes anyway; the library's "On my
   // services" filter reads them against User.myProviders. The title page still
   // asks TMDB directly for what it shows today.
-  streamProviderIds  Int[]     @default([])
-  providersRegion    String?
-  providersSyncedAt  DateTime?
+  streamProviderIds Int[]     @default([])
+  providersRegion   String?
+  providersSyncedAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
