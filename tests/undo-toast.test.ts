@@ -18,13 +18,24 @@ function current(id: string | number) {
   };
 }
 
-function clickUndo(id: string | number) {
+// A stand-in for the Undo button inside its toast <li>. The helper reads
+// document.activeElement, which Node doesn't have.
+function fakeButton() {
+  const toastElement = { focused: 0, focus: () => (toastElement.focused += 1) };
+  const button = { closest: () => toastElement, toastElement };
+  return button;
+}
+const doc = { activeElement: null as unknown };
+(globalThis as { document?: unknown }).document = doc;
+
+function clickUndo(id: string | number, button = fakeButton()) {
   let prevented = false;
   const event = {
+    currentTarget: button,
     preventDefault: () => {
       prevented = true;
     },
-  } as MouseEvent<HTMLButtonElement>;
+  } as unknown as MouseEvent<HTMLButtonElement>;
   current(id).action!.onClick(event);
   return prevented;
 }
@@ -102,5 +113,29 @@ describe("undo toast updates in place (EM-06)", () => {
     assert.equal(current(id).type, "error");
     assert.equal(current(id).title, "Couldn't restore every title. Check Trash and retry.");
     assert.equal(errored, 1);
+  });
+});
+
+describe("Undo keeps keyboard focus in the toast", () => {
+  const options = {
+    undo: async () => ({}),
+    success: "Watched change undone",
+    failure: "Couldn't undo that watched change. Try again.",
+  };
+
+  it("moves focus from the Undo button to its toast before the button goes", () => {
+    const id = undoToast("Marked watched", options);
+    const button = fakeButton();
+    doc.activeElement = button;
+    clickUndo(id, button);
+    assert.equal(button.toastElement.focused, 1);
+    doc.activeElement = null;
+  });
+
+  it("leaves focus alone when the button wasn't focused (e.g. a Safari click)", () => {
+    const id = undoToast("Marked watched", options);
+    const button = fakeButton();
+    clickUndo(id, button);
+    assert.equal(button.toastElement.focused, 0);
   });
 });

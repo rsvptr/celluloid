@@ -35,6 +35,14 @@ export function undoToast(message: string, options: UndoToastOptions) {
       label: "Undo",
       onClick: (event) => {
         event.preventDefault();
+        // The update below removes this button. If it had focus, park focus on
+        // the toast itself (Sonner makes it focusable) so it doesn't fall to
+        // <body>; the text changes are still announced by Sonner's live region.
+        if (document.activeElement === event.currentTarget) {
+          event.currentTarget
+            .closest<HTMLElement>("[data-sonner-toast]")
+            ?.focus({ preventScroll: true });
+        }
         toast.loading("Undoing…", { id, action: undefined });
         void undo().then(
           (result) => {

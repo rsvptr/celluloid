@@ -58,6 +58,9 @@ export default async function AppLayout({
             color: "var(--color-foreground)",
           },
           classNames: {
+            // Undo parks focus on the toast (undo-toast.ts); Sonner's own
+            // focus shadow is invisible on dark, so use the app's ring.
+            toast: "focus-ring",
             actionButton: "min-h-11 sm:min-h-0",
             // The inline style above beat richColors (JK-20), so errors looked
             // like successes. They get the danger token on the border (its
