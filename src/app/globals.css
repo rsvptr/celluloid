@@ -179,7 +179,8 @@ label {
     rgba(231, 238, 246, 0.06),
     transparent
   );
-  animation: shimmer 1.6s infinite;
+  /* Constant motion is linear (EM-16); `ease` surged and stalled each sweep. */
+  animation: shimmer 1.6s linear infinite;
 }
 
 /* Chevron affordance for native selects (which use appearance-none) */

@@ -72,4 +72,10 @@ describe("motion polish", () => {
     assert.match(link, /(^| )focus:translate-y-0( |$)/);
     assert.doesNotMatch(link, /(^| )(transition|duration|ease)[\w-[\]]*( |$)/);
   });
+
+  it("sweeps the skeleton shimmer at a constant speed (EM-16)", async () => {
+    const css = await source("app/globals.css");
+    const shimmer = css.slice(css.indexOf(".shimmer::after {"), css.indexOf("}", css.indexOf(".shimmer::after {")));
+    assert.match(shimmer, /animation: shimmer 1\.6s linear infinite;/);
+  });
 });
