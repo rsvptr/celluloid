@@ -359,6 +359,14 @@ describe("auth audit trail against Postgres (BA-15)", { concurrency: false }, ()
     assert.deepEqual(await newTypes(), []);
   });
 
+  it("records signing out everywhere at once, and nothing for a request without a session", async () => {
+    assert.equal((await phone("/revoke-sessions")).status, 401);
+    assert.deepEqual(await newTypes(), []);
+    assert.equal((await laptop("/revoke-sessions")).status, 200);
+    assert.equal(await prisma.session.count({ where: { userId } }), 0);
+    assert.deepEqual(await newTypes(), ["all_sessions_revoked"], "one event, not one per session");
+  });
+
   it("still signs in, changes the password and signs out when every audit write fails", async () => {
     const logged: unknown[][] = [];
     const realError = console.error;

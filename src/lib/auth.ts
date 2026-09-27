@@ -138,6 +138,11 @@ const recordAccountChange = createAuthMiddleware(async (ctx) => {
     case "/revoke-other-sessions":
       type = "other_sessions_revoked";
       break;
+    case "/revoke-sessions":
+      // Every session, this one included. The UI never calls it; a stolen
+      // session could, to sign the owner out everywhere.
+      type = "all_sessions_revoked";
+      break;
   }
   if (type) await recordAuthEvent(session.user.id, type, ctx);
 });
