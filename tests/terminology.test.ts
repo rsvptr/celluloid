@@ -36,7 +36,7 @@ describe("terminology and button labels (JK-32)", () => {
 
   it("gives Cancel import a distinct way to stay", async () => {
     const [confirm, review] = await Promise.all([
-      source("../src/components/confirm-dialog.tsx"),
+      source("../src/components/confirm-dialog-view.tsx"),
       source("../src/components/import-review.tsx"),
     ]);
     assert.match(confirm, /\{opts\.cancelLabel \?\? "Cancel"\}/);

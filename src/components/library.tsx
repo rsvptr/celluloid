@@ -22,7 +22,8 @@ import { useRouter } from "next/navigation";
 import { CheckSquare, Dices, LayoutGrid, List, Share2 } from "lucide-react";
 import { toast } from "sonner";
 import type { LibraryItem, TrashedTitle } from "@/lib/data";
-import { ShareDialog } from "./share-dialog";
+import dynamic from "next/dynamic";
+import { whenIdle } from "@/lib/when-idle";
 import { BulkBar } from "./library-bulk-bar";
 import { LibraryFilterPanel } from "./library-filter-panel";
 import { LibraryFiltersContext } from "./library-filters-context";
@@ -41,6 +42,12 @@ import {
 // Defined beside the empty state that also uses it; importable from the entry
 // like this module's other helpers.
 export { uncheckedProviderCopy };
+
+// Keeps Radix Dialog out of the library's first load (VE-11). ssr: false gives
+// it its own Suspense boundary, so loading it never suspends the library.
+const ShareDialog = dynamic(() => import("./share-dialog").then((m) => m.ShareDialog), {
+  ssr: false,
+});
 
 /**
  * Case- and diacritic-insensitive fold for search. A library that leans
@@ -172,6 +179,13 @@ export function Library({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [shareOpen, setShareOpen] = useState(false);
   const [shareIds, setShareIds] = useState<string[]>([]);
+  // The share dialog mounts once the page is idle, or on the first open if
+  // that comes sooner, and then stays mounted so it can animate out (EM-03).
+  // Mounting ahead of the click matters: a lazy component that first suspends
+  // on the click shows up no sooner than 300 ms later (React throttles
+  // Suspense reveals), even with its chunk already cached.
+  const [shareMounted, setShareMounted] = useState(false);
+  useEffect(() => whenIdle(() => setShareMounted(true)), []);
   // Remember what was focused when the share dialog opened, to restore on close.
   const shareOpener = useRef<HTMLElement | null>(null);
   // The advanced-filters disclosure trigger, so Escape can return focus to it.
@@ -434,6 +448,7 @@ export function Library({
   function openShare(ids: string[]) {
     shareOpener.current = (document.activeElement as HTMLElement) ?? null;
     setShareIds(ids);
+    setShareMounted(true);
     setShareOpen(true);
   }
 
@@ -603,13 +618,15 @@ export function Library({
           onDone={exitSelect}
         />
 
-        <ShareDialog
-          open={shareOpen}
-          onClose={() => setShareOpen(false)}
-          titleIds={shareIds}
-          count={shareIds.length}
-          opener={shareOpener}
-        />
+        {shareMounted && (
+          <ShareDialog
+            open={shareOpen}
+            onClose={() => setShareOpen(false)}
+            titleIds={shareIds}
+            count={shareIds.length}
+            opener={shareOpener}
+          />
+        )}
       </div>
     </LibraryFiltersContext>
   );
