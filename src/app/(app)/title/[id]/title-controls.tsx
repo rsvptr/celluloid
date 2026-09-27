@@ -209,6 +209,7 @@ export function TitleControls({
       titleId: string;
       occurredAt: string;
       restoreWatchedAt: string | null;
+      restoreStatus: WatchStatus;
     } | null = null;
     try {
       while (
@@ -295,7 +296,12 @@ export function TitleControls({
       const undo = watchedUndo;
       undoToast("Marked watched", {
         undo: () =>
-          undoWatchedTransition(undo.titleId, undo.occurredAt, undo.restoreWatchedAt),
+          undoWatchedTransition(
+            undo.titleId,
+            undo.occurredAt,
+            undo.restoreWatchedAt,
+            undo.restoreStatus,
+          ),
         success: "Watched change undone",
         failure: "Couldn't undo that watched change. Try again.",
         onError: () => router.refresh(),

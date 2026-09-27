@@ -68,6 +68,15 @@ export const IMPORT_COMMIT_BUDGET_MS = 45_000;
  */
 const STALE_PARSING_MS = 5 * 60_000;
 
+/**
+ * Transaction timeout for reconcileImportActions' writes. They are one
+ * updateMany per distinct outcome, a handful whatever the row count, so the 5 s
+ * default already fits a normal link. This triples it for a slow one (a laptop
+ * on the Neon dev branch), and still leaves the staging request about 10 s of
+ * the 25 s its 60 s maxDuration has left after IMPORT_STAGING_BUDGET_MS.
+ */
+const RECONCILE_TX_TIMEOUT_MS = 15_000;
+
 const NO_MATCH_WARNING = "No confident TMDB match. Choose a match or exclude this row.";
 const CREATED_WITHOUT_PERSONAL_FIELDS_WARNING = "Saved without its status and rating.";
 
@@ -230,48 +239,61 @@ export async function reconcileImportActions(userId: string, jobId: string) {
     existingKeys,
   );
 
-  await prisma.$transaction(async (tx) => {
-    for (const item of job.items) {
-      // Produced titles and exhausted failures are terminal audit records. A
-      // different row's review edit must not erase their warning/errorCode.
-      if (
-        item.titleId ||
-        (item.action === "FAILED" && item.attempts >= IMPORT_MAX_ATTEMPTS)
-      ) {
-        continue;
-      }
-      const next = plan.get(item.id);
-      const invalid = invalidItemIds.has(item.id) && next?.action !== "SKIP";
-      const timedOut =
-        !invalid && next?.action === "CONFLICT" && timedOutItemIds.has(item.id);
-      const nextWarning = invalid
-        ? INVALID_STAGED_ROW_WARNING
-        : timedOut
-          ? MATCH_TIMED_OUT_WARNING
-          : next?.warning;
-      const nextErrorCode = invalid
-        ? INVALID_STAGED_ROW_ERROR
-        : timedOut
-          ? MATCH_TIMED_OUT_ERROR
-          : null;
-      if (
-        !next ||
-        (next.action === item.action &&
-          nextWarning === item.warning &&
-          nextErrorCode === item.errorCode)
-      ) {
-        continue;
-      }
-      await tx.importItem.update({
-        where: { id: item.id },
-        data: {
-          action: next.action,
-          warning: nextWarning,
-          errorCode: nextErrorCode,
-        },
-      });
+  // Staging inserts every row as CREATE, so a re-import flips most of its up to
+  // 250 rows here, and one round trip per row could outrun the transaction
+  // timeout (PR-03). Rows are decided before the transaction and grouped by
+  // their new (action, warning, errorCode), so it holds one updateMany a group.
+  const writes = new Map<
+    string,
+    { data: Prisma.ImportItemUpdateManyMutationInput; ids: string[] }
+  >();
+  for (const item of job.items) {
+    // Produced titles and exhausted failures are terminal audit records. A
+    // different row's review edit must not erase their warning/errorCode.
+    if (
+      item.titleId ||
+      (item.action === "FAILED" && item.attempts >= IMPORT_MAX_ATTEMPTS)
+    ) {
+      continue;
     }
-  });
+    const next = plan.get(item.id);
+    const invalid = invalidItemIds.has(item.id) && next?.action !== "SKIP";
+    const timedOut =
+      !invalid && next?.action === "CONFLICT" && timedOutItemIds.has(item.id);
+    const nextWarning = invalid
+      ? INVALID_STAGED_ROW_WARNING
+      : timedOut
+        ? MATCH_TIMED_OUT_WARNING
+        : next?.warning;
+    const nextErrorCode = invalid
+      ? INVALID_STAGED_ROW_ERROR
+      : timedOut
+        ? MATCH_TIMED_OUT_ERROR
+        : null;
+    if (
+      !next ||
+      (next.action === item.action &&
+        nextWarning === item.warning &&
+        nextErrorCode === item.errorCode)
+    ) {
+      continue;
+    }
+    const key = JSON.stringify([next.action, nextWarning, nextErrorCode]);
+    const data = { action: next.action, warning: nextWarning, errorCode: nextErrorCode };
+    const group = writes.get(key);
+    if (group) group.ids.push(item.id);
+    else writes.set(key, { data, ids: [item.id] });
+  }
+
+  // One transaction, so a failed write still leaves every row as it was.
+  if (writes.size > 0) {
+    await prisma.$transaction(
+      [...writes.values()].map(({ data, ids }) =>
+        prisma.importItem.updateMany({ where: { jobId, id: { in: ids } }, data }),
+      ),
+      { timeout: RECONCILE_TX_TIMEOUT_MS },
+    );
+  }
   return getImportJobView(userId, jobId);
 }
 

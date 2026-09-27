@@ -210,7 +210,12 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
         if (undo) {
           undoToast(message, {
             undo: () =>
-              undoWatchedTransition(undo.titleId, undo.occurredAt, undo.restoreWatchedAt),
+              undoWatchedTransition(
+                undo.titleId,
+                undo.occurredAt,
+                undo.restoreWatchedAt,
+                undo.restoreStatus,
+              ),
             success: `Undid watched change for ${title.name}`,
             failure: "Couldn't undo that watched change. Try again.",
             onError: () => router.refresh(),

@@ -108,6 +108,7 @@ const undoWatchedTransitionSchema = z.object({
   titleId: idSchema,
   occurredAt: dateStringSchema,
   restoreWatchedAt: dateStringSchema.nullable(),
+  restoreStatus: watchStatusSchema,
 });
 const episodeToggleSchema = z.object({ episodeId: idSchema, watched: z.boolean() });
 const seasonToggleSchema = z.object({ seasonId: idSchema, watched: z.boolean() });
@@ -276,11 +277,27 @@ type LockedProgressTitle = {
   watchedAt: Date | null;
 };
 
-/** Recompute denormalized episode progress while the caller holds the Title lock. */
+/** The status that `watched` of `total` episodes leaves in place of `status`. */
+function progressStatus(status: WatchStatus, watched: number, total: number) {
+  // Don't override deliberate ON_HOLD / DROPPED choices. At zero progress,
+  // preserve every deliberate state except WATCHED: removing the final tick
+  // must stop claiming the show is complete, but WATCHING stays WATCHING.
+  if (status === WatchStatus.ON_HOLD || status === WatchStatus.DROPPED) return status;
+  if (watched === 0) return status === WatchStatus.WATCHED ? WatchStatus.WATCHLIST : status;
+  if (total > 0 && watched >= total) return WatchStatus.WATCHED;
+  return WatchStatus.WATCHING;
+}
+
+/**
+ * Recompute denormalized episode progress while the caller holds the Title lock.
+ * `restoreStatus` is the status an undo would put back; it is used only when
+ * progressStatus would leave it unchanged, otherwise the usual recount applies.
+ */
 async function recomputeProgress(
   tx: Prisma.TransactionClient,
   titleId: string,
   title: LockedProgressTitle,
+  restoreStatus?: WatchStatus,
 ) {
   const total = await tx.episode.count({
     where: { season: { titleId }, ...ACTIVE_EPISODE_FILTER },
@@ -289,17 +306,11 @@ async function recomputeProgress(
     where: { season: { titleId }, watched: true, ...ACTIVE_EPISODE_FILTER },
   });
 
-  let status = title.status;
-  // Don't override deliberate ON_HOLD / DROPPED choices. At zero progress,
-  // preserve every deliberate state except WATCHED: removing the final tick
-  // must stop claiming the show is complete, but WATCHING stays WATCHING.
-  if (status !== WatchStatus.ON_HOLD && status !== WatchStatus.DROPPED) {
-    if (watched === 0) {
-      if (status === WatchStatus.WATCHED) status = WatchStatus.WATCHLIST;
-    }
-    else if (total > 0 && watched >= total) status = WatchStatus.WATCHED;
-    else status = WatchStatus.WATCHING;
-  }
+  const status =
+    restoreStatus !== undefined &&
+    progressStatus(restoreStatus, watched, total) === restoreStatus
+      ? restoreStatus
+      : progressStatus(title.status, watched, total);
 
   const data: { watchedEpisodes: number; status: WatchStatus; watchedAt?: Date } = {
     watchedEpisodes: watched,
@@ -537,6 +548,8 @@ export async function updateTitle(
       undoWatchedAt:
         reversibleTvCompletion && completionAt ? completionAt.toISOString() : undefined,
       restoreWatchedAt: restoreWatchedAt?.toISOString() ?? null,
+      // The locked row's status before this transition, for undo to put back.
+      restoreStatus: title.status,
     };
   });
   if (!found) return { error: "Title not found." };
@@ -547,6 +560,7 @@ export async function updateTitle(
           titleId: id,
           occurredAt: found.undoWatchedAt,
           restoreWatchedAt: found.restoreWatchedAt,
+          restoreStatus: found.restoreStatus,
         },
       }
     : {};
@@ -561,11 +575,15 @@ export async function updateTitle(
  * The title's watchedAt returns to the token's restoreWatchedAt under the same
  * guard, which takes back an auto-stamp without clearing a date the owner set,
  * then follows any surviving viewing as syncWatchedAtFromEvents does elsewhere.
+ * The status returns to the token's restoreStatus while the title is still
+ * WATCHED, as long as the progress left after the undo allows it. A status
+ * chosen since the mark is left alone.
  */
 export async function undoWatchedTransition(
   titleId: string,
   occurredAt: string,
   restoreWatchedAt: string | null,
+  restoreStatus: WatchStatus,
 ): Promise<{ ok?: true; error?: string }> {
   const userId = await getUserId();
   if (!userId) return { error: SIGNED_OUT_MESSAGE };
@@ -573,6 +591,7 @@ export async function undoWatchedTransition(
     titleId,
     occurredAt,
     restoreWatchedAt,
+    restoreStatus,
   });
   if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   const transitionAt = toDate(parsed.data.occurredAt);
@@ -587,9 +606,10 @@ export async function undoWatchedTransition(
         status: WatchStatus;
         watchedAt: Date | null;
         watchedEpisodes: number;
+        totalEpisodes: number | null;
         mediaType: MediaType;
       }[]
-    >`SELECT id, "userId", status, "watchedAt", "watchedEpisodes", "mediaType"
+    >`SELECT id, "userId", status, "watchedAt", "watchedEpisodes", "totalEpisodes", "mediaType"
       FROM "Title" WHERE id = ${titleId} AND "userId" = ${userId} FOR UPDATE`;
     const title = rows[0];
     if (!title || title.mediaType !== MediaType.TV) return false;
@@ -650,19 +670,42 @@ export async function undoWatchedTransition(
       });
       await syncWatchedAtFromEvents(tx, titleId, restoreAt);
     }
+    // Status. If the title is no longer WATCHED, the owner chose a status after
+    // the mark, and the undo leaves it alone: only the episode count follows the
+    // unticks. While it is still WATCHED, the token's prior status comes back
+    // wherever progressStatus would keep it for the progress the undo leaves.
+    // Otherwise the recount decides, which is intended and matches the progress
+    // rule: WATCHLIST with episodes still ticked comes back WATCHING, and on a
+    // show with Episode rows, WATCHING or WATCHLIST over a run whose every
+    // episode was already ticked before Mark watched stays WATCHED.
+    const priorStatus =
+      title.status === WatchStatus.WATCHED ? parsed.data.restoreStatus : undefined;
 
     const episodeRows = await tx.episode.count({ where: { season: { titleId } } });
-    if (episodeRows > 0) {
-      await recomputeProgress(tx, titleId, title);
+    if (priorStatus === undefined) {
+      if (episodeRows > 0) {
+        const watchedEpisodes = await tx.episode.count({
+          where: { season: { titleId }, watched: true, ...ACTIVE_EPISODE_FILTER },
+        });
+        await tx.title.update({ where: { id: titleId }, data: { watchedEpisodes } });
+      }
+    } else if (episodeRows > 0) {
+      await recomputeProgress(tx, titleId, title, priorStatus);
     } else {
       // Imported TV titles can carry aggregate progress without materialized
       // Episode rows. Preserve that counter and restore its natural non-complete
       // state instead of recounting it to zero.
+      const keepsPrior =
+        progressStatus(priorStatus, title.watchedEpisodes, title.totalEpisodes ?? 0) ===
+        priorStatus;
       await tx.title.update({
         where: { id: titleId },
         data: {
-          status:
-            title.watchedEpisodes > 0 ? WatchStatus.WATCHING : WatchStatus.WATCHLIST,
+          status: keepsPrior
+            ? priorStatus
+            : title.watchedEpisodes > 0
+              ? WatchStatus.WATCHING
+              : WatchStatus.WATCHLIST,
         },
       });
     }
