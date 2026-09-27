@@ -185,6 +185,7 @@ export function WatchHistoryList({
                   className="flex flex-col gap-2"
                   onSubmit={(e) => {
                     e.preventDefault();
+                    if (pending) return;
                     save(event);
                   }}
                 >

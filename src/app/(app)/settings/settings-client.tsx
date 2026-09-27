@@ -287,6 +287,7 @@ function ProfileSection({ name, email }: { name: string; email: string }) {
         className="flex flex-col gap-3"
         onSubmit={(e) => {
           e.preventDefault();
+          if (pending || value.trim() === name) return;
           start(async () => {
             try {
               const r = await updateProfile(value);
@@ -725,6 +726,7 @@ function ApiKeySection({
         className="flex flex-col gap-3"
         onSubmit={(e) => {
           e.preventDefault();
+          if (pending || !key.trim()) return;
           start(async () => {
             setError(null);
             setStatus(null);
@@ -1440,6 +1442,7 @@ function PasswordSection() {
         className="flex flex-col gap-3"
         onSubmit={(e) => {
           e.preventDefault();
+          if (pending) return;
           if (!current || next.length < 10) {
             const field = !current ? "current" : "new";
             // Render aria-invalid and the message before focus lands, so the
@@ -1965,6 +1968,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
           className="flex flex-col gap-3"
           onSubmit={(e) => {
             e.preventDefault();
+            if (busy || !password) return;
             void beginEnable();
           }}
         >
@@ -1997,6 +2001,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
           className="flex flex-col gap-4"
           onSubmit={(e) => {
             e.preventDefault();
+            if (busy || code.length < 6) return;
             void confirmEnable();
           }}
         >

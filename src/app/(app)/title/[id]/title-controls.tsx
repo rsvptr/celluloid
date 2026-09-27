@@ -464,6 +464,7 @@ export function TitleControls({
               className="mt-4 flex flex-col gap-3"
               onSubmit={(e) => {
                 e.preventDefault();
+                if (isLogging) return;
                 submitLog();
               }}
             >

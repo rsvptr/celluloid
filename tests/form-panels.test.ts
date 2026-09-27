@@ -21,6 +21,9 @@ function formAround(file: string, marker: string): string {
 function assertSubmits(file: string, label: string) {
   const form = formAround(file, label);
   assert.match(form, /onSubmit=\{(async )?\(e\) => \{\s*e\.preventDefault\(\);/, `${label}: no onSubmit`);
+  // form.requestSubmit() (some password managers' fill-and-submit) skips the
+  // disabled-default-button check, so onSubmit refuses on its own.
+  assert.match(form, /e\.preventDefault\(\);\s*if \(.+\) return;/, `${label}: onSubmit not guarded`);
   const at = form.indexOf(label);
   const button = form.slice(form.lastIndexOf("<Button", at), at);
   assert.match(button, /type="submit"/, `${label}: not a submit button`);
