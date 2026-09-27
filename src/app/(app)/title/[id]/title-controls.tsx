@@ -460,6 +460,7 @@ export function TitleControls({
               rewatch.
             </Dialog.Description>
             <form
+              method="post"
               className="mt-4 flex flex-col gap-3"
               onSubmit={(e) => {
                 e.preventDefault();

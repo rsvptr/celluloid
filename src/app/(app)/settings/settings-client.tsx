@@ -283,6 +283,7 @@ function ProfileSection({ name, email }: { name: string; email: string }) {
   return (
     <Section icon={User} title="Profile">
       <form
+        method="post"
         className="flex flex-col gap-3"
         onSubmit={(e) => {
           e.preventDefault();
@@ -720,6 +721,7 @@ function ApiKeySection({
       description="Powers your AI recommendations. Stored encrypted. You can grab one at console.anthropic.com."
     >
       <form
+        method="post"
         className="flex flex-col gap-3"
         onSubmit={(e) => {
           e.preventDefault();
@@ -1434,6 +1436,7 @@ function PasswordSection() {
   return (
     <Section icon={KeyRound} title="Password">
       <form
+        method="post"
         className="flex flex-col gap-3"
         onSubmit={(e) => {
           e.preventDefault();
@@ -1912,6 +1915,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
     >
       {on ? (
         <form
+          method="post"
           className="flex flex-col gap-3"
           onSubmit={(e) => {
             e.preventDefault();
@@ -1947,6 +1951,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
         </form>
       ) : phase === "idle" ? (
         <form
+          method="post"
           className="flex flex-col gap-3"
           onSubmit={(e) => {
             e.preventDefault();
@@ -1978,6 +1983,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
         </form>
       ) : (
         <form
+          method="post"
           className="flex flex-col gap-4"
           onSubmit={(e) => {
             e.preventDefault();
@@ -2558,6 +2564,7 @@ function DangerSection() {
       description="This wipes your account and everything in it. There's no undo."
     >
       <form
+        method="post"
         className="rounded-lg border border-rose-500/25 bg-rose-500/5 p-4"
         onSubmit={async (e) => {
           e.preventDefault();

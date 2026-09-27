@@ -140,6 +140,7 @@ export function TagEditor({
       </div>
 
       <form
+        method="post"
         onSubmit={(e) => {
           e.preventDefault();
           add(input);

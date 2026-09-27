@@ -181,6 +181,7 @@ export function WatchHistoryList({
             <li key={event.id} className="text-sm">
               {editingId === event.id ? (
                 <form
+                  method="post"
                   className="flex flex-col gap-2"
                   onSubmit={(e) => {
                     e.preventDefault();

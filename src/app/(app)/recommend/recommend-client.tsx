@@ -554,6 +554,7 @@ export function RecommendClient({
 
       <Card className="p-5">
         <form
+          method="post"
           className="flex flex-col gap-5"
           aria-busy={loading}
           onSubmit={(event) => {
