@@ -12,10 +12,26 @@ describe("app Toaster config", () => {
       source("../src/app/(app)/layout.tsx"),
       source("../src/components/library.tsx"),
     ]);
-    assert.match(layout, /offset=\{\{ bottom: "var\(--toast-bottom, 24px\)" \}\}/);
+    assert.match(
+      layout,
+      /offset=\{\{ bottom: "var\(--toast-bottom, var\(--toast-desktop-bottom, 24px\)\)" \}\}/,
+    );
     assert.match(layout, /mobileOffset=\{\{\s*bottom: "var\(--toast-bottom, /);
     // The bar publishes its own measured height plus a gap at every width.
     assert.match(library, /"--toast-bottom",\s*`\$\{Math\.ceil\(bar\.getBoundingClientRect\(\)\.height\) \+ 8\}px`/);
+  });
+
+  it("clears the tab bar on Sonner's desktop layout until the bar hides at lg", async () => {
+    const [layout, nav] = await Promise.all([
+      source("../src/app/(app)/layout.tsx"),
+      source("../src/components/nav.tsx"),
+    ]);
+    // The mobile tab bar is the fixed bottom bar hidden from lg up.
+    assert.match(nav, /className="fixed inset-x-0 bottom-0 [^"]*\blg:hidden\b/);
+    assert.match(
+      layout,
+      /className="\[--toast-desktop-bottom:calc\(4\.5rem\+env\(safe-area-inset-bottom\)\)\] lg:\[--toast-desktop-bottom:24px\]"/,
+    );
   });
 
   it("marks error toasts with the danger token instead of a no-op richColors (JK-20)", async () => {

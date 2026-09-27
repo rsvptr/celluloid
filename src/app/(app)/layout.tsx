@@ -47,7 +47,10 @@ export default async function AppLayout({
         // wide. 24px is Sonner's own desktop default, so other pages don't move.
         // The toaster drops back when the bar closes (bottom isn't
         // transitioned); a static offset would float every toast high instead.
-        offset={{ bottom: "var(--toast-bottom, 24px)" }}
+        // Sonner's desktop layout starts at 601px, but the tab bar shows until
+        // lg (nav.tsx, lg:hidden), so below lg the fallback clears it too.
+        className="[--toast-desktop-bottom:calc(4.5rem+env(safe-area-inset-bottom))] lg:[--toast-desktop-bottom:24px]"
+        offset={{ bottom: "var(--toast-bottom, var(--toast-desktop-bottom, 24px))" }}
         mobileOffset={{
           bottom: "var(--toast-bottom, calc(4.5rem + env(safe-area-inset-bottom)))",
         }}
