@@ -132,7 +132,7 @@ function TitleCardImpl({
           <span
             id={`${id}-new`}
             className={cn(
-              "absolute right-1.5 rounded-md bg-brand/90 px-1.5 py-0.5 text-[10px] font-medium text-on-accent shadow",
+              "absolute right-1.5 rounded-md bg-brand/90 px-1.5 py-0.5 text-xs font-medium text-on-accent shadow",
               // Stack under the favorite heart instead of overlapping it.
               item.favorite ? "top-7" : "top-1.5",
             )}
@@ -143,7 +143,7 @@ function TitleCardImpl({
         {!selectable && item.tmdbRating ? (
           <span
             id={`${id}-rating`}
-            className="absolute bottom-1.5 right-1.5 flex items-center gap-0.5 rounded-md bg-black/75 px-1.5 py-0.5 text-[11px] font-medium text-amber-300"
+            className="absolute bottom-1.5 right-1.5 flex items-center gap-0.5 rounded-md bg-black/75 px-1.5 py-0.5 text-xs font-medium text-amber-300"
           >
             <Star size={11} className="fill-amber-300" />
             <span className="sr-only">TMDB rating{" "}</span>
@@ -156,7 +156,7 @@ function TitleCardImpl({
         {!selectable && item.tmdbId === null ? (
           <span
             id={`${id}-unmatched`}
-            className="absolute bottom-1.5 left-1.5 rounded-md bg-black/75 px-1.5 py-0.5 text-[10px] font-medium text-amber-300/90 ring-1 ring-amber-400/30"
+            className="absolute bottom-1.5 left-1.5 rounded-md bg-black/75 px-1.5 py-0.5 text-xs font-medium text-amber-300/90 ring-1 ring-amber-400/30"
           >
             Unmatched
           </span>

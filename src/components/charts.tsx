@@ -51,7 +51,8 @@ export function ColumnChart({
   // Bars are sized in PIXELS, not percentages: the column wrappers get their
   // height from content (the row only bottom-aligns them), so a % height has
   // no definite parent to resolve against and silently computes to 0.
-  const barArea = height - 38; // minus the value label, axis label, and gaps
+  // Minus the value and axis labels (two 16px text-xs lines) and two 4px gaps.
+  const barArea = height - 40;
   return (
     <div
       role="img"
@@ -67,7 +68,7 @@ export function ColumnChart({
             className="flex flex-1 flex-col items-center justify-end gap-1"
           >
             {d.value > 0 && (
-              <span className="text-[10px] tabular-nums text-faint">{d.value}</span>
+              <span className="text-xs tabular-nums text-faint">{d.value}</span>
             )}
             <div
               title={`${d.label}: ${d.value}`}
@@ -79,7 +80,7 @@ export function ColumnChart({
                 stay on a common baseline. */}
             <span
               className={cn(
-                "text-[10px] text-faint",
+                "text-xs text-faint",
                 data.length > 8 && i % 2 !== 0 && "invisible",
               )}
             >
@@ -162,7 +163,7 @@ export function Sparkline({
         />
       </svg>
       {labels && (
-        <div className="mt-1 flex justify-between text-[10px] tabular-nums text-faint">
+        <div className="mt-1 flex justify-between text-xs tabular-nums text-faint">
           <span>{labels[0]}</span>
           <span>{labels[1]}</span>
         </div>

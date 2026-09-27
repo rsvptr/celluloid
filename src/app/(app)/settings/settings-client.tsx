@@ -1022,8 +1022,8 @@ function ShareRow({
             <span
               className={
                 active
-                  ? "shrink-0 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-300 ring-1 ring-emerald-500/20"
-                  : "shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-[11px] font-medium text-muted ring-1 ring-line"
+                  ? "shrink-0 rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-300 ring-1 ring-emerald-500/20"
+                  : "shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-xs font-medium text-muted ring-1 ring-line"
               }
             >
               {stateLabel}

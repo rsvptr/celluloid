@@ -166,7 +166,7 @@ export function ActivityCalendar({
           ))}
         </div>
       </div>
-      <div className="mt-2 flex items-center justify-between text-[10px] text-faint">
+      <div className="mt-2 flex items-center justify-between text-xs text-faint">
         <span>
           <span className="tabular-nums">{total}</span> watched in the last year
         </span>

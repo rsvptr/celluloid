@@ -131,7 +131,7 @@ function AddButton({
         >
           Retry
         </button>
-        <p role="alert" className="max-w-[10rem] text-right text-[11px] text-rose-300">
+        <p role="alert" className="max-w-[10rem] text-right text-xs text-rose-300">
           {state.message}
         </p>
       </div>

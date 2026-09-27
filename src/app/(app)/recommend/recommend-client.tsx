@@ -1092,7 +1092,7 @@ function RecCard({
           </span>
           <span
             className={cn(
-              "rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset",
+              "rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset",
               CONFIDENCE[rec.confidence],
             )}
           >
@@ -1325,7 +1325,7 @@ function TitlePicker({
             );
           })}
           {q.trim() === "" && titles.length > filtered.length && (
-            <p className="px-2 py-1.5 text-center text-[11px] text-faint">
+            <p className="px-2 py-1.5 text-center text-xs text-faint">
               Showing the first {filtered.length}. Search to find more.
             </p>
           )}

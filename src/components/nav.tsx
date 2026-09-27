@@ -353,7 +353,7 @@ export function Nav({ userName }: { userName?: string | null }) {
                 href={l.href}
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  "focus-ring relative flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 py-2.5 text-[11px] font-medium press",
+                  "focus-ring relative flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 py-2.5 text-xs font-medium press",
                   active ? "text-foreground" : "text-muted hover:text-foreground",
                 )}
               >

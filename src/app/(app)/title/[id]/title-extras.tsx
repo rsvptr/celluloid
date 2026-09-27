@@ -182,7 +182,7 @@ export async function TitleExtras({
           </div>
         )}
 
-        <p className="mt-3 text-[11px] text-faint">
+        <p className="mt-3 text-xs text-faint">
           Streaming availability via JustWatch
           {watch.link && (
             <>
@@ -231,11 +231,11 @@ export async function TitleExtras({
                   )}
                 </div>
                 <div className="w-full min-w-0">
-                  <p className="truncate text-[11px] font-medium" title={c.name}>
+                  <p className="truncate text-xs font-medium" title={c.name}>
                     {c.name}
                   </p>
                   {c.character && (
-                    <p className="truncate text-[10px] text-faint" title={c.character}>
+                    <p className="truncate text-xs text-faint" title={c.character}>
                       {c.character}
                     </p>
                   )}
@@ -283,7 +283,7 @@ export async function TitleExtras({
                     <p className="truncate text-xs font-medium" title={name}>
                       {name}
                     </p>
-                    <p className="text-[11px] text-faint">{year ?? ""}</p>
+                    <p className="text-xs text-faint">{year ?? ""}</p>
                   </div>
                   <QuickAdd
                     tmdbId={p.id}

@@ -1534,7 +1534,7 @@ const ListRow = memo(function ListRow({
                 className={cn(
                   // inline-block, not inline-flex: `truncate` needs a block
                   // formatting context for its ellipsis to actually render.
-                  "inline-block max-w-32 truncate rounded-full px-2 py-0.5 align-middle text-[11px] font-medium ring-1 ring-inset",
+                  "inline-block max-w-32 truncate rounded-full px-2 py-0.5 align-middle text-xs font-medium ring-1 ring-inset",
                   tagChipClass(tagColors?.[t]),
                 )}
               >
@@ -1542,7 +1542,7 @@ const ListRow = memo(function ListRow({
               </span>
             ))}
             {hiddenTagCount > 0 && (
-              <span className="text-[11px] tabular-nums text-faint">
+              <span className="text-xs tabular-nums text-faint">
                 +{hiddenTagCount}
               </span>
             )}
