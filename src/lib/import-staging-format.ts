@@ -59,6 +59,7 @@ export const parsedTitleSchema = z
       .nullable()
       .optional(),
     tmdbId: z.number().int().positive().nullable().optional(),
+    tvdbId: z.number().int().positive().nullable().optional(),
     tv: z
       .object({
         finalSeasonText: z.string().max(500).nullable(),

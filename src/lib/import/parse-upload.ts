@@ -173,7 +173,8 @@ function parseImdbId(text: string | null): string | null {
   return /^tt\d{5,12}$/.test(id) ? id : null;
 }
 
-function parseTmdbId(text: string | null): number | null {
+/** A TMDB or TVDB id: a positive integer. */
+function parseNumericId(text: string | null): number | null {
   if (!text) return null;
   const id = Number(text.trim());
   return Number.isSafeInteger(id) && id > 0 ? id : null;
@@ -448,7 +449,7 @@ export interface UploadParseResult {
 /**
  * Parse a user-uploaded .xlsx/.csv into ParsedTitle[]. Expects a header row
  * with at least a Title/Name column; Year, Type, Status, a rating, a watch
- * date, and an IMDb/TMDB id are all optional. Header matching is
+ * date, and an IMDb/TMDB/TVDB id are all optional. Header matching is
  * case-insensitive and ignores punctuation, so the real column names in a
  * Letterboxd or IMDb export are recognised as they ship.
  */
@@ -582,10 +583,12 @@ export async function parseUploadedList(
             : "unknown";
 
     // IMDb writes its title id under "Const"; Letterboxd offers "IMDb ID" and
-    // "TMDb ID" in its full export. A bare "TMDB" is deliberately NOT an id:
-    // Celluloid's older workbook used that heading for the 0-10 TMDB rating.
+    // "TMDb ID" in its full export, and Trakt exports carry "tvdb_id". A bare
+    // "TMDB" is deliberately NOT an id: Celluloid's older workbook used that
+    // heading for the 0-10 TMDB rating.
     const imdbCol = find("const", "imdbid", "imdb");
     const tmdbCol = find("tmdbid", "themoviedbid", "themoviedatabaseid");
+    const tvdbCol = find("tvdbid", "thetvdbid");
 
     // A heading that named no scale gets one chance from this sheet's values,
     // so every row in that sheet is converted under one stable decision.
@@ -648,7 +651,8 @@ export async function parseUploadedList(
           ratingScale === "unknown" && ratingCell ? ratingCell.slice(0, 40) : null,
         watchedAt: watchDate ?? (status === "WATCHED" ? diaryDate : null),
         imdbId: imdbCol ? parseImdbId(cellText(row.getCell(imdbCol).value)) : null,
-        tmdbId: tmdbCol ? parseTmdbId(cellText(row.getCell(tmdbCol).value)) : null,
+        tmdbId: tmdbCol ? parseNumericId(cellText(row.getCell(tmdbCol).value)) : null,
+        tvdbId: tvdbCol ? parseNumericId(cellText(row.getCell(tvdbCol).value)) : null,
       });
     }
   }
