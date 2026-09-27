@@ -180,7 +180,15 @@ export function WatchHistoryList({
           {events.map((event) => (
             <li key={event.id} className="text-sm">
               {editingId === event.id ? (
-                <div className="flex flex-col gap-2">
+                <form
+                  method="post"
+                  className="flex flex-col gap-2"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (pending) return;
+                    save(event);
+                  }}
+                >
                   <input
                     ref={dateFieldRef}
                     type="date"
@@ -206,15 +214,15 @@ export function WatchHistoryList({
                       <X size={14} /> Cancel
                     </Button>
                     <Button
+                      type="submit"
                       size="sm"
                       variant="primary"
-                      onClick={() => save(event)}
                       disabled={pending || !draftDate}
                     >
                       <Check size={14} /> Save
                     </Button>
                   </div>
-                </div>
+                </form>
               ) : (
                 <div className="flex items-start gap-2">
                   <div className="min-w-0 flex-1">

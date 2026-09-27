@@ -48,6 +48,7 @@ import { useConfirm } from "./confirm-dialog";
 import {
   AnimatePresence,
   EASE_OUT,
+  InertOnExit,
   motion,
   useReducedMotion,
 } from "./motion";
@@ -64,6 +65,7 @@ import {
 } from "@/lib/actions";
 import { tagChipClass } from "@/lib/tag-colors";
 import { regionName } from "@/lib/tmdb-extras";
+import { undoToast } from "@/lib/undo-toast";
 import { cn } from "@/lib/utils";
 import {
   encodeLibraryRememberedState,
@@ -782,7 +784,8 @@ export function Library({
               // The reveal is CSS (collapse-in), so the open panel is visible
               // even if Motion's features never load; Motion only runs the exit
               // (and a reopen mid-exit). Without features it unmounts at once,
-              // so a closed panel is never focusable. -mt-4 here and mt-4 on
+              // so a closed panel is never focusable; with them, InertOnExit takes
+              // it out of the tab order as the exit starts. -mt-4 here and mt-4 on
               // the Card cancel the parent's gap-4, so the collapsed panel
               // takes no space and the gap never jumps.
               initial={false}
@@ -791,7 +794,7 @@ export function Library({
               transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: EASE_OUT }}
               className="-mt-4 grid grid-rows-[1fr] overflow-hidden motion-safe:animate-[collapse-in_200ms_cubic-bezier(0.16,1,0.3,1)]"
             >
-              <div className="min-h-0">
+              <InertOnExit className="min-h-0">
               <Card variant="inset" className="mt-4 flex flex-col gap-3 p-3">
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                   <Select
@@ -918,7 +921,7 @@ export function Library({
                   </div>
                 )}
               </Card>
-              </div>
+              </InertOnExit>
             </motion.div>
           )}
         </AnimatePresence>
@@ -1172,39 +1175,24 @@ function BulkBar({
         }
         const removedCount = res.count ?? 0;
         onDone();
-        toast.success(
-          `Removed ${removedCount} ${removedCount === 1 ? "title" : "titles"}`,
-          {
-            action: {
-              label: "Undo",
-              onClick: () => {
-                void (async () => {
-                  // Bound the server-action fan-out for a large selection. Each
-                  // restore is ownership-scoped and safely no-ops if a row was
-                  // already restored through Trash in another tab.
-                  for (let index = 0; index < removedIds.length; index += 6) {
-                    const results = await Promise.all(
-                      removedIds.slice(index, index + 6).map((id) => restoreTitle(id)),
-                    );
-                    const error = results.find((result) => result.error)?.error;
-                    if (error) {
-                      toast.error(error);
-                      router.refresh();
-                      return;
-                    }
-                  }
-                  toast.success(
-                    `Restored ${removedCount} ${removedCount === 1 ? "title" : "titles"}`,
-                  );
-                  router.refresh();
-                })().catch(() => {
-                  toast.error("Couldn't restore every title. Check Trash and retry.");
-                  router.refresh();
-                });
-              },
-            },
+        undoToast(`Removed ${removedCount} ${removedCount === 1 ? "title" : "titles"}`, {
+          undo: async () => {
+            // Bound the server-action fan-out for a large selection. Each
+            // restore is ownership-scoped and safely no-ops if a row was
+            // already restored through Trash in another tab.
+            for (let index = 0; index < removedIds.length; index += 6) {
+              const results = await Promise.all(
+                removedIds.slice(index, index + 6).map((id) => restoreTitle(id)),
+              );
+              const error = results.find((result) => result.error)?.error;
+              if (error) return { error };
+            }
+            return {};
           },
-        );
+          success: `Restored ${removedCount} ${removedCount === 1 ? "title" : "titles"}`,
+          failure: "Couldn't restore every title. Check Trash and retry.",
+          onError: () => router.refresh(),
+        });
       } catch {
         toast.error("Couldn't remove those titles. Try again.");
       } finally {
@@ -1235,6 +1223,7 @@ function BulkBar({
           // below dialogs/command palette (z-50) so a confirm dialog or the share
           // dialog opened from here still renders on top.
           className="fixed inset-x-0 bottom-0 z-[45] px-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
+          data-motion-enter
           initial={{ y: 80, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
           exit={{ y: 80, opacity: 0 }}
@@ -1568,7 +1557,7 @@ function ListRow({
         <span
           className={cn(
             "flex h-5 w-5 shrink-0 items-center justify-center rounded ring-1",
-            selected ? "bg-brand text-[#04121c] ring-brand" : "ring-line",
+            selected ? "bg-brand text-[#04121c] ring-brand" : "ring-line-strong",
           )}
         >
           {selected && <CheckSquare size={13} />}
@@ -1811,9 +1800,12 @@ function TrashView({
             <Button
               size="sm"
               variant="danger"
-              disabled={pending}
-              onClick={purgeAll}
-              className="shrink-0"
+              aria-disabled={pending}
+              onClick={() => {
+                if (pending) return;
+                void purgeAll();
+              }}
+              className={cn("shrink-0", softDisabledClass)}
             >
               <Trash2 size={14} /> Empty trash
             </Button>

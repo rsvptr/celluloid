@@ -25,7 +25,8 @@ const HIDDEN_INITIAL =
   /initial=\{\{[^}]*?\b(?:opacity|scale[XY]?|pathLength|height):\s*0(?![.\d])/g;
 
 // Interaction-driven elements that only mount after JS runs, so they are never
-// server-rendered hidden. A new entry here needs the same justification.
+// server-rendered hidden. A new entry here needs the same justification, and
+// the element needs data-motion-enter so a failed feature load still shows it.
 const INTERACTION_ONLY = new Map([
   ["src/components/nav.tsx", 1], // mobile More menu
   ["src/components/library.tsx", 1], // bulk action bar
@@ -65,11 +66,25 @@ describe("server-rendered content starts visible", () => {
 
   it("handles a failed lazy feature load", async () => {
     const wrapper = await readFile(new URL("components/motion.tsx", SRC), "utf8");
-    const loader = wrapper.slice(
-      wrapper.indexOf("const loadDomMax"),
-      wrapper.indexOf("export const EASE_OUT"),
-    );
+    const start = wrapper.indexOf("const loadDomMax");
+    assert.notEqual(start, -1);
+    const loader = wrapper.slice(start, wrapper.indexOf("\n\n", start));
     assert.match(loader, /import\("motion\/react"\)/);
-    assert.match(loader, /\.catch\(/);
+    assert.match(loader, /\.catch\([\s\S]*dataset\.motionFailed = ""/);
+    assert.match(loader, /\.then\([\s\S]*delete document\.documentElement\.dataset\.motionFailed[\s\S]*\.catch\(/);
+  });
+
+  it("shows hidden Motion entrances at rest when the feature load fails", async () => {
+    for (const { file, text } of await tsxSources()) {
+      for (const match of text.matchAll(HIDDEN_INITIAL)) {
+        const tag = text.slice(text.lastIndexOf("<", match.index), text.indexOf("<", match.index));
+        assert.match(tag, /\sdata-motion-enter(?![\w-])/, `${file}: mark the element with ${match[0]} as data-motion-enter`);
+      }
+    }
+    const css = await readFile(new URL("app/globals.css", SRC), "utf8");
+    const rule = css.match(/\[data-motion-failed\] \[data-motion-enter\] \{([^}]*)\}/);
+    assert.ok(rule, "globals.css needs the [data-motion-failed] [data-motion-enter] rule");
+    assert.match(rule[1], /opacity: 1 !important;/);
+    assert.match(rule[1], /transform: none !important;/);
   });
 });

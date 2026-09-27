@@ -1,0 +1,197 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import type { MouseEvent } from "react";
+import { toast } from "sonner";
+import { UNDO_TOAST_DURATION, undoToast } from "../src/lib/undo-toast";
+
+// Sonner's store works without a mounted <Toaster>: every create or update on
+// an id is recorded, and getHistory() returns the merged state per toast.
+function current(id: string | number) {
+  const found = toast.getHistory().find((t) => t.id === id);
+  assert.ok(found, `toast ${id} exists`);
+  return found as typeof found & {
+    title?: unknown;
+    type?: string;
+    duration?: number;
+    closeButton?: boolean;
+    action?: { onClick: (event: MouseEvent<HTMLButtonElement>) => void };
+  };
+}
+
+// A stand-in for the Undo button inside its toast <li>. The helper reads
+// document.activeElement, which Node doesn't have.
+function fakeButton() {
+  const toastElement = { focused: 0, focus: () => (toastElement.focused += 1) };
+  const button = { closest: () => toastElement, toastElement };
+  return button;
+}
+const doc = { activeElement: null as unknown };
+(globalThis as { document?: unknown }).document = doc;
+
+function clickUndo(id: string | number, button = fakeButton()) {
+  let prevented = false;
+  const event = {
+    currentTarget: button,
+    preventDefault: () => {
+      prevented = true;
+    },
+  } as unknown as MouseEvent<HTMLButtonElement>;
+  current(id).action!.onClick(event);
+  return prevented;
+}
+
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+describe("undo toasts outlast Sonner's default and can be closed (JK-07)", () => {
+  it("lives 10 s with a close button, then the outcome gets the default 4 s", async () => {
+    const id = undoToast("Moved to Trash", {
+      undo: async () => ({}),
+      success: "Restored to your library",
+      failure: "Couldn't undo that. Restore the title from Trash.",
+    });
+    assert.equal(UNDO_TOAST_DURATION, 10_000);
+    assert.equal(current(id).duration, UNDO_TOAST_DURATION);
+    assert.equal(current(id).closeButton, true);
+
+    clickUndo(id);
+    await settle();
+    assert.equal(current(id).type, "success");
+    assert.equal(current(id).duration, 4000, "the confirmation doesn't inherit the 10 s");
+  });
+});
+
+describe("undo toast updates in place (EM-06)", () => {
+  it("keeps the toast, shows a spinner, then the confirmation on the same id", async () => {
+    let finish!: (value: { error?: string }) => void;
+    let succeeded = 0;
+    const id = undoToast("Marked watched", {
+      undo: () => new Promise((resolve) => (finish = resolve)),
+      success: "Watched change undone",
+      failure: "Couldn't undo that watched change. Try again.",
+      onSuccess: () => (succeeded += 1),
+    });
+
+    assert.equal(clickUndo(id), true, "the click is default-prevented so Sonner keeps the toast");
+    assert.equal(current(id).type, "loading");
+    assert.equal(current(id).title, "Undoing…");
+    assert.equal(current(id).action, undefined, "the Undo button goes away while pending");
+
+    finish({});
+    await settle();
+    assert.equal(current(id).type, "success");
+    assert.equal(current(id).title, "Watched change undone");
+    assert.equal(succeeded, 1);
+  });
+
+  it("shows a returned error on the same toast and runs onError", async () => {
+    let errored = 0;
+    const id = undoToast("Moved to Trash", {
+      undo: async () => ({ error: "Title not found" }),
+      success: "Restored to your library",
+      failure: "Couldn't undo that. Restore the title from Trash.",
+      onError: () => (errored += 1),
+    });
+    clickUndo(id);
+    await settle();
+    assert.equal(current(id).type, "error");
+    assert.equal(current(id).title, "Title not found");
+    assert.equal(errored, 1);
+  });
+
+  it("shows the failure copy on the same toast when the undo throws", async () => {
+    let errored = 0;
+    const id = undoToast("Removed 3 titles", {
+      undo: async () => {
+        throw new Error("offline");
+      },
+      success: "Restored 3 titles",
+      failure: "Couldn't restore every title. Check Trash and retry.",
+      onError: () => (errored += 1),
+    });
+    clickUndo(id);
+    await settle();
+    assert.equal(current(id).type, "error");
+    assert.equal(current(id).title, "Couldn't restore every title. Check Trash and retry.");
+    assert.equal(errored, 1);
+  });
+});
+
+describe("Undo keeps keyboard focus in the toast", () => {
+  const options = {
+    undo: async () => ({}),
+    success: "Watched change undone",
+    failure: "Couldn't undo that watched change. Try again.",
+  };
+
+  it("moves focus from the Undo button to its toast before the button goes", () => {
+    const id = undoToast("Marked watched", options);
+    const button = fakeButton();
+    doc.activeElement = button;
+    clickUndo(id, button);
+    assert.equal(button.toastElement.focused, 1);
+    doc.activeElement = null;
+  });
+
+  it("leaves focus alone when the button wasn't focused (e.g. a Safari click)", () => {
+    const id = undoToast("Marked watched", options);
+    const button = fakeButton();
+    clickUndo(id, button);
+    assert.equal(button.toastElement.focused, 0);
+  });
+});
+
+describe("undo toast edge cases", () => {
+  it("runs the undo once when Undo is pressed twice before Sonner re-renders", async () => {
+    let calls = 0;
+    const id = undoToast("Marked watched", {
+      undo: async () => {
+        calls += 1;
+        return calls === 1
+          ? {}
+          : { error: "That watched change is no longer available to undo" };
+      },
+      success: "Watched change undone",
+      failure: "Couldn't undo that watched change. Try again.",
+    });
+    // The rendered button keeps the original action until Sonner's next tick.
+    const staleAction = current(id).action!;
+    const event = {
+      currentTarget: fakeButton(),
+      preventDefault: () => {},
+    } as unknown as MouseEvent<HTMLButtonElement>;
+    staleAction.onClick(event);
+    staleAction.onClick(event);
+    await settle();
+    assert.equal(calls, 1);
+    assert.equal(current(id).type, "success");
+    assert.equal(current(id).title, "Watched change undone");
+  });
+
+  it("dismisses the toast and runs onSuccess when there's no confirmation copy (recommend)", async () => {
+    // toast.dismiss() schedules its update with requestAnimationFrame.
+    const g = globalThis as { requestAnimationFrame?: (cb: () => void) => number };
+    const raf = g.requestAnimationFrame;
+    g.requestAnimationFrame = (cb) => {
+      cb();
+      return 0;
+    };
+    try {
+      let restored = 0;
+      const id = undoToast("Barbie won't be suggested again", {
+        undo: async () => ({}),
+        failure: "Celluloid couldn't undo that. Check your connection and retry.",
+        onSuccess: () => (restored += 1),
+      });
+      clickUndo(id);
+      await settle();
+      assert.equal(restored, 1);
+      assert.equal(current(id).type, "loading", "no confirmation replaces it");
+      assert.ok(
+        !toast.getToasts().some((t) => t.id === id),
+        "the toast is dismissed",
+      );
+    } finally {
+      g.requestAnimationFrame = raf;
+    }
+  });
+});

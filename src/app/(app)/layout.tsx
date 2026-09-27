@@ -36,13 +36,21 @@ export default async function AppLayout({
       <LazyCommandPalette />
       <Toaster
         theme="dark"
-        richColors
         position="bottom-right"
         // 4.5rem clears the mobile tab bar, but not the library's bulk bar,
         // which is taller and sat under the toast for its whole four seconds.
         // The bulk bar publishes its measured height as --toast-bottom while it
         // is open and drops the property when it closes, so the fallback stays
         // the tab-bar offset the rest of the app needs.
+        // Desktop reads the same property (EM-07): the right-aligned toast
+        // otherwise covers the bar's Share, Remove and Done below ~1,800px
+        // wide. 24px is Sonner's own desktop default, so other pages don't move.
+        // The toaster drops back when the bar closes (bottom isn't
+        // transitioned); a static offset would float every toast high instead.
+        // Sonner's desktop layout starts at 601px, but the tab bar shows until
+        // lg (nav.tsx, lg:hidden), so below lg the fallback clears it too.
+        className="[--toast-desktop-bottom:calc(4.5rem+env(safe-area-inset-bottom))] lg:[--toast-desktop-bottom:24px]"
+        offset={{ bottom: "var(--toast-bottom, var(--toast-desktop-bottom, 24px))" }}
         mobileOffset={{
           bottom: "var(--toast-bottom, calc(4.5rem + env(safe-area-inset-bottom)))",
         }}
@@ -53,7 +61,20 @@ export default async function AppLayout({
             color: "var(--color-foreground)",
           },
           classNames: {
+            // Undo parks focus on the toast (undo-toast.ts); Sonner's own
+            // focus shadow is invisible on dark, so use the app's ring.
+            toast: "focus-ring",
             actionButton: "min-h-11 sm:min-h-0",
+            // Sonner's dark close button is an off-palette black disc (1.2:1
+            // on surface). Tokens instead: border 3.4:1 on surface, glyph 14:1.
+            // `!` beats Sonner's unlayered theme rules.
+            closeButton:
+              "focus-ring bg-surface-2! border-line-strong! text-foreground! hover:bg-line!",
+            // The inline style above beat richColors (JK-20), so errors looked
+            // like successes. They get the danger token on the border (its
+            // `!` beats the inline style) and the icon (6.4:1 on surface);
+            // the text stays foreground (15:1).
+            error: "border-danger/60! [&_[data-icon]]:text-danger",
           },
         }}
       />

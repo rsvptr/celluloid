@@ -23,6 +23,7 @@ import {
 import type { TitleIndexEntry } from "@/lib/data";
 import type { WatchStatus } from "@/generated/prisma/client";
 import { logWatch, undoWatchedTransition, updateTitle } from "@/lib/actions";
+import { undoToast } from "@/lib/undo-toast";
 
 const NAV = [
   { href: "/", label: "Library", icon: Film },
@@ -206,33 +207,22 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
             ? `Marked ${title.name} watched`
             : `Moved ${title.name} to your watchlist`;
         const undo = res.undo;
-        toast.success(
-          message,
-          undo
-            ? {
-                action: {
-                  label: "Undo",
-                  onClick: () => {
-                    void undoWatchedTransition(
-                      undo.titleId,
-                      undo.occurredAt,
-                      undo.restoreWatchedAt,
-                      undo.restoreStatus,
-                    )
-                      .then((undoResult) => {
-                        if (undoResult.error) toast.error(undoResult.error);
-                        else toast.success(`Undid watched change for ${title.name}`);
-                        router.refresh();
-                      })
-                      .catch(() => {
-                        toast.error("Couldn't undo that watched change. Try again.");
-                        router.refresh();
-                      });
-                  },
-                },
-              }
-            : undefined,
-        );
+        if (undo) {
+          undoToast(message, {
+            undo: () =>
+              undoWatchedTransition(
+                undo.titleId,
+                undo.occurredAt,
+                undo.restoreWatchedAt,
+                undo.restoreStatus,
+              ),
+            success: `Undid watched change for ${title.name}`,
+            failure: "Couldn't undo that watched change. Try again.",
+            onError: () => router.refresh(),
+          });
+        } else {
+          toast.success(message);
+        }
       }
       close();
       router.refresh();

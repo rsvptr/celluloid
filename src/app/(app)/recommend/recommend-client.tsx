@@ -28,6 +28,7 @@ import { suppressSuggestion, unsuppressSuggestion } from "@/lib/suppression-acti
 import { SuppressionsPanel } from "./suppressions-panel";
 import { REC_ERAS, REC_MODELS, type RecEraId } from "@/lib/models";
 import { languageName } from "@/lib/format";
+import { undoToast } from "@/lib/undo-toast";
 import { cn } from "@/lib/utils";
 import {
   encodeRecommendRememberedState,
@@ -352,26 +353,17 @@ export function RecommendClient({
     }
     const suppressionId = res.id;
     setSuppressionsKey((value) => value + 1);
-    toast.success(`${rec.title} won't be suggested again`, {
-      action: {
-        label: "Undo",
-        onClick: () => {
-          void unsuppressSuggestion(suppressionId)
-            .then((undone) => {
-              if (!undone.ok) {
-                toast.error("Couldn't undo that. Restore it under Not interested.");
-                return;
-              }
-              dismissedRef.current.delete(identity);
-              setRecs((current) => restoreAt(current, rec, index));
-              setSuppressionsKey((value) => value + 1);
-            })
-            .catch(() => {
-              toast.error(
-                "Celluloid couldn't undo that. Check your connection and retry.",
-              );
-            });
-        },
+    // No confirmation copy: the card coming back is the confirmation.
+    undoToast(`${rec.title} won't be suggested again`, {
+      undo: async () =>
+        (await unsuppressSuggestion(suppressionId)).ok
+          ? {}
+          : { error: "Couldn't undo that. Restore it under Not interested." },
+      failure: "Celluloid couldn't undo that. Check your connection and retry.",
+      onSuccess: () => {
+        dismissedRef.current.delete(identity);
+        setRecs((current) => restoreAt(current, rec, index));
+        setSuppressionsKey((value) => value + 1);
       },
     });
   }
@@ -554,6 +546,7 @@ export function RecommendClient({
 
       <Card className="p-5">
         <form
+          method="post"
           className="flex flex-col gap-5"
           aria-busy={loading}
           onSubmit={(event) => {
@@ -1005,6 +998,7 @@ export function RecommendClient({
                   <motion.div
                     key={recommendationIdentity(r)}
                     layout
+                    data-motion-enter
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -6 }}

@@ -15,13 +15,12 @@ import {
   Settings,
   Sparkles,
 } from "lucide-react";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import { authClient } from "@/lib/auth-client";
 import {
   AnimatePresence,
   EASE_OUT,
-  LayoutGroup,
   motion,
 } from "@/components/motion";
 import { Wordmark } from "./brand";
@@ -67,6 +66,32 @@ export function Nav({ userName }: { userName?: string | null }) {
   // Guards against a second sign-out firing while one is already in flight
   // (e.g. an impatient double-click) rather than a render-triggering state.
   const signingOutRef = useRef(false);
+
+  // The desktop active pill is one persistent element that moves to the active
+  // link's offset and width. A layoutId pill measured its box against page
+  // scroll, which Next resets on navigation, so it flew in from the old scroll
+  // position. Until the first measurement the active link draws a static pill
+  // instead, so the SSR nav already shows one. If Motion's features fail to
+  // load, the moving pill can't follow a route change, so CSS keyed on the
+  // <html> flag (motion.tsx) swaps back to the static pill, which is always on
+  // the current link.
+  const deskNavRef = useRef<HTMLElement>(null);
+  const [pill, setPill] = useState<{ x: number; width: number } | null>(null);
+  useLayoutEffect(() => {
+    const nav = deskNavRef.current;
+    if (!nav) return;
+    const measure = () => {
+      if (!nav.offsetWidth) return; // hidden below lg
+      const link = nav.querySelector<HTMLElement>('[aria-current="page"]');
+      setPill(link ? { x: link.offsetLeft, width: link.offsetWidth } : null);
+    };
+    // Measure before paint, so the pill starts moving in the same frame as the
+    // link's color, then again whenever late fonts or a resize change the row.
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(nav);
+    return () => observer.disconnect();
+  }, [pathname]);
 
   const isActive = (href: string) =>
     href === "/"
@@ -141,12 +166,20 @@ export function Nav({ userName }: { userName?: string | null }) {
               its visible position (the nav row still starts flush left). */}
           <Wordmark size={28} textClassName="hidden lg:inline" className="p-2 lg:p-0" />
           <span aria-hidden className="hidden h-5 w-px shrink-0 bg-line lg:mx-2 lg:block" />
-          <LayoutGroup>
               {/* Desktop link row — unchanged from before, just newly gated to
                   lg+ now that the same four destinations live in the bottom bar
                   below lg (AUD-08: the md switch overflowed between 768 and
                   849px). */}
-              <nav className="hidden items-center gap-1 lg:flex">
+              <nav ref={deskNavRef} className="relative hidden items-center gap-1 lg:flex">
+                {pill && (
+                  <motion.span
+                    aria-hidden
+                    className="absolute inset-y-0 left-0 -z-10 rounded-lg bg-surface-2 [[data-motion-failed]_&]:hidden"
+                    initial={false}
+                    animate={pill}
+                    transition={{ type: "spring", stiffness: 400, damping: 40 }}
+                  />
+                )}
                 {LINKS.map((l) => {
                   const Icon = l.icon;
                   const active = isActive(l.href);
@@ -168,10 +201,11 @@ export function Nav({ userName }: { userName?: string | null }) {
                       )}
                     >
                       {active && (
-                        <motion.span
-                          layoutId="nav-active"
-                          className="absolute inset-0 -z-10 rounded-lg bg-surface-2"
-                          transition={{ type: "spring", stiffness: 400, damping: 32 }}
+                        <span
+                          className={cn(
+                            "absolute inset-0 -z-10 rounded-lg bg-surface-2",
+                            pill && "hidden [[data-motion-failed]_&]:block",
+                          )}
                         />
                       )}
                       <Icon size={16} />
@@ -180,7 +214,6 @@ export function Nav({ userName }: { userName?: string | null }) {
                   );
                 })}
               </nav>
-          </LayoutGroup>
           <div className="ml-auto flex items-center gap-2">
             <button
               onClick={openCommand}
@@ -240,11 +273,12 @@ export function Nav({ userName }: { userName?: string | null }) {
                       ref={morePopoverRef}
                       id="nav-more-menu"
                       aria-label="More options"
+                      data-motion-enter
                       initial={{ opacity: 0, y: -6, scale: 0.97 }}
                       animate={{ opacity: 1, y: 0, scale: 1 }}
                       exit={{ opacity: 0, y: -6, scale: 0.97 }}
                       transition={{ duration: 0.15, ease: EASE_OUT }}
-                      className="absolute right-0 top-[calc(100%+0.5rem)] z-50 w-48 overflow-hidden rounded-xl bg-surface p-1.5 shadow-xl ring-1 ring-line"
+                      className="absolute right-0 top-[calc(100%+0.5rem)] z-50 w-48 origin-top-right overflow-hidden rounded-xl bg-surface p-1.5 shadow-xl ring-1 ring-line"
                     >
                       <Link
                         href="/export"
@@ -300,10 +334,16 @@ export function Nav({ userName }: { userName?: string | null }) {
                 href={l.href}
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  "focus-ring flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 py-2.5 text-[11px] font-medium transition-colors",
+                  "focus-ring relative flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 py-2.5 text-[11px] font-medium transition-colors",
                   active ? "text-foreground" : "text-muted hover:text-foreground",
                 )}
               >
+                {/* Active marker beyond lightness (foreground vs muted is only
+                    2.54:1). A border, not a background, so it survives forced
+                    colors. */}
+                {active && (
+                  <span aria-hidden className="absolute inset-x-0 top-0 mx-auto w-8 border-t-2 border-foreground" />
+                )}
                 <Icon size={19} aria-hidden />
                 {l.label}
               </Link>

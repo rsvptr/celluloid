@@ -56,6 +56,38 @@ describe("watched interaction safeguards", () => {
     assert.equal(commits, 2, "Enter commits the staged change");
   });
 
+  it("keeps an arrow-staged status out of the save queue until Enter or blur", async () => {
+    const controls = await source("../src/app/(app)/title/[id]/title-controls.tsx");
+    const titleMarker = controls.indexOf("id={statusId}");
+    const titleSelect = controls.slice(
+      controls.lastIndexOf("<Select", titleMarker),
+      controls.indexOf("</Select>", titleMarker),
+    );
+    const between = (from: string, to: string) =>
+      titleSelect.slice(titleSelect.indexOf(from), titleSelect.indexOf(to));
+
+    // drainImmediate diffs every field of latestImmediateRef on each pass, so a
+    // staged value written there is sent by any save already in flight.
+    const change = between("onChange=", "onBlur=");
+    const staging = change.slice(0, change.indexOf("return;") + "return;".length);
+    assert.doesNotMatch(staging, /latestImmediateRef/);
+    assert.match(staging, /statusStagedRef\.current = true/);
+    assert.match(
+      change.slice(change.indexOf("return;")),
+      /latestImmediateRef\.current\.status = v;\s*commitImmediate\(\)/,
+    );
+
+    for (const commit of [between("onBlur=", "onKeyDown="), between('e.key === "Enter"', "onKeyUp=")]) {
+      assert.match(
+        commit,
+        /statusStagedRef\.current = false;\s*latestImmediateRef\.current\.status = e\.currentTarget\.value as WatchStatus;\s*commitImmediate\(\)/,
+      );
+    }
+
+    // A refresh from that in-flight save must not snap the staged pick back.
+    assert.match(controls, /if \(!statusStagedRef\.current\) setLocalStatus\(status\);/);
+  });
+
   it("uses one palette close path to reset state and restore opener focus", async () => {
     const palette = await source("../src/components/command-palette.tsx");
     const close = palette.slice(
