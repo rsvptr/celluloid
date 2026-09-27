@@ -7,6 +7,7 @@ import {
   LazyMotion,
   LayoutGroup,
   MotionConfig,
+  useIsPresent,
   useReducedMotion,
 } from "motion/react";
 
@@ -49,5 +50,25 @@ export function MotionProvider({ children }: { children: React.ReactNode }) {
     <LazyMotion features={loadDomMax} strict>
       <MotionConfig reducedMotion="user">{children}</MotionConfig>
     </LazyMotion>
+  );
+}
+
+/**
+ * Content wrapper for an AnimatePresence child that makes it inert while the
+ * child plays its exit, so a closing panel leaves the tab order at once rather
+ * than when Motion unmounts it.
+ */
+export function InertOnExit({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  const isPresent = useIsPresent();
+  return (
+    <div className={className} inert={!isPresent}>
+      {children}
+    </div>
   );
 }
