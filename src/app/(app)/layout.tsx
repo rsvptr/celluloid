@@ -43,6 +43,12 @@ export default async function AppLayout({
         // The bulk bar publishes its measured height as --toast-bottom while it
         // is open and drops the property when it closes, so the fallback stays
         // the tab-bar offset the rest of the app needs.
+        // Desktop reads the same property (EM-07): the right-aligned toast
+        // otherwise covers the bar's Share, Remove and Done below ~1,800px
+        // wide. 24px is Sonner's own desktop default, so other pages don't move.
+        // The toaster drops back when the bar closes (bottom isn't
+        // transitioned); a static offset would float every toast high instead.
+        offset={{ bottom: "var(--toast-bottom, 24px)" }}
         mobileOffset={{
           bottom: "var(--toast-bottom, calc(4.5rem + env(safe-area-inset-bottom)))",
         }}
