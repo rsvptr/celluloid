@@ -340,3 +340,49 @@ describe("two-factor account changes", { concurrency: false }, () => {
     assert.equal(current.status, 200);
   });
 });
+
+describe("sign-up input (BA-06)", { concurrency: false }, () => {
+  const signUp = device("192.0.2.20");
+  const password = "synthetic-password-24680";
+
+  it("trims and caps the name like updateProfile, and drops image", async () => {
+    const email = "signup-name@example.test";
+    const created = await signUp("/sign-up/email", {
+      inviteCode: "test-invite",
+      name: `  ${"x".repeat(100)}  `,
+      email,
+      password,
+      image: "https://evil.example/x.png",
+    });
+    assert.equal(created.status, 200);
+    const { internalAdapter } = await auth.$context;
+    const stored = await internalAdapter.findUserByEmail(email);
+    assert.equal(stored?.user.name, "x".repeat(80));
+    assert.equal(stored?.user.image ?? null, null);
+  });
+
+  it("rejects an empty or non-string name without creating the account", async () => {
+    const { internalAdapter } = await auth.$context;
+    for (const [name, message] of [
+      ["   ", /Name can't be empty/],
+      [123, /Invalid request/],
+      ["n".repeat(2001), /Invalid request/],
+    ] as const) {
+      const email = `signup-rejected-${typeof name}-${String(name).length}@example.test`;
+      const rejected = await signUp("/sign-up/email", { inviteCode: "test-invite", name, email, password });
+      assert.equal(rejected.status, 400, `name ${JSON.stringify(name).slice(0, 20)}`);
+      assert.match((rejected.json as { message: string }).message, message);
+      assert.equal(await internalAdapter.findUserByEmail(email), null);
+    }
+  });
+
+  it("still checks the invite first", async () => {
+    const rejected = await signUp("/sign-up/email", {
+      inviteCode: "wrong-invite",
+      name: "",
+      email: "signup-no-invite@example.test",
+      password,
+    });
+    assert.equal(rejected.status, 403);
+  });
+});

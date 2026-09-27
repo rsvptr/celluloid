@@ -36,6 +36,18 @@ const enforceAuthRequestPolicy = createAuthMiddleware(async (context) => {
       message: "That invite code wasn't accepted. Ask the person who invited you for a new one.",
     });
   }
+
+  // Sign-up is the other way a name reaches the user row, so hold it to
+  // updateProfile's rules (a string of at most 2,000 characters, trimmed and
+  // cut to 80, not empty), and drop `image`, which Celluloid never sets.
+  // Better Auth validates and reads this same body object after the hook.
+  if (!body || typeof body.name !== "string" || body.name.length > 2000) {
+    throw new APIError("BAD_REQUEST", { message: "Invalid request. Refresh and try again." });
+  }
+  const name = body.name.trim().slice(0, 80);
+  if (!name) throw new APIError("BAD_REQUEST", { message: "Name can't be empty." });
+  body.name = name;
+  delete body.image;
 });
 
 export const auth = betterAuth({
