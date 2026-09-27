@@ -73,7 +73,8 @@ export default async function TitlePage({
   if (!title) notFound();
 
   const status = STATUS_META[title.status];
-  const backdrop = backdropUrl(title.backdropPath);
+  // w780, not the w1280 default: it sits at 30% under two gradients (TM-13).
+  const backdrop = backdropUrl(title.backdropPath, "w780");
   const isTv = title.mediaType === "TV";
 
   const meta: { icon: typeof Calendar; text: string }[] = [];
@@ -121,9 +122,9 @@ export default async function TitlePage({
               src={backdrop}
               alt=""
               fill
-              sizes="100vw"
+              sizes="(min-width: 1280px) 1280px, 100vw"
               className="scale-105 object-cover opacity-30"
-              priority
+              preload
             />
             <div className="absolute inset-0 bg-gradient-to-t from-surface via-surface/85 to-surface/30" />
             <div className="absolute inset-0 bg-gradient-to-r from-surface/70 to-transparent" />
@@ -143,7 +144,9 @@ export default async function TitlePage({
               lcp={backdrop ? "eager" : "preload"}
             />
           </div>
-          <div className="flex flex-col gap-3">
+          {/* min-w-0: as a row flex item from sm up, this column would otherwise
+              grow to an unbreakable title's width and be clipped (JK-15). */}
+          <div className="flex min-w-0 flex-col gap-3">
             <div className="flex flex-wrap items-center gap-2">
               <Badge className="bg-surface-2 text-muted ring-line">
                 {mediaTypeLabel(title.mediaType)}
@@ -165,7 +168,7 @@ export default async function TitlePage({
               ) : null}
             </div>
 
-            <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
+            <h1 className="text-2xl font-bold tracking-tight break-words text-balance sm:text-3xl">
               {title.name}
             </h1>
             {title.originalName && title.originalName !== title.name && (
