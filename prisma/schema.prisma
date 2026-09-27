@@ -62,17 +62,17 @@ model User {
   @@map("user")
 }
 
-/**
- * A suggestion the owner explicitly does not want to see again.
- * The recommend page used to hold rejections in a component ref, so they died on
- * reload and a title turned down last week came straight back — burning API
- * budget re-deriving a pick already refused. This makes the refusal durable.
- * Keyed by `matchKey` rather than tmdbId because a suggestion may never resolve
- * to a TMDB entry (regional titles often don't), and those are exactly the ones
- * worth suppressing. The key is "tmdb:<MediaType>:<id>" when matched and
- * "name:<type>:<normalized name>|<year>" otherwise — the same normalization the
- * recommendation de-duplicator already uses.
- */
+// A suggestion the owner explicitly does not want to see again.
+//
+// The recommend page used to hold rejections in a component ref, so they died on
+// reload and a title turned down last week came straight back — burning API
+// budget re-deriving a pick already refused. This makes the refusal durable.
+//
+// Keyed by `matchKey` rather than tmdbId because a suggestion may never resolve
+// to a TMDB entry (regional titles often don't), and those are exactly the ones
+// worth suppressing. The key is "tmdb:<MediaType>:<id>" when matched and
+// "name:<type>:<normalized name>|<year>" otherwise — the same normalization the
+// recommendation de-duplicator already uses.
 model Suppression {
   id     String @id @default(cuid())
   userId String
