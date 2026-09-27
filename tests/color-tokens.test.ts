@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { describe, it } from "node:test";
 import { STATUS_META } from "../src/lib/format";
 import {
@@ -56,17 +56,37 @@ describe("status color tokens (JK-16)", () => {
   it("text on a filled accent uses the on-accent token", async () => {
     const files = [
       "../src/components/ui.tsx",
-      "../src/components/library.tsx",
+      "../src/components/library-toolbar.tsx",
+      "../src/components/library-results.tsx",
       "../src/components/title-card.tsx",
       "../src/app/(app)/add/add-search.tsx",
       "../src/app/(app)/title/[id]/season-tracker.tsx",
-      "../src/app/(app)/settings/settings-client.tsx",
-      "../src/app/(app)/recommend/recommend-client.tsx",
+      "../src/app/(app)/settings/my-services-section.tsx",
+      "../src/app/(app)/recommend/rec-card.tsx",
+      "../src/app/(app)/recommend/title-picker.tsx",
     ];
     for (const file of files) {
       const text = await source(file);
       assert.doesNotMatch(text, /#04121c/, file);
       assert.match(text, /text-on-accent/, file);
+    }
+    // Settings is split across files; none of them may hard-code the color.
+    const settingsDir = new URL("../src/app/(app)/settings/", import.meta.url);
+    for (const name of await readdir(settingsDir)) {
+      assert.doesNotMatch(await readFile(new URL(name, settingsDir), "utf8"), /#04121c/, name);
+    }
+    // Library and recommend are split across files too; scan every one.
+    const componentsDir = new URL("../src/components/", import.meta.url);
+    const libraryFiles = (await readdir(componentsDir)).filter((name) => /^library.*\.tsx$/.test(name));
+    assert.ok(libraryFiles.length >= 7, `only ${libraryFiles.length} library files found`);
+    for (const name of libraryFiles) {
+      assert.doesNotMatch(await readFile(new URL(name, componentsDir), "utf8"), /#04121c/, name);
+    }
+    const recommendDir = new URL("../src/app/(app)/recommend/", import.meta.url);
+    const recommendFiles = (await readdir(recommendDir)).filter((name) => name.endsWith(".tsx"));
+    assert.ok(recommendFiles.length >= 8, `only ${recommendFiles.length} recommend files found`);
+    for (const name of recommendFiles) {
+      assert.doesNotMatch(await readFile(new URL(name, recommendDir), "utf8"), /#04121c/, name);
     }
     assert.match(await source("../src/app/globals.css"), /--color-on-accent: #04121c;/);
   });
@@ -111,7 +131,7 @@ describe("tag palette (JK-17)", () => {
 
 describe("recommendation confidence (JK-17)", () => {
   it("borrows no status hue", async () => {
-    const client = await source("../src/app/(app)/recommend/recommend-client.tsx");
+    const client = await source("../src/app/(app)/recommend/rec-card.tsx");
     const block = client.slice(client.indexOf("const CONFIDENCE = {"), client.indexOf("} as const;"));
     assert.doesNotMatch(block, /emerald|amber|slate|sky|rose|status-/);
   });

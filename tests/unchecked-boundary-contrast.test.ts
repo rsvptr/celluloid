@@ -37,8 +37,8 @@ describe("unchecked checkbox and switch boundaries (JK-05)", () => {
   it("the three unchecked states use ring-line-strong", async () => {
     const [tracker, library, settings] = await Promise.all([
       source("../src/app/(app)/title/[id]/season-tracker.tsx"),
-      source("../src/components/library.tsx"),
-      source("../src/app/(app)/settings/settings-client.tsx"),
+      source("../src/components/library-results.tsx"),
+      source("../src/app/(app)/settings/remember-filters-section.tsx"),
     ]);
     assert.match(tracker, /"brand-gradient ring-transparent"\s*: "bg-surface-2 ring-line-strong"/);
     assert.match(library, /"bg-brand text-on-accent ring-brand" : "ring-line-strong"/);

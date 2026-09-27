@@ -8,7 +8,7 @@ async function source(path: string) {
 
 describe("truncated text stays recoverable (JK-27)", () => {
   it("list, Trash and tag chips carry a title", async () => {
-    const library = await source("../src/components/library.tsx");
+    const library = (await Promise.all(["library-results", "library-trash"].map((name) => source(`../src/components/${name}.tsx`)))).join("\n");
     assert.match(library, /<span className="truncate text-sm font-medium" title=\{item\.name\}>/);
     assert.match(library, /<div className="truncate text-sm font-medium" title=\{item\.name\}>/);
     assert.match(library, /key=\{t\}\s+title=\{t\}/);
@@ -20,7 +20,7 @@ describe("truncated text stays recoverable (JK-27)", () => {
   });
 
   it("settings share names and shared titles carry a title", async () => {
-    const settings = await source("../src/app/(app)/settings/settings-client.tsx");
+    const settings = await source("../src/app/(app)/settings/shared-links-section.tsx");
     assert.match(settings, /title=\{s\.name \?\? undefined\}/);
     assert.match(settings, /truncate text-foreground\/90" title=\{t\.name\}/);
   });

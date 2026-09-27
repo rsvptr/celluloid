@@ -11,7 +11,7 @@ async function source(path: string) {
 // (setBulkStatus("")), so it must soft-disable like the rest of the bar (JK-08).
 describe("bulk bar status controls keep focus (JK-08)", () => {
   it("soft-disables the status select and Apply, with guarded handlers", async () => {
-    const library = await source("../src/components/library.tsx");
+    const library = await source("../src/components/library-bulk-bar.tsx");
 
     const selectAt = library.indexOf("value={bulkStatus}");
     const select = library.slice(

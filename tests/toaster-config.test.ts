@@ -10,7 +10,7 @@ describe("app Toaster config", () => {
   it("lifts desktop toasts over the bulk bar and keeps Sonner's 24px otherwise (EM-07)", async () => {
     const [layout, library] = await Promise.all([
       source("../src/app/(app)/layout.tsx"),
-      source("../src/components/library.tsx"),
+      source("../src/components/library-bulk-bar.tsx"),
     ]);
     // The offsets stay at rest and toast-lift raises the toaster by the bar's
     // height on `translate`, so it can ease back down when the bar closes.
