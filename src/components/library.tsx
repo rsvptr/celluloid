@@ -1568,7 +1568,7 @@ function ListRow({
         <span
           className={cn(
             "flex h-5 w-5 shrink-0 items-center justify-center rounded ring-1",
-            selected ? "bg-brand text-[#04121c] ring-brand" : "ring-line",
+            selected ? "bg-brand text-[#04121c] ring-brand" : "ring-line-strong",
           )}
         >
           {selected && <CheckSquare size={13} />}

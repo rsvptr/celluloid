@@ -471,7 +471,7 @@ function RememberFiltersSection({ initialEnabled }: { initialEnabled: boolean })
           onClick={toggle}
           className={cn(
             "focus-ring relative h-6 w-11 shrink-0 rounded-full ring-1 transition-colors",
-            enabled ? "bg-brand ring-brand" : "bg-surface ring-line",
+            enabled ? "bg-brand ring-brand" : "bg-surface ring-line-strong",
           )}
         >
           <span
