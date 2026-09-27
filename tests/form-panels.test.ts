@@ -6,6 +6,12 @@ async function source(path: string) {
   return readFile(new URL(path, import.meta.url), "utf8");
 }
 
+/** These files of the settings route, read as one text. */
+async function settingsSource(...names: string[]) {
+  const files = await Promise.all(names.map((name) => source(`../src/app/(app)/settings/${name}.tsx`)));
+  return files.join("\n");
+}
+
 /** The `<form ...>...</form>` that encloses `marker`. */
 function formAround(file: string, marker: string): string {
   const at = file.indexOf(marker);
@@ -34,7 +40,7 @@ function assertSubmits(file: string, label: string) {
 // managers saw no form (JK-11).
 describe("panels submit as forms (JK-11)", () => {
   it("settings: profile, API key, password, 2FA and delete account", async () => {
-    const settings = await source("../src/app/(app)/settings/settings-client.tsx");
+    const settings = await settingsSource("profile-section", "api-key-section", "settings-client");
     for (const label of [
       // Profile's Save (the first at this indent; Preferences' Save follows).
       "Save\n        </Button>",
