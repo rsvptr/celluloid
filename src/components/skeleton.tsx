@@ -5,14 +5,5 @@ export function Shimmer({ className }: { className?: string }) {
   return <div className={cn("rounded-lg bg-surface-2 shimmer", className)} />;
 }
 
-/**
- * Screen-reader text for a loading skeleton, which is otherwise silent
- * (JK-23). Sits inside the skeleton's aria-busy root.
- */
-export function LoadingStatus({ children }: { children: React.ReactNode }) {
-  return (
-    <p role="status" className="sr-only">
-      {children}
-    </p>
-  );
-}
+// Announced through the app shell's live region (JK-23).
+export { LoadingStatus } from "@/components/route-status";

@@ -3,6 +3,7 @@ import { requireUser } from "@/lib/session";
 import { Nav } from "@/components/nav";
 import { MotionProvider } from "@/components/motion";
 import { LazyCommandPalette } from "@/components/command-palette-lazy";
+import { RouteStatus } from "@/components/route-status";
 
 export default async function AppLayout({
   children,
@@ -33,6 +34,7 @@ export default async function AppLayout({
       >
         {children}
       </main>
+      <RouteStatus />
       <LazyCommandPalette />
       <Toaster
         theme="dark"
