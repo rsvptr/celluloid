@@ -275,6 +275,7 @@ function groupSecret(s: string): string {
 }
 
 function ProfileSection({ name, email }: { name: string; email: string }) {
+  const router = useRouter();
   const [value, setValue] = useState(name);
   const [msg, setMsg] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [pending, start] = useTransition();
@@ -294,6 +295,13 @@ function ProfileSection({ name, email }: { name: string; email: string }) {
                 setMsg({ kind: "error", text: r.error });
               } else {
                 setMsg({ kind: "ok", text: "Profile saved." });
+                // Unlike the other sections, the action's own re-render isn't
+                // enough here. The header's name comes from Better Auth's
+                // session_data cookie cache, and that render still reads the
+                // request's old Cookie header (Next syncs cookies(), not
+                // headers()), so it serves the old name. This request sends the
+                // cookie updateUser just set.
+                router.refresh();
                 setTimeout(() => setMsg(null), 1500);
               }
             } catch {
