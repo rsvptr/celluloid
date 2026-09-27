@@ -67,7 +67,14 @@ export async function updateProfile(name: string): Promise<ActionResult> {
   // Route the validated write through Better Auth so its session_data cookie
   // is refreshed immediately; a direct Prisma update leaves the old name in
   // the 60-second cookie cache used by the app shell.
-  await auth.api.updateUser({ headers: await headers(), body: { name: trimmed } });
+  await auth.api.updateUser({
+    headers: await headers(),
+    body: { name: trimmed },
+    // updateUser re-issues that cookie from whatever session authorized it.
+    // Read the session row, not the cookie cache, so a session revoked on
+    // another device can't keep itself alive by saving its name every minute.
+    query: { disableCookieCache: true },
+  });
   revalidatePath("/settings");
   return { ok: true };
 }
