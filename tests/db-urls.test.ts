@@ -174,8 +174,39 @@ describe("resolveMigrationTarget same-endpoint guard (NE-06)", () => {
 
   it("accepts the pooled and direct strings of one branch, in any host case", () => {
     assert.equal(
-      resolveMigrationTarget({ DIRECT_URL: DEV_DIRECT.toUpperCase(), DATABASE_URL: DEV_POOLED })
-        .mismatch,
+      resolveMigrationTarget({
+        DIRECT_URL: DEV_DIRECT.replace(/ep-[^/]+/, (host) => host.toUpperCase()),
+        DATABASE_URL: DEV_POOLED,
+      }).mismatch,
+      null,
+    );
+  });
+
+  it("flags another database on the same endpoint, naming both databases", () => {
+    const mismatch = resolveMigrationTarget({
+      DIRECT_URL: DEV_DIRECT.replace("/celluloid?", "/neondb?"),
+      DATABASE_URL: DEV_POOLED,
+    }).mismatch;
+    assert.match(
+      mismatch ?? "",
+      /DIRECT_URL points at database "neondb" on Neon endpoint ep-dev-branch-a1b2c3, but DATABASE_URL points at database "celluloid"/,
+    );
+    assert.doesNotMatch(mismatch ?? "", /p%40ss|owner/);
+    assert.match(
+      resolveMigrationTarget({
+        DATABASE_URL_UNPOOLED: DEV_DIRECT.replace("/celluloid?", "?"),
+        DATABASE_URL: DEV_POOLED,
+      }).mismatch ?? "",
+      /DATABASE_URL_UNPOOLED points at the role's default database/,
+    );
+  });
+
+  it("compares decoded database names and ignores the role", () => {
+    assert.equal(
+      resolveMigrationTarget({
+        DIRECT_URL: DEV_DIRECT.replace("owner:", "migrator:").replace("/celluloid?", "/cellul%6Fid?"),
+        DATABASE_URL: DEV_POOLED,
+      }).mismatch,
       null,
     );
   });

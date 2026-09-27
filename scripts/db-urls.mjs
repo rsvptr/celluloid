@@ -48,6 +48,20 @@ function describeEndpoint(endpointId) {
   return endpointId ? `Neon endpoint ${endpointId}` : "a non-Neon host";
 }
 
+// Only called on URLs that matchNeonHost already parsed.
+function databaseName(url) {
+  const path = new URL(url).pathname.slice(1);
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
+}
+
+function describeDatabase(name) {
+  return name ? `database "${name}"` : "the role's default database";
+}
+
 /**
  * The URL for migrations and DDL, the variable that supplied it, and whether
  * it passes the same-endpoint guard.
@@ -62,8 +76,10 @@ function describeEndpoint(endpointId) {
  * DATABASE_URL was repointed. `mismatch` describes that case, and each caller
  * decides whether to refuse or warn. Only Neon hosts are compared: a Neon host
  * on one side and anything else on the other always mismatches, while two
- * non-Neon hosts are left to the operator. The message names variables and
- * endpoint ids only, never credentials.
+ * non-Neon hosts are left to the operator. On the same Neon endpoint the
+ * database names must match too, since the Connect dialog defaults to neondb.
+ * Roles are not compared: a separate migration role is legitimate. The message
+ * names variables, endpoint ids and database names only, never credentials.
  *
  * @param {Record<string, string | undefined>} [env]
  * @returns {{ url: string | undefined, source: string | undefined, mismatch: string | null }}
@@ -86,12 +102,25 @@ export function resolveMigrationTarget(env = process.env) {
   if (source && source !== "DATABASE_URL" && env.DATABASE_URL) {
     const migrationEndpoint = neonEndpointId(url);
     const appEndpoint = neonEndpointId(env.DATABASE_URL);
+    let difference = null;
     if (migrationEndpoint !== appEndpoint) {
-      mismatch =
+      difference =
         `${source} points at ${describeEndpoint(migrationEndpoint)}, but DATABASE_URL points at ` +
-        `${describeEndpoint(appEndpoint)}, so migrations and DDL would run against a different ` +
-        `database than the app. Point ${source} at the direct (non-pooler) string of the same ` +
-        "branch as DATABASE_URL, or set it blank to derive that from DATABASE_URL.";
+        describeEndpoint(appEndpoint);
+    } else if (migrationEndpoint) {
+      const migrationDatabase = databaseName(url);
+      const appDatabase = databaseName(env.DATABASE_URL);
+      if (migrationDatabase !== appDatabase) {
+        difference =
+          `${source} points at ${describeDatabase(migrationDatabase)} on Neon endpoint ` +
+          `${migrationEndpoint}, but DATABASE_URL points at ${describeDatabase(appDatabase)}`;
+      }
+    }
+    if (difference) {
+      mismatch =
+        `${difference}, so migrations and DDL would run against a different database than the ` +
+        `app. Point ${source} at the direct (non-pooler) string of the same branch and database ` +
+        "as DATABASE_URL, or set it blank to derive that from DATABASE_URL.";
     }
   }
   return { url, source, mismatch };
