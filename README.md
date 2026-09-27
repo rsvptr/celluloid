@@ -486,7 +486,7 @@ The legacy workbook importer bypasses the review step entirely (it is meant for 
 | `npm run db:dump -- --target dev\|prod` | Create a confirmed, fail-closed full database snapshot under `backups/` before a migration |
 | `npm run db:deploy:prod` | Apply pending migrations to the production database named by `PROD_DATABASE_URL`, over its direct endpoint, after showing the Neon endpoint, database and pending migrations and asking for typed confirmation |
 | `npm run db:check` | Run the read-only data-hygiene checks against `DATABASE_URL` before adding database constraints |
-| `npm run db:backfill:discovered-at` | Repair legacy advance-published episode dates after showing the database target and requiring `backfill` confirmation |
+| `npm run db:backfill:discovered-at -- --target dev\|prod` | Repair legacy advance-published episode dates after showing the database target and requiring `backfill` confirmation. `dev` uses the migration URL, `prod` uses `PROD_DATABASE_URL` |
 | `npm run db:migrate` | Create and apply a new migration in development |
 | `npm run db:generate` | Regenerate the Prisma client |
 | `npm run db:push` | Push the schema straight to the database, no migration file, then restore the index and CHECK constraints a push does not. For prototyping only; use `db:migrate` for a real change |
