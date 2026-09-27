@@ -301,6 +301,7 @@ export function RecommendClient({
       let buf = "";
       let receivedTerminalEvent = false;
       const handle = (ev: RecStreamEvent) => {
+        // Keeps a stale run's stream events out of the next run; the reducer can't tell runs apart.
         if (abortRef.current !== ac) return;
         if (ev.type === "status") {
           dispatch({ type: "phase", phase: ev.phase });
@@ -353,6 +354,7 @@ export function RecommendClient({
         dispatch({ type: "fail", error: recommendationError(e) });
       }
     } finally {
+      // Keeps a stale run's finish out of the next run; the reducer can't tell runs apart.
       if (abortRef.current === ac) {
         dispatch({
           type: "finish",

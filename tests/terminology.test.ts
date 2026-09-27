@@ -10,7 +10,13 @@ describe("terminology and button labels (JK-32)", () => {
   it("says TV shows and All, like the library", async () => {
     const rec = await source("../src/app/(app)/recommend/recommend-form.tsx");
     assert.match(rec, /\["all", "All"\],\s*\["movie", "Movies"\],\s*\["tv", "TV shows"\],/);
-    assert.doesNotMatch(rec, /Movies & TV/);
+    // Every .tsx file of the recommend route, so the ban covers all of it.
+    const dir = new URL("../src/app/(app)/recommend/", import.meta.url);
+    const names = (await readdir(dir)).filter((name) => name.endsWith(".tsx"));
+    assert.ok(names.length >= 8, `only ${names.length} recommend files found`);
+    for (const name of names) {
+      assert.doesNotMatch(await readFile(new URL(name, dir), "utf8"), /Movies & TV/, name);
+    }
   });
 
   it("names the share field a list name and describes what it hides", async () => {

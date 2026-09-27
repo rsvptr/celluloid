@@ -75,6 +75,19 @@ describe("status color tokens (JK-16)", () => {
     for (const name of await readdir(settingsDir)) {
       assert.doesNotMatch(await readFile(new URL(name, settingsDir), "utf8"), /#04121c/, name);
     }
+    // Library and recommend are split across files too; scan every one.
+    const componentsDir = new URL("../src/components/", import.meta.url);
+    const libraryFiles = (await readdir(componentsDir)).filter((name) => /^library.*\.tsx$/.test(name));
+    assert.ok(libraryFiles.length >= 7, `only ${libraryFiles.length} library files found`);
+    for (const name of libraryFiles) {
+      assert.doesNotMatch(await readFile(new URL(name, componentsDir), "utf8"), /#04121c/, name);
+    }
+    const recommendDir = new URL("../src/app/(app)/recommend/", import.meta.url);
+    const recommendFiles = (await readdir(recommendDir)).filter((name) => name.endsWith(".tsx"));
+    assert.ok(recommendFiles.length >= 8, `only ${recommendFiles.length} recommend files found`);
+    for (const name of recommendFiles) {
+      assert.doesNotMatch(await readFile(new URL(name, recommendDir), "utf8"), /#04121c/, name);
+    }
     assert.match(await source("../src/app/globals.css"), /--color-on-accent: #04121c;/);
   });
 });

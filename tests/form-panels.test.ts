@@ -42,7 +42,7 @@ describe("panels submit as forms (JK-11)", () => {
   it("settings: profile, API key, password, 2FA and delete account", async () => {
     const settings = await settingsSource("profile-section", "api-key-section", "password-section", "two-factor-section", "danger-section");
     for (const label of [
-      // Profile's Save (the first at this indent; Preferences' Save follows).
+      // Profile's Save (the first at this indent).
       "Save\n        </Button>",
       '{saved ? "Replace key" : "Save key"}',
       '{pending ? "Updating…" : "Change password"}',

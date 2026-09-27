@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { describe, it } from "node:test";
 
 const SRC = new URL("../src/", import.meta.url);
@@ -59,7 +59,9 @@ describe("reduced motion (EM-04)", () => {
   });
 
   it("lets Motion handle the filter panel without a bespoke branch", async () => {
-    const library = (await Promise.all(["library", "library-toolbar", "library-filter-panel", "library-results", "library-bulk-bar", "library-trash", "library-filters-context"].map((name) => readFile(new URL(`components/${name}.tsx`, SRC), "utf8")))).join("\n");
+    const names = (await readdir(new URL("components/", SRC))).filter((name) => /^library.*\.tsx$/.test(name)).sort();
+    assert.ok(names.length >= 7, `only ${names.length} library files found`);
+    const library = (await Promise.all(names.map((name) => readFile(new URL(`components/${name}`, SRC), "utf8")))).join("\n");
     assert.doesNotMatch(library, /useReducedMotion|reduceMotion/);
   });
 });

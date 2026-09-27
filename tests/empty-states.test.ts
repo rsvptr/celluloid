@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { describe, it } from "node:test";
 
 async function source(path: string) {
@@ -16,7 +16,9 @@ describe("library empty states (JK-31)", () => {
   });
 
   it("names the query when nothing matches, and offers the right way back", async () => {
-    const library = (await Promise.all(["library", "library-toolbar", "library-filter-panel", "library-results", "library-bulk-bar", "library-trash", "library-filters-context"].map((name) => source(`../src/components/${name}.tsx`)))).join("\n");
+    const names = (await readdir(new URL("../src/components/", import.meta.url))).filter((name) => /^library.*\.tsx$/.test(name)).sort();
+    assert.ok(names.length >= 7, `only ${names.length} library files found`);
+    const library = (await Promise.all(names.map((name) => source(`../src/components/${name}`)))).join("\n");
     assert.match(library, /`No titles match “\$\{query\.trim\(\)\}”\$\{searchOnly \? "\." : " with these filters\."\}`/);
     assert.match(library, /searchOnly=\{query !== "" && !filtersBesidesSearch\}/);
     assert.match(library, /\{searchOnly \? "Clear search" : "Clear filters"\}/);

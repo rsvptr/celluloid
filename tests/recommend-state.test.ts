@@ -67,6 +67,20 @@ describe("recommend request lifecycle (VE-08)", () => {
     assert.equal(generating.status === "streaming" && generating.phase, "generating");
   });
 
+  it("keeps the card arrays across updates that don't touch cards (MO-06)", () => {
+    // rec-results animates with layoutDependency={recs}, so a new array would re-run the layout animation.
+    const prev = run({ type: "start" }, { type: "rec", rec: alien });
+    for (const action of [
+      { type: "phase", phase: "generating" },
+      { type: "warning", message: "Using the shared key." },
+    ] satisfies RecommendAction[]) {
+      const next = recommendReducer(prev, action);
+      assert.notEqual(next, prev, action.type);
+      assert.equal(next.recs, prev.recs, action.type);
+      assert.equal(next.received, prev.received, action.type);
+    }
+  });
+
   it("shows each pick the moment it streams in, in arrival order", () => {
     const state = run({ type: "start" }, { type: "rec", rec: brazil }, { type: "rec", rec: alien });
     assert.equal(state.status, "streaming");
