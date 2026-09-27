@@ -1,0 +1,140 @@
+name: Preview branch migrations
+
+# Vercel builds only migrate production, so a pull request that adds a
+# migration otherwise first meets real data in the production build. This gives
+# each such PR its own Neon branch, copied from production (the project's
+# default branch unless NEON_PARENT_BRANCH says otherwise). It applies the PR's
+# migrations to that branch over its direct URL, so a migration that can't
+# apply to production data fails here, before merge. A Preview deployment can
+# use the migrated branch by pointing its DATABASE_URL at `preview/pr-<number>`.
+# The branch is deleted when the PR closes, and expires after 14 days either way.
+#
+# Opt-in. Nothing runs until the repository has BOTH a NEON_API_KEY secret
+# (prefer a key scoped to this Neon project) and a NEON_PROJECT_ID variable;
+# with only one of them the jobs skip with a warning instead of failing the PR.
+# Optional variables: NEON_DATABASE (default neondb), NEON_ROLE (default
+# neondb_owner), NEON_PARENT_BRANCH. PRs from forks never receive secrets, so
+# they skip.
+#
+# If a PR rewrites a migration it has already applied here, delete its branch
+# in the Neon console; the next push recreates it from production.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+    paths:
+      - prisma/migrations/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: neon-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+env:
+  NEON_BRANCH: preview/pr-${{ github.event.pull_request.number }}
+  NEON_API: https://console.neon.tech/api/v2/projects/${{ vars.NEON_PROJECT_ID }}
+
+jobs:
+  # `secrets` can't be read in a job-level `if`, so this checks both settings
+  # and the other jobs skip unless it reports ready.
+  config:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - name: Check for NEON_API_KEY and NEON_PROJECT_ID
+        id: check
+        env:
+          HAS_KEY: ${{ secrets.NEON_API_KEY != '' }}
+          HAS_PROJECT: ${{ vars.NEON_PROJECT_ID != '' }}
+        run: |
+          if [ "$HAS_KEY" = true ] && [ "$HAS_PROJECT" = true ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            if [ "$HAS_KEY" = true ] || [ "$HAS_PROJECT" = true ]; then
+              echo "::warning::Skipping preview-branch migrations: set both the NEON_API_KEY secret and the NEON_PROJECT_ID variable, or neither."
+            fi
+          fi
+
+  migrate:
+    needs: config
+    if: github.event.action != 'closed' && needs.config.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compute branch expiry
+        id: expiry
+        run: echo "at=$(date -u -d '+14 days' +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Create or reuse the PR's Neon branch
+        id: branch
+        uses: neondatabase/create-branch-action@72ed4f69a12b6be9c16aebfad893f6a21e9aba8b # v6.4.0
+        with:
+          project_id: ${{ vars.NEON_PROJECT_ID }}
+          api_key: ${{ secrets.NEON_API_KEY }}
+          branch_name: ${{ env.NEON_BRANCH }}
+          parent_branch: ${{ vars.NEON_PARENT_BRANCH }}
+          database: ${{ vars.NEON_DATABASE || 'neondb' }}
+          role: ${{ vars.NEON_ROLE || 'neondb_owner' }}
+          expires_at: ${{ steps.expiry.outputs.at }}
+
+      # The action's db_url and password outputs are not masked, and this log
+      # prints expanded `run:` scripts and `env:` values, so using them would
+      # publish the role's password (which branches share with production).
+      # The direct URL is fetched and masked inside the shell instead, and the
+      # API key stays out of the step that runs repository code.
+      - name: Fetch the branch's direct URL
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEON_BRANCH_ID: ${{ steps.branch.outputs.branch_id }}
+          NEON_DATABASE: ${{ vars.NEON_DATABASE || 'neondb' }}
+          NEON_ROLE: ${{ vars.NEON_ROLE || 'neondb_owner' }}
+        run: |
+          set -euo pipefail
+          uri=$(curl -fsS --get -H "Authorization: Bearer $NEON_API_KEY" \
+            --data-urlencode "branch_id=$NEON_BRANCH_ID" \
+            --data-urlencode "database_name=$NEON_DATABASE" \
+            --data-urlencode "role_name=$NEON_ROLE" \
+            --data-urlencode "pooled=false" \
+            "$NEON_API/connection_uri" | jq -r '.uri // empty')
+          if [ -z "$uri" ]; then echo "Neon returned no connection URI." >&2; exit 1; fi
+          echo "::add-mask::$uri"
+          password=$(node -e 'process.stdout.write(decodeURIComponent(new URL(process.argv[1]).password))' "$uri")
+          echo "::add-mask::$password"
+          echo "NEON_DIRECT_URL=$uri" >> "$GITHUB_ENV"
+
+      - name: Apply the PR's migrations to the branch
+        run: DATABASE_URL="$NEON_DIRECT_URL" DIRECT_URL="$NEON_DIRECT_URL" npx prisma migrate deploy
+
+  cleanup:
+    needs: config
+    if: github.event.action == 'closed' && needs.config.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      # Branch search matches partial names, so pr-1 must not delete pr-12.
+      - name: Delete the PR's Neon branch
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+        run: |
+          set -euo pipefail
+          id=$(curl -fsS --get -H "Authorization: Bearer $NEON_API_KEY" \
+            --data-urlencode "search=$NEON_BRANCH" --data-urlencode "limit=10000" "$NEON_API/branches" |
+            jq -r --arg name "$NEON_BRANCH" '.branches[] | select(.name == $name) | .id')
+          if [ -z "$id" ]; then echo "No Neon branch named $NEON_BRANCH; nothing to delete."; exit 0; fi
+          curl -fsS -X DELETE -H "Authorization: Bearer $NEON_API_KEY" "$NEON_API/branches/$id" > /dev/null
+          echo "Deleted Neon branch $NEON_BRANCH ($id)."

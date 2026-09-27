@@ -7,13 +7,18 @@
 // matches the strict airDate > discoveredAt predicate. This is a production
 // data backfill, deliberately NOT wired into an npm lifecycle or migration.
 //
-// Usage: npm run db:backfill:discovered-at   (add -- --yes after checking the target)
+// Usage: npm run db:backfill:discovered-at -- --target dev|prod
+//   dev   the migration URL (DIRECT_URL, DATABASE_URL_UNPOOLED, DATABASE_URL)
+//   prod  PROD_DATABASE_URL, on its direct host
+// Add --yes only after checking the printed target.
 
+import { realpathSync } from "node:fs";
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client.ts";
+import { resolveMigrationTarget, toDirectUrl } from "./db-urls.mjs";
 import { loadEnv } from "./load-env.mjs";
 
 /** Credentials and query parameters are deliberately excluded. */
@@ -30,7 +35,63 @@ export function describeTarget(connectionString) {
   return `${parsed.host}${parsed.pathname}`;
 }
 
-async function confirmBackfill(skipConfirmation) {
+export function parseArgs(argv) {
+  let target;
+  let yes = false;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--yes") {
+      yes = true;
+      continue;
+    }
+    let value;
+    if (arg === "--target") {
+      index += 1;
+      value = argv[index];
+    } else if (arg.startsWith("--target=")) {
+      value = arg.slice("--target=".length);
+    } else {
+      throw new Error(`Unknown argument: ${arg}`);
+    }
+    if (target !== undefined) throw new Error("--target may be supplied only once.");
+    if (value !== "dev" && value !== "prod") {
+      throw new Error("--target requires either dev or prod.");
+    }
+    target = value;
+  }
+  if (target === undefined) throw new Error("An explicit --target dev|prod is required.");
+  return { target, yes };
+}
+
+/**
+ * dev uses the same direct URL as migrations. A DIRECT_URL or
+ * DATABASE_URL_UNPOOLED on another branch than DATABASE_URL is refused rather
+ * than warned about: this writes data, and nothing else would stop it from
+ * landing on that branch. prod reads PROD_DATABASE_URL only, as db:dump and
+ * db:deploy:prod do, so production is never reached through DATABASE_URL.
+ */
+export function resolveTarget(target, env) {
+  if (target === "prod") {
+    if (!env.PROD_DATABASE_URL) {
+      throw new Error("PROD_DATABASE_URL is not set in .env.local, .env, or the process environment.");
+    }
+    return {
+      connectionString: toDirectUrl(env.PROD_DATABASE_URL),
+      label: "PRODUCTION",
+      source: "PROD_DATABASE_URL",
+    };
+  }
+  const { url, source, mismatch } = resolveMigrationTarget(env);
+  if (mismatch) throw new Error(`Refusing to backfill. ${mismatch}`);
+  if (!url) {
+    throw new Error(
+      "None of DIRECT_URL, DATABASE_URL_UNPOOLED or DATABASE_URL is set in .env.local, .env, or the process environment.",
+    );
+  }
+  return { connectionString: url, label: "DEVELOPMENT", source };
+}
+
+async function confirmBackfill(skipConfirmation, label) {
   if (skipConfirmation) return true;
   if (!stdin.isTTY) {
     throw new Error(
@@ -38,25 +99,19 @@ async function confirmBackfill(skipConfirmation) {
     );
   }
   const rl = createInterface({ input: stdin, output: stdout });
-  const answer = await rl.question('Type "backfill" to continue: ');
+  const answer = await rl.question(`Type "backfill" to update ${label}: `);
   rl.close();
   return answer.trim() === "backfill";
 }
 
 export async function main(argv = process.argv.slice(2), env = process.env) {
-  const unknown = argv.filter((arg) => arg !== "--yes");
-  if (unknown.length > 0) throw new Error(`Unknown argument: ${unknown[0]}`);
+  const { target, yes } = parseArgs(argv);
+  const { connectionString, label, source } = resolveTarget(target, env);
 
-  const connectionString = env.DIRECT_URL ?? env.DATABASE_URL;
-  if (!connectionString) {
-    throw new Error(
-      "Neither DIRECT_URL nor DATABASE_URL is set in .env.local, .env, or the process environment.",
-    );
-  }
-
-  const target = describeTarget(connectionString);
-  console.log(`About to repair advance-published episode dates in: ${target}`);
-  if (!(await confirmBackfill(argv.includes("--yes")))) {
+  console.log(
+    `About to repair advance-published episode dates in ${label} (${source}): ${describeTarget(connectionString)}`,
+  );
+  if (!(await confirmBackfill(yes, label))) {
     console.log("Aborted; nothing was changed.");
     return;
   }
@@ -75,8 +130,10 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   }
 }
 
+// Node resolves symlinks in import.meta.url but not in argv[1].
 const isDirectRun =
-  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+  process.argv[1] !== undefined &&
+  realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (isDirectRun) {
   loadEnv();

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { flushSync } from "react-dom";
 import { Eye, EyeOff } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AnimatePresence, InertOnExit, motion } from "@/components/motion";
@@ -44,6 +45,17 @@ export function safeInternalPath(raw: string | null | undefined): string {
   } catch {
     return "/";
   }
+}
+
+/**
+ * Backup codes look like `xxxxx-xxxxx` and are matched exactly, case included.
+ * A pasted code picks up spaces or a line break, and people retype it without
+ * the dash, so strip whitespace and dashes and put the one dash back. Each
+ * rejected code costs one of the sign-in's five attempts.
+ */
+export function normalizeBackupCode(raw: string): string {
+  const compact = raw.replace(/[\s\-\u2010-\u2015\u2212]/g, "");
+  return compact.length === 10 ? `${compact.slice(0, 5)}-${compact.slice(5)}` : compact;
 }
 
 function friendlyAuthError(error: unknown, fallback: string): string {
@@ -92,6 +104,18 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
     router.refresh();
   }
 
+  /** Leaves the 2FA step for a fresh sign-in, which issues a new challenge. */
+  function backToSignIn(message: string | null) {
+    flushSync(() => {
+      setMode("signin");
+      setPassword("");
+      setCode("");
+      setUseBackup(false);
+      setError(message);
+    });
+    document.getElementById("login-password")?.focus();
+  }
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -99,8 +123,25 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
     try {
       if (isTwoFa) {
         const { error } = useBackup
-          ? await authClient.twoFactor.verifyBackupCode({ code })
+          ? await authClient.twoFactor.verifyBackupCode({ code: normalizeBackupCode(code) })
           : await authClient.twoFactor.verifyTotp({ code });
+        // The challenge lasts 10 minutes and allows 5 codes. Past either, every
+        // further code fails too, so start over instead of dead-ending here.
+        if (error?.code === "INVALID_TWO_FACTOR_COOKIE") {
+          backToSignIn("That sign-in expired. Enter your password again.");
+          return;
+        }
+        if (error?.code === "TOO_MANY_ATTEMPTS_REQUEST_NEW_CODE") {
+          backToSignIn("Too many wrong codes for that sign-in. Enter your password to try again.");
+          return;
+        }
+        // The per-IP limit (5 backup codes a minute) trips on the sixth code,
+        // before the cap above can fire, and holds for a minute. The account
+        // lock is a 429 too, but keeps Better Auth's own message.
+        if (error?.status === 429 && error.code !== "ACCOUNT_TEMPORARILY_LOCKED") {
+          setError("Too many attempts. Wait a minute, then try again.");
+          return;
+        }
         if (error) {
           setError(
             friendlyAuthError(
@@ -187,16 +228,18 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
                     useBackup ? e.target.value : e.target.value.replace(/\D/g, ""),
                   )
                 }
-                placeholder={useBackup ? "ABCD-EFGH" : "123456"}
+                placeholder={useBackup ? "xxxxx-xxxxx" : "123456"}
                 inputMode={useBackup ? "text" : "numeric"}
-                maxLength={useBackup ? 11 : 6}
+                // No cap for backup codes: a cap would cut a pasted code with a
+                // leading space short before normalizeBackupCode could trim it.
+                maxLength={useBackup ? undefined : 6}
                 autoComplete="one-time-code"
                 spellCheck={false}
                 className="h-11 tracking-widest sm:h-11"
               />
             </Field>
             {error ? <AuthError message={error} /> : null}
-            <Button type="submit" variant="primary" disabled={loading || !code}>
+            <Button type="submit" variant="primary" disabled={loading || !code.trim()}>
               {loading ? "Verifying…" : "Verify"}
             </Button>
             <button
@@ -209,6 +252,13 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
               className="focus-ring min-h-11 rounded text-center text-sm text-muted hover:text-foreground sm:min-h-0"
             >
               {useBackup ? "Use an authenticator code" : "Use a backup code"}
+            </button>
+            <button
+              type="button"
+              onClick={() => backToSignIn(null)}
+              className="focus-ring min-h-11 rounded text-center text-sm text-muted hover:text-foreground sm:min-h-0"
+            >
+              Back to sign in
             </button>
           </form>
         </Card>

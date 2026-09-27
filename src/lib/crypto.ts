@@ -23,6 +23,13 @@ const CURRENT_VERSION = "v1";
 const KEY_SALT = Buffer.from("celluloid-secret-salt-v1", "utf8");
 const KEY_INFO = Buffer.from("celluloid-secret-v1", "utf8");
 
+/**
+ * GCM's full tag, and what encryptSecret has always written (Node's default).
+ * Without an explicit length Node accepts any tag prefix down to 4 bytes, so a
+ * forged payload would only have to match a few bytes of the real tag.
+ */
+const AUTH_TAG_BYTES = 16;
+
 function getSecret(): string {
   const secret = process.env.ENCRYPTION_KEY || process.env.BETTER_AUTH_SECRET;
   if (!secret) {
@@ -71,12 +78,15 @@ export function decryptSecret(payload: string): string {
   }
   const [ivB64, tagB64, dataB64] = versioned ? parts.slice(1) : parts;
   if (!ivB64 || !tagB64 || !dataB64) throw new Error("Malformed ciphertext");
+  const tag = Buffer.from(tagB64, "base64");
+  if (tag.length !== AUTH_TAG_BYTES) throw new Error("Malformed ciphertext");
   const decipher = crypto.createDecipheriv(
     "aes-256-gcm",
     versioned ? getKey() : getLegacyKey(),
     Buffer.from(ivB64, "base64"),
+    { authTagLength: AUTH_TAG_BYTES },
   );
-  decipher.setAuthTag(Buffer.from(tagB64, "base64"));
+  decipher.setAuthTag(tag);
   return Buffer.concat([
     decipher.update(Buffer.from(dataB64, "base64")),
     decipher.final(),

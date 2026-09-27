@@ -71,4 +71,29 @@ describe("crypto", () => {
   it("rejects malformed payloads", () => {
     assert.throws(() => decryptSecret("not-a-valid-payload"));
   });
+
+  it("writes 16-byte tags, current and legacy alike", () => {
+    // Stored rows must keep decrypting once the reader requires 16 bytes.
+    assert.equal(Buffer.from(encryptSecret("tag-length").split(":")[2], "base64").length, 16);
+    assert.equal(Buffer.from(encryptLegacy("tag-length").split(":")[1], "base64").length, 16);
+  });
+
+  it("rejects a truncated auth tag instead of checking only its prefix", () => {
+    const [version, iv, tag, data] = encryptSecret("truncate-me").split(":");
+    const [legacyIv, legacyTag, legacyData] = encryptLegacy("truncate-me").split(":");
+    for (const bytes of [4, 8, 12, 15]) {
+      const short = Buffer.from(tag, "base64").subarray(0, bytes).toString("base64");
+      assert.throws(
+        () => decryptSecret(`${version}:${iv}:${short}:${data}`),
+        /Malformed ciphertext/,
+        `${bytes}-byte tag`,
+      );
+      const legacyShort = Buffer.from(legacyTag, "base64").subarray(0, bytes).toString("base64");
+      assert.throws(
+        () => decryptSecret(`${legacyIv}:${legacyShort}:${legacyData}`),
+        /Malformed ciphertext/,
+        `${bytes}-byte legacy tag`,
+      );
+    }
+  });
 });

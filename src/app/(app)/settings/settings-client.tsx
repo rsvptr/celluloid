@@ -142,7 +142,9 @@ export function SettingsClient({
       <TwoFactorSection enabled={info.twoFactorEnabled} />
       <PasswordSection />
       <div className="lg:col-span-2">
-        <DevicesSection />
+        {/* Turning 2FA on or off replaces this device's session, and turning
+            it on signs out the others, so reload the list when it flips. */}
+        <DevicesSection key={info.twoFactorEnabled ? "2fa-on" : "2fa-off"} />
       </div>
       <div className="lg:col-span-2">
         <MetadataSyncSection failures={metadataFailures} />
@@ -1826,6 +1828,11 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
   const [backupCodes, setBackupCodes] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [revokeError, setRevokeError] = useState<string | null>(null);
+  const [codesPassword, setCodesPassword] = useState("");
+  const [codesError, setCodesError] = useState<string | null>(null);
+  const [codesBusy, setCodesBusy] = useState(false);
+  const [newCodes, setNewCodes] = useState<string[] | null>(null);
 
   function reset() {
     setPassword("");
@@ -1833,6 +1840,32 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
     setQr(null);
     setSecret(null);
     setBackupCodes([]);
+    setRevokeError(null);
+    setCodesPassword("");
+    setCodesError(null);
+    setNewCodes(null);
+  }
+
+  async function regenerateBackupCodes() {
+    setCodesError(null);
+    setCodesBusy(true);
+    try {
+      const { data, error } = await authClient.twoFactor.generateBackupCodes({
+        password: codesPassword,
+      });
+      if (error) {
+        setCodesError(error.message ?? "Couldn't make new backup codes. Try again.");
+        return;
+      }
+      setCodesPassword("");
+      // The form, and the button that had focus, give way to the codes.
+      flushSync(() => setNewCodes(data.backupCodes));
+      document.getElementById("settings-new-backup-codes")?.focus();
+    } catch {
+      setCodesError("Celluloid couldn't make new backup codes. Check your connection and retry.");
+    } finally {
+      setCodesBusy(false);
+    }
   }
 
   async function beginEnable() {
@@ -1868,9 +1901,23 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
         setError(error.message ?? "That code didn't work. Check your authenticator app and try again.");
         return;
       }
+      // A session stolen before 2FA was on would otherwise keep working, so
+      // sign out every other device, as a password change does. verifyTotp
+      // has already replaced this device's session; the new one is kept.
+      const signedOutOthers = await authClient.revokeOtherSessions().then(
+        (result) => !result.error,
+        () => false,
+      );
       setOn(true);
       setPhase("idle");
       reset();
+      if (signedOutOthers) {
+        toast.success("Two-factor authentication is on. Other devices were signed out.");
+      } else {
+        setRevokeError(
+          "Two-factor authentication is on, but Celluloid couldn't sign out your other devices. Use Sign out everywhere else under Devices.",
+        );
+      }
       router.refresh();
     } catch {
       setError("Celluloid couldn't verify that code. Check your connection and retry.");
@@ -1916,41 +1963,131 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
       description="Ask for a code from your authenticator app each time you sign in."
     >
       {on ? (
-        <form
-          method="post"
-          className="flex flex-col gap-3"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (busy || !password) return;
-            void disable();
-          }}
-        >
+        <div className="flex flex-col gap-4">
           <p role="status" className="text-sm text-emerald-300">
             ✓ Two-factor authentication is on.
           </p>
-          <label className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-muted">
-              Current password to disable 2FA
-            </span>
-            <Input
-              name="disable-two-factor-password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-            />
-          </label>
-          {error && <Notice kind="error">{error}</Notice>}
-          <Button
-            type="submit"
-            variant="danger"
-            size="sm"
-            className={cn("self-start", softDisabledClass)}
-            aria-disabled={busy || !password}
+          {revokeError && <Notice kind="error">{revokeError}</Notice>}
+          {newCodes ? (
+            <div className="flex flex-col gap-3">
+              <p
+                id="settings-new-backup-codes"
+                tabIndex={-1}
+                className="text-sm text-muted outline-none"
+              >
+                Your new backup codes. Save them now: they won&apos;t be shown again, and
+                your old codes no longer work.
+              </p>
+              <div className="flex items-center gap-4">
+                <button
+                  type="button"
+                  onClick={() => copyText(newCodes.join("\n"), "Backup codes copied")}
+                  className="focus-ring rounded flex shrink-0 items-center gap-1 text-xs font-medium text-muted transition-colors hover:text-foreground"
+                >
+                  <Copy size={12} /> Copy all
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    saveBlob(
+                      new Blob([`${newCodes.join("\n")}\n`], { type: "text/plain" }),
+                      "celluloid-backup-codes.txt",
+                    )
+                  }
+                  className="focus-ring rounded flex shrink-0 items-center gap-1 text-xs font-medium text-muted transition-colors hover:text-foreground"
+                >
+                  <Download size={12} /> Download
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-xs text-foreground/90">
+                {newCodes.map((c) => (
+                  <span key={c}>{c}</span>
+                ))}
+              </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="self-start"
+                onClick={() => {
+                  flushSync(() => setNewCodes(null));
+                  document.getElementById("settings-regenerate-backup-codes")?.focus();
+                }}
+              >
+                Done
+              </Button>
+            </div>
+          ) : (
+            <form
+              method="post"
+              className="flex flex-col gap-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (codesBusy || !codesPassword) return;
+                void regenerateBackupCodes();
+              }}
+            >
+              <label className="flex flex-col gap-1.5">
+                <span className="text-xs font-medium text-muted">
+                  Current password to regenerate backup codes
+                </span>
+                <Input
+                  name="regenerate-backup-codes-password"
+                  type="password"
+                  value={codesPassword}
+                  onChange={(e) => setCodesPassword(e.target.value)}
+                  autoComplete="current-password"
+                  aria-describedby="settings-regenerate-backup-codes-help"
+                />
+              </label>
+              <p id="settings-regenerate-backup-codes-help" className="text-xs text-faint">
+                Get a new set if you&apos;ve used or lost yours. Your old codes stop working.
+              </p>
+              {codesError && <Notice kind="error">{codesError}</Notice>}
+              <Button
+                id="settings-regenerate-backup-codes"
+                type="submit"
+                variant="secondary"
+                size="sm"
+                className={cn("self-start", softDisabledClass)}
+                aria-disabled={codesBusy || !codesPassword}
+              >
+                {codesBusy ? <Spinner /> : null} Regenerate backup codes
+              </Button>
+            </form>
+          )}
+          <form
+            method="post"
+            className="flex flex-col gap-3 border-t border-line pt-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (busy || !password) return;
+              void disable();
+            }}
           >
-            {busy ? <Spinner /> : null} Disable 2FA
-          </Button>
-        </form>
+            <label className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-muted">
+                Current password to disable 2FA
+              </span>
+              <Input
+                name="disable-two-factor-password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+              />
+            </label>
+            {error && <Notice kind="error">{error}</Notice>}
+            <Button
+              type="submit"
+              variant="danger"
+              size="sm"
+              className={cn("self-start", softDisabledClass)}
+              aria-disabled={busy || !password}
+            >
+              {busy ? <Spinner /> : null} Disable 2FA
+            </Button>
+          </form>
+        </div>
       ) : phase === "idle" ? (
         <form
           method="post"

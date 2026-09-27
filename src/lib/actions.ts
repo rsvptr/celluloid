@@ -23,6 +23,7 @@ import {
   type TmdbSeasonDetails,
 } from "@/lib/tmdb";
 import { mapLimit } from "@/lib/async";
+import { PRISMA_POOL_MAX } from "@/lib/db-pool";
 import { isTagColor } from "@/lib/tag-colors";
 import { tagNameFilter } from "@/lib/tag-name";
 import {
@@ -2032,7 +2033,10 @@ export async function bulkSetStatus(ids: string[], status: WatchStatus) {
     // Each title is its own bounded transaction: lock, reread, mutate, and log.
     // The former pre-lock `owned` snapshot let concurrent bulk/single requests
     // both decide a title was newly watched and append duplicate completions.
-    await mapLimit(owned, 6, ({ id: titleId }) =>
+    // One fewer at a time than the pool holds, so the instance's other requests
+    // keep a connection. A start can still queue behind those requests, so it
+    // may wait 10 s for a connection instead of Prisma's 2 s default.
+    await mapLimit(owned, Math.max(1, PRISMA_POOL_MAX - 1), ({ id: titleId }) =>
       prisma.$transaction(async (tx) => {
         const rows = await tx.$queryRaw<
           { status: WatchStatus; mediaType: MediaType; watchedAt: Date | null }[]
@@ -2109,7 +2113,7 @@ export async function bulkSetStatus(ids: string[], status: WatchStatus) {
             },
           });
         }
-      }),
+      }, { maxWait: 10_000 }),
     );
   } else {
     // Any demotion (WATCHLIST / WATCHING / ON_HOLD / DROPPED): set the enum only
