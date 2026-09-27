@@ -23,6 +23,7 @@ import {
   type RestorePlan,
   type RestorePreviewCounts,
 } from "@/lib/backup-format";
+import { tagNameFilter } from "@/lib/tag-name";
 
 const titleBackupInclude = {
   seasons: { include: { episodes: true } },
@@ -497,7 +498,7 @@ async function restoreTags(
 ) {
   for (const tag of tags) {
     let existing = await prisma.tag.findFirst({
-      where: { userId, name: { equals: tag.name, mode: "insensitive" } },
+      where: { userId, name: tagNameFilter(tag.name) },
     });
     if (!existing) {
       try {
@@ -522,7 +523,7 @@ async function restoreTags(
         // Re-read and reuse its canonical casing; only suppress the error when
         // the colliding row now demonstrably exists for this owner.
         existing = await prisma.tag.findFirst({
-          where: { userId, name: { equals: tag.name, mode: "insensitive" } },
+          where: { userId, name: tagNameFilter(tag.name) },
         });
         if (!existing) throw error;
       }

@@ -382,7 +382,14 @@ describe("watch transition locking", { concurrency: false }, () => {
 
     assert.deepEqual(await updateTitle("", { status: WatchStatus.WATCHED }), invalid);
     assert.deepEqual(await setEpisodeWatched("", true), invalid);
-    assert.deepEqual(await undoWatchedTransition("", new Date().toISOString()), invalid);
+    assert.deepEqual(
+      await undoWatchedTransition("", new Date().toISOString(), null),
+      invalid,
+    );
+    assert.deepEqual(
+      await undoWatchedTransition("title-1", new Date().toISOString(), "not a date"),
+      invalid,
+    );
     assert.deepEqual(
       await bulkSetStatus(
         Array.from({ length: 1001 }, (_, index) => `title-${index}`),
@@ -537,17 +544,104 @@ describe("watch transition locking", { concurrency: false }, () => {
       ),
     );
 
+    assert.equal(activeDb.watchedAt?.toISOString(), transitionAt);
+
     assert.deepEqual(
-      await undoWatchedTransition(result.undo.titleId, transitionAt),
+      await undoWatchedTransition(
+        result.undo.titleId,
+        transitionAt,
+        result.undo.restoreWatchedAt,
+      ),
       { ok: true },
     );
     assert.equal(activeDb.episodeWatched, false);
     assert.equal(activeDb.status, WatchStatus.WATCHLIST);
+    assert.equal(activeDb.watchedAt, null, "watchedAt left stamped after undo");
     assert.equal(
       activeDb.events.filter((event) => event.occurredAt.toISOString() === transitionAt)
         .length,
       0,
     );
+  });
+
+  it("keeps an owner-entered watch date through a TV WATCHED undo", async () => {
+    const entered = "2020-05-01T00:00:00.000Z";
+
+    // Entered before marking watched: the completion reuses it, and undo must
+    // put it back rather than clear it.
+    activeDb = new FakeWatchDb();
+    activeDb.watchedAt = new Date(entered);
+    let result = await updateTitle("title-1", { status: WatchStatus.WATCHED });
+    assert.ok(result.undo);
+    assert.equal(result.undo.occurredAt, entered);
+    assert.deepEqual(
+      await undoWatchedTransition(
+        result.undo.titleId,
+        result.undo.occurredAt,
+        result.undo.restoreWatchedAt,
+      ),
+      { ok: true },
+    );
+    assert.equal(activeDb.status, WatchStatus.WATCHLIST);
+    assert.equal(activeDb.watchedAt?.toISOString(), entered);
+
+    // Entered in the same save as the status (Arrow-staged status, then a date).
+    activeDb = new FakeWatchDb();
+    result = await updateTitle("title-1", {
+      status: WatchStatus.WATCHED,
+      watchedAt: entered,
+    });
+    assert.ok(result.undo);
+    assert.deepEqual(
+      await undoWatchedTransition(
+        result.undo.titleId,
+        result.undo.occurredAt,
+        result.undo.restoreWatchedAt,
+      ),
+      { ok: true },
+    );
+    assert.equal(activeDb.watchedAt?.toISOString(), entered);
+
+    // Moved by a later log before Undo: that newer date owns the field.
+    activeDb = new FakeWatchDb();
+    result = await updateTitle("title-1", { status: WatchStatus.WATCHED });
+    assert.ok(result.undo);
+    const later = new Date(Date.parse(result.undo.occurredAt) + 60_000).toISOString();
+    await logWatch("title-1", { occurredAt: later });
+    assert.deepEqual(
+      await undoWatchedTransition(
+        result.undo.titleId,
+        result.undo.occurredAt,
+        result.undo.restoreWatchedAt,
+      ),
+      { ok: true },
+    );
+    assert.equal(activeDb.watchedAt?.toISOString(), later);
+  });
+
+  it("follows a viewing logged before Undo instead of emptying the watch date", async () => {
+    activeDb = new FakeWatchDb();
+    const result = await updateTitle("title-1", { status: WatchStatus.WATCHED });
+    assert.ok(result.undo);
+    // Log watch defaults to today, a day that starts before the stamp, so the
+    // log keeps the stamp and the undo guard still passes.
+    const today = result.undo.occurredAt.slice(0, 10);
+    await logWatch("title-1", { occurredAt: today });
+    assert.equal(activeDb.watchedAt?.toISOString(), result.undo.occurredAt);
+
+    assert.deepEqual(
+      await undoWatchedTransition(
+        result.undo.titleId,
+        result.undo.occurredAt,
+        result.undo.restoreWatchedAt,
+      ),
+      { ok: true },
+    );
+    assert.deepEqual(
+      activeDb.events.map((event) => [event.kind, event.source]),
+      [[WatchEventKind.REWATCH, WatchEventSource.MANUAL]],
+    );
+    assert.equal(activeDb.watchedAt?.toISOString(), `${today}T00:00:00.000Z`);
   });
 
   it("keeps a date entered before the title transitions to WATCHED", async () => {
