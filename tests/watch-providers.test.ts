@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import {
-  mergeWatchProviderCatalogues,
-  type TmdbProvider,
-} from "../src/lib/tmdb";
+import "./server-only-shim";
+import type { TmdbProvider } from "../src/lib/tmdb";
+
+const { mergeWatchProviderCatalogues } = await import("../src/lib/tmdb");
 
 function provider(
   id: number,

@@ -1,6 +1,14 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import {
+import "./server-only-shim";
+import type { Recommendation, StreamContext } from "../src/lib/recommend";
+import { nameYearKey } from "../src/lib/tmdb-match";
+import { languageName } from "../src/lib/format";
+import { MediaType } from "../src/generated/prisma/client";
+import type { TmdbSearchItem } from "../src/lib/tmdb";
+import type { ExportRow } from "../src/lib/export/format";
+
+const {
   buildRequestBlock,
   enrichRec,
   genreFilterAdvisory,
@@ -9,14 +17,7 @@ import {
   sharedAiBudgetError,
   shouldSendThinkingHeartbeat,
   terminalRecEvents,
-  type Recommendation,
-  type StreamContext,
-} from "../src/lib/recommend";
-import { nameYearKey } from "../src/lib/tmdb-match";
-import { languageName } from "../src/lib/format";
-import { MediaType } from "../src/generated/prisma/client";
-import type { TmdbSearchItem } from "../src/lib/tmdb";
-import type { ExportRow } from "../src/lib/export/format";
+} = await import("../src/lib/recommend");
 
 // --- helpers ---------------------------------------------------------------
 

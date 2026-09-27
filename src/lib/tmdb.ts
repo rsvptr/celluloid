@@ -1,8 +1,10 @@
 /**
  * Server-side TMDB v3 client. Authenticates with the v4 Read Access Token
- * (Bearer). Never import this into client components — it reads a secret.
+ * (Bearer). It reads a secret, so `server-only` fails the build if a client
+ * component ever imports it; `import type` from client code stays fine.
  */
 
+import "server-only";
 import {
   imdbUrl,
   pickCreators,
@@ -23,7 +25,7 @@ function getToken(): string {
   const t = process.env.TMDB_ACCESS_TOKEN;
   if (!t) {
     throw new Error(
-      "TMDB_ACCESS_TOKEN is not set. Add your TMDB v4 Read Access Token to .env.",
+      "TMDB_ACCESS_TOKEN is not set. Add your TMDB v4 Read Access Token to .env.local.",
     );
   }
   return t;
