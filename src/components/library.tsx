@@ -64,6 +64,7 @@ import {
 } from "@/lib/actions";
 import { tagChipClass } from "@/lib/tag-colors";
 import { regionName } from "@/lib/tmdb-extras";
+import { undoToast } from "@/lib/undo-toast";
 import { cn } from "@/lib/utils";
 import {
   encodeLibraryRememberedState,
@@ -1172,39 +1173,24 @@ function BulkBar({
         }
         const removedCount = res.count ?? 0;
         onDone();
-        toast.success(
-          `Removed ${removedCount} ${removedCount === 1 ? "title" : "titles"}`,
-          {
-            action: {
-              label: "Undo",
-              onClick: () => {
-                void (async () => {
-                  // Bound the server-action fan-out for a large selection. Each
-                  // restore is ownership-scoped and safely no-ops if a row was
-                  // already restored through Trash in another tab.
-                  for (let index = 0; index < removedIds.length; index += 6) {
-                    const results = await Promise.all(
-                      removedIds.slice(index, index + 6).map((id) => restoreTitle(id)),
-                    );
-                    const error = results.find((result) => result.error)?.error;
-                    if (error) {
-                      toast.error(error);
-                      router.refresh();
-                      return;
-                    }
-                  }
-                  toast.success(
-                    `Restored ${removedCount} ${removedCount === 1 ? "title" : "titles"}`,
-                  );
-                  router.refresh();
-                })().catch(() => {
-                  toast.error("Couldn't restore every title. Check Trash and retry.");
-                  router.refresh();
-                });
-              },
-            },
+        undoToast(`Removed ${removedCount} ${removedCount === 1 ? "title" : "titles"}`, {
+          undo: async () => {
+            // Bound the server-action fan-out for a large selection. Each
+            // restore is ownership-scoped and safely no-ops if a row was
+            // already restored through Trash in another tab.
+            for (let index = 0; index < removedIds.length; index += 6) {
+              const results = await Promise.all(
+                removedIds.slice(index, index + 6).map((id) => restoreTitle(id)),
+              );
+              const error = results.find((result) => result.error)?.error;
+              if (error) return { error };
+            }
+            return {};
           },
-        );
+          success: `Restored ${removedCount} ${removedCount === 1 ? "title" : "titles"}`,
+          failure: "Couldn't restore every title. Check Trash and retry.",
+          onError: () => router.refresh(),
+        });
       } catch {
         toast.error("Couldn't remove those titles. Try again.");
       } finally {

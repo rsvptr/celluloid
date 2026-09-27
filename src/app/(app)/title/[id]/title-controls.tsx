@@ -24,6 +24,7 @@ import {
   undoWatchedTransition,
   updateTitle,
 } from "@/lib/actions";
+import { undoToast } from "@/lib/undo-toast";
 import { cn } from "@/lib/utils";
 
 type NotesStatus = "idle" | "saving" | "saved" | "error";
@@ -286,26 +287,12 @@ export function TitleControls({
     if (errorMessage) toast.error(errorMessage);
     if (watchedUndo) {
       const undo = watchedUndo;
-      toast.success("Marked watched", {
-        action: {
-          label: "Undo",
-          onClick: () => {
-            void undoWatchedTransition(
-              undo.titleId,
-              undo.occurredAt,
-              undo.restoreWatchedAt,
-            )
-              .then((result) => {
-                if (result.error) toast.error(result.error);
-                else toast.success("Watched change undone");
-                router.refresh();
-              })
-              .catch(() => {
-                toast.error("Couldn't undo that watched change. Try again.");
-                router.refresh();
-              });
-          },
-        },
+      undoToast("Marked watched", {
+        undo: () =>
+          undoWatchedTransition(undo.titleId, undo.occurredAt, undo.restoreWatchedAt),
+        success: "Watched change undone",
+        failure: "Couldn't undo that watched change. Try again.",
+        onError: () => router.refresh(),
       });
     }
     router.refresh();
@@ -673,26 +660,13 @@ export function TitleControls({
                   toast.error(res.error);
                   return;
                 }
-                toast.success("Moved to Trash", {
-                  action: {
-                    label: "Undo",
-                    onClick: () => {
-                      void restoreTitle(id)
-                        .then((restoreResult) => {
-                          if (restoreResult.error) {
-                            toast.error(restoreResult.error);
-                            return;
-                          }
-                          toast.success("Restored to your library");
-                          router.push(`/title/${id}`);
-                          router.refresh();
-                        })
-                        .catch(() => {
-                          toast.error(
-                            "Couldn't undo that. Restore the title from Trash.",
-                          );
-                        });
-                    },
+                undoToast("Moved to Trash", {
+                  undo: () => restoreTitle(id),
+                  success: "Restored to your library",
+                  failure: "Couldn't undo that. Restore the title from Trash.",
+                  onSuccess: () => {
+                    router.push(`/title/${id}`);
+                    router.refresh();
                   },
                 });
                 router.push("/");
