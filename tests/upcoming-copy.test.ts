@@ -29,4 +29,9 @@ describe("Airing page copy", () => {
     assert.match(page, /className="truncate text-sm font-medium" title=\{name\}/);
     assert.match(page, /className="truncate text-xs text-muted" title=\{meta\}/);
   });
+
+  it("keeps the static to-watch count neutral, not accent (JK-17)", async () => {
+    const page = await source("../src/app/(app)/upcoming/page.tsx");
+    assert.match(page, /<Badge className="bg-surface-2 text-muted ring-line">\s*\{formatCount\(entry\.waiting\)\} to watch/);
+  });
 });

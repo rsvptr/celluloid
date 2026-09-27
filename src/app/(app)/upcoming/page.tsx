@@ -3,7 +3,7 @@ import Link from "next/link";
 import { requireUser } from "@/lib/session";
 import { Poster } from "@/components/poster";
 import { Badge } from "@/components/ui";
-import { STATUS_META, airedAgoText, progressPct, tvStatusLabel } from "@/lib/format";
+import { STATUS_META, airedAgoText, formatCount, progressPct, tvStatusLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { getUpcoming, type AiringSoonEntry, type WaitingEntry } from "./data";
 
@@ -137,8 +137,9 @@ function WaitingRow({ entry, todayKey }: { entry: WaitingEntry; todayKey: string
       posterPath={entry.posterPath}
       meta={meta}
       trailing={
-        <Badge className="bg-brand/15 text-brand ring-brand/30">
-          {entry.waiting} to watch
+        // Neutral: a static count, and the accent means "interactive" (JK-17).
+        <Badge className="bg-surface-2 text-muted ring-line">
+          {formatCount(entry.waiting)} to watch
         </Badge>
       }
     />
