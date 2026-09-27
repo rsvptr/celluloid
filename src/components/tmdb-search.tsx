@@ -247,7 +247,7 @@ function ResultRow({
         type="button"
         onClick={() => onPick(r)}
         className={cn(
-          "focus-ring flex w-full min-w-0 items-center gap-3 rounded-xl bg-surface p-2.5 text-left ring-1 ring-line transition-colors hover:bg-surface-2/60 hover:ring-brand/40",
+          "focus-ring flex w-full min-w-0 items-center gap-3 rounded-2xl bg-surface p-2.5 text-left ring-1 ring-line transition-colors hover:bg-surface-2/60 hover:ring-brand/40",
         )}
       >
         {body}
@@ -256,7 +256,7 @@ function ResultRow({
   }
 
   return (
-    <div className="flex min-w-0 items-center gap-3 rounded-xl bg-surface p-2.5 ring-1 ring-line">
+    <div className="flex min-w-0 items-center gap-3 rounded-2xl bg-surface p-2.5 ring-1 ring-line">
       {body}
     </div>
   );

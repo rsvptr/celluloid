@@ -466,7 +466,9 @@ function RememberFiltersSection({ initialEnabled }: { initialEnabled: boolean })
       title="Remember filters on this device"
       description="Keep each page's viewing preferences between visits."
     >
-      <div className="flex items-center justify-between gap-4 rounded-xl bg-surface-2/45 p-3 ring-1 ring-line">
+      {/* rounded-lg like an inset Card: the section card's 14.4px corner sits
+          20px out, so an inner 12px corner looked swollen (JK-34). */}
+      <div className="flex items-center justify-between gap-4 rounded-lg bg-surface-2/45 p-3 ring-1 ring-line">
         <div>
           <p className="text-sm font-medium">Remember filters</p>
           <p className="mt-0.5 text-xs text-faint">
@@ -611,7 +613,10 @@ function MyServicesSection({
             </p>
           ) : null}
 
-          <div className="max-h-80 overflow-y-auto rounded-lg bg-surface-2/50 p-2 ring-1 ring-line">
+          {/* Concentric corners, 8px apart at each level: logo rounded-lg (8px),
+              tile rounded-2xl (8 + p-2 = 16px), list rounded-3xl (16 + p-2 =
+              24px). All three were rounded-lg (JK-34). */}
+          <div className="max-h-80 overflow-y-auto rounded-3xl bg-surface-2/50 p-2 ring-1 ring-line">
             {visibleProviders.length > 0 ? (
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
                 {visibleProviders.map((provider) => {
@@ -626,7 +631,7 @@ function MyServicesSection({
                       onClick={() => toggleProvider(provider.id)}
                       title={atLimit ? "You can choose up to 100 services" : provider.name}
                       className={cn(
-                        "focus-ring flex min-h-14 min-w-0 items-center gap-2 rounded-lg p-2 text-left text-xs ring-1 transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+                        "focus-ring flex min-h-14 min-w-0 items-center gap-2 rounded-2xl p-2 text-left text-xs ring-1 transition-colors disabled:cursor-not-allowed disabled:opacity-40",
                         isSelected
                           ? "bg-brand/15 text-foreground ring-brand/40"
                           : "bg-surface text-muted ring-line hover:text-foreground hover:ring-line-strong",
