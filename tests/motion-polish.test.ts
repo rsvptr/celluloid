@@ -92,4 +92,19 @@ describe("motion polish", () => {
     // A second finger lifting or cancelling must not end the first one's scrub.
     assert.match(handler("onPointerCancel"), /^function onPointerCancel\([^)]*\) \{\s*if \(!e\.isPrimary\) return;/);
   });
+
+  it("fades the poster ring and scales the import bar instead of animating paint or layout (MO-10)", async () => {
+    const card = await source("components/title-card.tsx");
+    assert.doesNotMatch(card, /transition-\[box-shadow|group-hover:ring-2/);
+    const ring = card.match(/<span\s+aria-hidden\s+className=\{cn\(\s*"(pointer-events-none absolute inset-0 rounded-lg ring-2 [^"]*)",([^)]*)\)/);
+    assert.ok(ring, "the brand ring needs its own layer");
+    assert.match(ring[1], /(^| )transition-opacity duration-150 ease-\[ease\]( |$)/);
+    assert.match(ring[2], /"ring-brand\/50 opacity-0 group-hover:opacity-100"/);
+
+    const review = await source("components/import-review.tsx");
+    const bar = review.slice(review.indexOf('aria-label="Import progress"'), review.indexOf("{parsing &&"));
+    assert.doesNotMatch(bar, /width: `/);
+    assert.match(bar, /className="brand-gradient h-full w-full origin-left transition-transform duration-300 ease-linear"/);
+    assert.match(bar, /transform: `scaleX\(\$\{percent \/ 100\}\)`/);
+  });
 });

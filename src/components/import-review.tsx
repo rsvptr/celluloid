@@ -364,7 +364,13 @@ export function ImportReview({
             aria-valuenow={terminalCount}
             className="h-1.5 overflow-hidden rounded-full bg-surface-2 ring-1 ring-line"
           >
-            <div className="h-full rounded-full brand-gradient transition-[width]" style={{ width: `${percent}%` }} />
+            {/* scaleX, not width, like the card and season bars (MO-10): no
+                layout per frame. Linear over 300 ms, since progress is steady
+                motion (EM-14). */}
+            <div
+              className="brand-gradient h-full w-full origin-left transition-transform duration-300 ease-linear"
+              style={{ transform: `scaleX(${percent / 100})` }}
+            />
           </div>
         </div>
 
