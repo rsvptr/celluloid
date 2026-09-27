@@ -187,6 +187,23 @@ describe("TitleCard link", () => {
     );
   });
 
+  it("reads a library item's year from its release date (VE-05)", () => {
+    const router = { prefetch() {} } as unknown as AppRouterInstance;
+    const render = (releaseDate: string | null) => {
+      const libraryItem: Record<string, unknown> = { ...item, releaseDate };
+      delete libraryItem.year;
+      return renderToStaticMarkup(
+        createElement(
+          AppRouterContext.Provider,
+          { value: router },
+          createElement(TitleCard, { item: libraryItem as CardItem }),
+        ),
+      );
+    };
+    assert.match(description(render("1958-03-18")), /^1958 · 0\/26 eps /);
+    assert.match(description(render(null)), /^Unknown · 0\/26 eps /);
+  });
+
   it("has press feedback and no hover lift (EM-01, EM-09)", () => {
     const anchor = card().match(/<a [^>]*>/)?.[0] ?? "";
     assert.match(anchor, /motion-safe:active:scale-\[0\.98\]/);

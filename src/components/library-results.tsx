@@ -9,7 +9,7 @@ import { TitleCard } from "./title-card";
 import { IntentLink } from "./intent-link";
 import { Poster } from "./poster";
 import { useLibraryFilters } from "./library-filters-context";
-import { STATUS_META, languageName, progressPct } from "@/lib/format";
+import { STATUS_META, languageName, progressPct, year } from "@/lib/format";
 import { hasFiltersBesidesSearch } from "@/lib/library-filter-state";
 import { tagChipClass } from "@/lib/tag-colors";
 import { regionName } from "@/lib/tmdb-extras";
@@ -148,7 +148,7 @@ const ListRow = memo(function ListRow({
           )}
         </div>
         <div className="truncate text-xs text-muted">
-          {isTv ? "TV" : "Movie"} · {item.year || "Unknown"}
+          {isTv ? "TV" : "Movie"} · {year(item.releaseDate) || "Unknown"}
           {isTv && item.totalEpisodes ? ` · ${item.watchedEpisodes}/${item.totalEpisodes} eps (${pct}%)` : ""}
           {item.language ? ` · ${languageName(item.language)}` : ""}
           {item.rating ? ` · ★ ${item.rating}` : ""}
