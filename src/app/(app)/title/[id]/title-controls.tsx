@@ -488,7 +488,7 @@ export function TitleControls({
                   id={logNoteId}
                   value={logNote}
                   onChange={(e) => setLogNote(e.target.value)}
-                  placeholder="Watched with..."
+                  placeholder="Watched with…"
                   maxLength={500}
                 />
               </div>

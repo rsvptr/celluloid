@@ -39,6 +39,13 @@ export const STATUS_ORDER: WatchStatus[] = [
   "DROPPED",
 ];
 
+const countFormat = new Intl.NumberFormat("en-US");
+
+/** A count with digit grouping: 12345 → "12,345" (JK-28). */
+export function formatCount(n: number): string {
+  return countFormat.format(n);
+}
+
 export function mediaTypeLabel(t: MediaType): string {
   return t === "TV" ? "TV" : "Movie";
 }

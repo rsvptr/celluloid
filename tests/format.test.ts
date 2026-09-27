@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   airedAgoText,
+  formatCount,
   fullDate,
   languageName,
   nameWithTypeAndYear,
@@ -87,5 +88,12 @@ describe("nameWithTypeAndYear (JK-21)", () => {
   it("drops a missing year", () => {
     assert.equal(nameWithTypeAndYear("Untitled", "movie", ""), "Untitled (Movie)");
     assert.equal(nameWithTypeAndYear("Untitled", "tv", null), "Untitled (TV)");
+  });
+});
+
+describe("formatCount (JK-28)", () => {
+  it("groups digits", () => {
+    assert.equal(formatCount(12345), "12,345");
+    assert.equal(formatCount(7), "7");
   });
 });

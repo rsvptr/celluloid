@@ -54,7 +54,7 @@ import {
   motion,
   useReducedMotion,
 } from "./motion";
-import { STATUS_META, STATUS_ORDER, fullDate, languageName, progressPct } from "@/lib/format";
+import { STATUS_META, STATUS_ORDER, formatCount, fullDate, languageName, progressPct } from "@/lib/format";
 import {
   bulkAddTag,
   bulkRemoveTag,
@@ -79,7 +79,7 @@ import {
 const SORTS: { key: SortKey; label: string }[] = [
   { key: "added", label: "Recently added" },
   { key: "watched", label: "Recently watched" },
-  { key: "name", label: "Name (A-Z)" },
+  { key: "name", label: "Name (A–Z)" },
   { key: "release", label: "Release (newest)" },
   { key: "myrating", label: "Your rating" },
   { key: "tmdb", label: "TMDB rating" },
@@ -671,8 +671,8 @@ export function Library({
               aria-live="polite"
               className="shrink-0 text-xs tabular-nums text-muted"
             >
-              {filtered.length} {filtered.length === 1 ? "title" : "titles"}
-              {hasFilters ? ` of ${items.length}` : ""}
+              {formatCount(filtered.length)} {filtered.length === 1 ? "title" : "titles"}
+              {hasFilters ? ` of ${formatCount(items.length)}` : ""}
             </p>
             <Link href="/add" className={addTitleButtonClass}>
               <Plus size={16} /> Add title
