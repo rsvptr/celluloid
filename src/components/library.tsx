@@ -1033,8 +1033,9 @@ export function Library({
               selectable={selectMode}
               selected={selected.has(it.id)}
               onToggle={toggle}
-              // LCP: only the first few above-the-fold cards get eager/priority loading.
-              priority={i < 4}
+              // LCP: preload the first two cards (the whole first row on a
+              // phone), and load the rest of the widest (7-column) row eagerly.
+              lcp={i < 2 ? "preload" : i < 7 ? "eager" : undefined}
             />
           ))}
         </div>

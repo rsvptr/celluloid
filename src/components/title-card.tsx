@@ -1,7 +1,7 @@
-import { memo } from "react";
-import Link from "next/link";
+import { memo, useId } from "react";
 import { Check, Heart, Star } from "lucide-react";
 import type { MediaType, WatchStatus } from "@/generated/prisma/client";
+import { IntentLink } from "./intent-link";
 import { Poster } from "./poster";
 import { Badge } from "./ui";
 import { STATUS_META, progressPct } from "@/lib/format";
@@ -33,7 +33,7 @@ function TitleCardImpl({
   selectable = false,
   selected = false,
   onToggle,
-  priority = false,
+  lcp,
 }: {
   item: CardItem;
   /** Link target; defaults to the detail page. `null` = non-interactive (read-only). */
@@ -41,13 +41,16 @@ function TitleCardImpl({
   selectable?: boolean;
   selected?: boolean;
   onToggle?: (id: string) => void;
-  /** LCP hint — pass for the first few above-the-fold cards only. */
-  priority?: boolean;
+  /** LCP hint for the first visible row — see Poster's `lcp`. */
+  lcp?: "preload" | "eager";
 }) {
   const status = STATUS_META[item.status];
   const isTv = item.mediaType === "TV";
   const pct = isTv ? progressPct(item.watchedEpisodes, item.totalEpisodes) : 0;
   const target = href === undefined ? `/title/${item.id}` : href;
+  // The link is named by the heading and described by the meta line, so its
+  // name no longer leads with the status and an unlabelled rating (JK-22).
+  const id = useId();
 
   const visual = (
     <div
@@ -61,7 +64,7 @@ function TitleCardImpl({
         // grid footprint actually changes size. The bottom edge doesn't need
         // it: the ring there lands well inside the text block below, never
         // near this box's edge. Needs the outer element's `flow-root` (see
-        // liftClass) — otherwise -mt-0.5 collapses into its margin instead of
+        // pressClass) — otherwise -mt-0.5 collapses into its margin instead of
         // staying put.
         "-mx-0.5 -mt-0.5 px-0.5 pt-0.5",
       )}
@@ -72,9 +75,11 @@ function TitleCardImpl({
           name={item.name}
           decorative
           mediaType={item.mediaType}
-          priority={priority}
+          lcp={lcp}
           className={cn(
-            "ring-1 ring-line transition duration-200",
+            // Neutral outline, not a tinted ring (JK-33); the brand ring stays
+            // for hover and selection. Only the properties that change (EM-09).
+            "outline -outline-offset-1 outline-white/10 transition-[box-shadow,opacity] duration-150 ease-[ease]",
             selectable
               ? selected
                 ? "ring-2 ring-brand"
@@ -86,7 +91,7 @@ function TitleCardImpl({
         {selectable ? (
           <span
             className={cn(
-              "absolute left-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full ring-1 transition",
+              "absolute left-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full ring-1 transition-colors",
               selected
                 ? "bg-brand text-[#04121c] ring-brand"
                 : "bg-black/70 text-transparent ring-white/40 group-hover:text-white/70",
@@ -133,6 +138,7 @@ function TitleCardImpl({
         {!selectable && item.tmdbRating ? (
           <span className="absolute bottom-1.5 right-1.5 flex items-center gap-0.5 rounded-md bg-black/75 px-1.5 py-0.5 text-[11px] font-medium text-amber-300">
             <Star size={11} className="fill-amber-300" />
+            <span className="sr-only">TMDB rating</span>
             {item.tmdbRating.toFixed(1)}
           </span>
         ) : null}
@@ -160,10 +166,10 @@ function TitleCardImpl({
             h3 here left a 200-card hole at level 2 in the outline. The share
             page nests these under its own "Titles" h2, where a same-level
             heading still reads as contiguous. */}
-        <h2 className="truncate text-sm font-medium text-foreground" title={item.name}>
+        <h2 id={`${id}-name`} className="truncate text-sm font-medium text-foreground" title={item.name}>
           {item.name}
         </h2>
-        <p className="truncate text-xs text-muted">
+        <p id={`${id}-meta`} className="truncate text-xs text-muted">
           {item.year || "Unknown"}
           {isTv && item.totalEpisodes
             ? ` · ${item.watchedEpisodes}/${item.totalEpisodes} eps`
@@ -178,7 +184,12 @@ function TitleCardImpl({
   // visual wrapper's -mt-0.5 (above) can't collapse into this element's own
   // margin and drag the whole card upward inside the grid — flow-root has the
   // same block-level sizing as `block`, it just also stops that collapse.
-  const liftClass = "flow-root transition duration-200 hover:-translate-y-1";
+  // No hover lift: the card is the busiest hover surface and the ring already
+  // signals hover (EM-09). Press feedback instead (EM-01): a subtler scale than
+  // a button's 0.97 for a surface this large, transform only, off under
+  // reduced motion.
+  const pressClass =
+    "flow-root transition-[scale] duration-160 ease-[cubic-bezier(0.23,1,0.32,1)] motion-safe:active:scale-[0.98]";
 
   // Selection mode: toggle instead of navigating.
   if (selectable) {
@@ -187,7 +198,7 @@ function TitleCardImpl({
         type="button"
         onClick={() => onToggle?.(item.id)}
         aria-pressed={selected}
-        className={cn("group w-full cursor-pointer text-left", liftClass)}
+        className={cn("group w-full cursor-pointer text-left", pressClass)}
       >
         {visual}
       </button>
@@ -195,16 +206,21 @@ function TitleCardImpl({
   }
 
   // Read-only (no link) — used on public share pages. Still flow-root (see
-  // liftClass above) for the same reason: the visual wrapper's -mt-0.5 needs a
+  // pressClass above) for the same reason: the visual wrapper's -mt-0.5 needs a
   // formatting-context boundary regardless of whether this card is interactive.
   if (target === null) {
     return <div className="group flow-root">{visual}</div>;
   }
 
   return (
-    <Link href={target} className={cn("group", liftClass)}>
+    <IntentLink
+      href={target}
+      aria-labelledby={`${id}-name`}
+      aria-describedby={`${id}-meta`}
+      className={cn("group", pressClass)}
+    >
       {visual}
-    </Link>
+    </IntentLink>
   );
 }
 
