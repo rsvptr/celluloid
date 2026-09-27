@@ -4,7 +4,11 @@ import Link from "next/link";
 import { Download, Trash2 } from "lucide-react";
 import type { WatchStatus } from "@/generated/prisma/client";
 import type { RatingFilter, SortKey } from "@/lib/library-filters";
-import { hasLibraryFilters, libraryExportHref } from "@/lib/library-filter-state";
+import {
+  hasLibraryFilters,
+  libraryExportHref,
+  libraryMirrorFilters,
+} from "@/lib/library-filter-state";
 import { Card, Select } from "./ui";
 import { useLibraryFilters } from "./library-filters-context";
 import { AnimatePresence, EASE_OUT, InertOnExit, motion } from "./motion";
@@ -37,7 +41,8 @@ export function LibraryFilterPanel({
     meta: { languages, genres, tags },
   } = useLibraryFilters();
   const { status, language, genre, rating, tag, sort, onlyUnmatched, onlyOnServices } = state;
-  const hasFilters = hasLibraryFilters(state);
+  // Trimmed, as the results are: a search of only spaces narrows nothing.
+  const hasFilters = hasLibraryFilters(libraryMirrorFilters(state));
   const exportHref = libraryExportHref(state);
 
   return (

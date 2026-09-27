@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 import {
   DEFAULT_FILTERS,
@@ -214,6 +215,24 @@ describe("libraryMirrorFilters", () => {
   it("trims the search and keeps every other field", () => {
     assert.deepEqual(libraryMirrorFilters({ ...FULL, query: "  rashomon " }), FULL);
     assert.equal(filtersToParams(libraryMirrorFilters({ ...BASE, query: "   " })).toString(), "");
+  });
+});
+
+describe("whitespace-only search", () => {
+  it("doesn't count as a filter once trimmed, as the results trim it", () => {
+    for (const query of [" ", "   ", "\t "]) {
+      assert.equal(hasLibraryFilters(libraryMirrorFilters({ ...BASE, query })), false, JSON.stringify(query));
+    }
+    assert.equal(hasLibraryFilters(libraryMirrorFilters({ ...BASE, query: " dune " })), true);
+    assert.equal(hasLibraryFilters(libraryMirrorFilters({ ...BASE, query: " ", type: "TV" })), true);
+  });
+
+  it("decides the count's \"of N\" and Export these on the trimmed filters", async () => {
+    for (const file of ["library-toolbar", "library-filter-panel"]) {
+      const source = await readFile(new URL(`../src/components/${file}.tsx`, import.meta.url), "utf8");
+      assert.match(source, /const hasFilters = hasLibraryFilters\(libraryMirrorFilters\(state\)\);/, file);
+      assert.doesNotMatch(source, /hasLibraryFilters\(state\)/, file);
+    }
   });
 });
 

@@ -10,6 +10,7 @@ import {
   hasLibraryFilters,
   libraryChipFocusAfterRemoval,
   libraryFilterChips,
+  libraryMirrorFilters,
 } from "@/lib/library-filter-state";
 import { Input } from "./ui";
 import { useLibraryFilters } from "./library-filters-context";
@@ -49,7 +50,8 @@ export function LibrarySearchRow({
     actions: { set },
   } = useLibraryFilters();
   const { query } = state;
-  const hasFilters = hasLibraryFilters(state);
+  // Trimmed, as the results are: a search of only spaces narrows nothing.
+  const hasFilters = hasLibraryFilters(libraryMirrorFilters(state));
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
