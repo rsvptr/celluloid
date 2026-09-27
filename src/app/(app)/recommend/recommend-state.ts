@@ -17,6 +17,12 @@ import { REC_ERAS, type RecEraId } from "@/lib/models";
 export type StreamPhase = "starting" | "thinking" | "generating";
 
 type RunResults = {
+  /**
+   * Counts runs on this page view; start bumps it. An Undo, or a failed hide,
+   * names the run its card came from, and a card from an earlier run is not
+   * put back into a later run's list.
+   */
+  runId: number;
   /** The cards on screen: streamed picks minus dismissed ones, ranked once the run ends. */
   recs: Recommendation[];
   /** Every pick this run streamed, in arrival order, dismissed ones included. */
@@ -47,12 +53,13 @@ export type RecommendAction =
   | { type: "fail"; error: string }
   | { type: "finish"; language: string | undefined; era: RecEraId | "" }
   | { type: "dismiss"; identity: string }
-  | { type: "restore"; rec: Recommendation; index: number }
+  | { type: "restore"; rec: Recommendation; index: number; runId: number }
   | { type: "dismissWarning"; warning: string };
 
 export const initialRecommendState: RecommendState = {
   status: "idle",
   error: null,
+  runId: 0,
   recs: [],
   received: [],
   dismissed: new Set(),
@@ -105,8 +112,8 @@ function restoreAt(list: Recommendation[], rec: Recommendation, index: number): 
   return next;
 }
 
-function results({ recs, received, dismissed, warnings }: RecommendState): RunResults {
-  return { recs, received, dismissed, warnings };
+function results({ runId, recs, received, dismissed, warnings }: RecommendState): RunResults {
+  return { runId, recs, received, dismissed, warnings };
 }
 
 export function recommendReducer(
@@ -119,6 +126,7 @@ export function recommendReducer(
         status: "streaming",
         phase: "starting",
         error: null,
+        runId: state.runId + 1,
         recs: [],
         received: [],
         dismissed: new Set(),
@@ -165,6 +173,7 @@ export function recommendReducer(
         recs: state.recs.filter((item) => recommendationIdentity(item) !== action.identity),
       };
     case "restore": {
+      if (action.runId !== state.runId) return state;
       const dismissed = new Set(state.dismissed);
       dismissed.delete(recommendationIdentity(action.rec));
       return { ...state, dismissed, recs: restoreAt(state.recs, action.rec, action.index) };

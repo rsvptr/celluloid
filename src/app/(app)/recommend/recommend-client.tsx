@@ -205,6 +205,9 @@ export function RecommendClient({
    * runs skip it — and skip paying Claude and TMDB to derive it again.
    */
   async function dismiss(rec: Recommendation, index: number, reason: DismissReason) {
+    // The run this card belongs to: a restore after a new run has started must
+    // not land in the new run's list.
+    const runId = run.runId;
     // Remove the card first: the write is fast and the toast carries Undo, so
     // waiting on the round trip would only make the page feel unresponsive.
     dispatch({ type: "dismiss", identity: recommendationIdentity(rec) });
@@ -225,7 +228,7 @@ export function RecommendClient({
     if (!res.id) {
       // Nothing was recorded, so leaving the card hidden would misrepresent what
       // future runs will do — put it back and say so.
-      dispatch({ type: "restore", rec, index });
+      dispatch({ type: "restore", rec, index, runId });
       toast.error(res.error ?? "Couldn't hide that suggestion. Please try again.");
       return;
     }
@@ -239,7 +242,7 @@ export function RecommendClient({
           : { error: "Couldn't undo that. Restore it under Not interested." },
       failure: "Celluloid couldn't undo that. Check your connection and retry.",
       onSuccess: () => {
-        dispatch({ type: "restore", rec, index });
+        dispatch({ type: "restore", rec, index, runId });
         setSuppressionsKey((value) => value + 1);
       },
     });
