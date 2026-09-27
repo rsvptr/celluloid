@@ -196,7 +196,11 @@ export function TitleControls({
     if (immediateSavingRef.current) return; // a drain is already running
     immediateSavingRef.current = true;
     let errorMessage: string | null = null;
-    let watchedUndo: { titleId: string; occurredAt: string } | null = null;
+    let watchedUndo: {
+      titleId: string;
+      occurredAt: string;
+      restoreWatchedAt: string | null;
+    } | null = null;
     try {
       while (
         (["status", "rating", "favorite", "watchedAt"] as const).some(
@@ -284,7 +288,11 @@ export function TitleControls({
         action: {
           label: "Undo",
           onClick: () => {
-            void undoWatchedTransition(undo.titleId, undo.occurredAt)
+            void undoWatchedTransition(
+              undo.titleId,
+              undo.occurredAt,
+              undo.restoreWatchedAt,
+            )
               .then((result) => {
                 if (result.error) toast.error(result.error);
                 else toast.success("Watched change undone");

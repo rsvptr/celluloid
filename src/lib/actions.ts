@@ -106,6 +106,7 @@ const watchEventEditSchema = z.object({
 const undoWatchedTransitionSchema = z.object({
   titleId: idSchema,
   occurredAt: dateStringSchema,
+  restoreWatchedAt: dateStringSchema.nullable(),
 });
 const episodeToggleSchema = z.object({ episodeId: idSchema, watched: z.boolean() });
 const seasonToggleSchema = z.object({ seasonId: idSchema, watched: z.boolean() });
@@ -527,15 +528,26 @@ export async function updateTitle(
     ) {
       await syncWatchedAtFromEvents(tx, id, null);
     }
+    // Undo restores the owner's date without this transition's auto-stamp: the
+    // one submitted with this request, else the row's value before it.
+    const restoreWatchedAt =
+      input.watchedAt !== undefined ? submittedWatchedAt : title.watchedAt;
     return {
       undoWatchedAt:
         reversibleTvCompletion && completionAt ? completionAt.toISOString() : undefined,
+      restoreWatchedAt: restoreWatchedAt?.toISOString() ?? null,
     };
   });
   if (!found) return { error: "Title not found." };
   revalidateAll(id);
   return found.undoWatchedAt
-    ? { undo: { titleId: id, occurredAt: found.undoWatchedAt } }
+    ? {
+        undo: {
+          titleId: id,
+          occurredAt: found.undoWatchedAt,
+          restoreWatchedAt: found.restoreWatchedAt,
+        },
+      }
     : {};
 }
 
@@ -545,17 +557,25 @@ export async function updateTitle(
  * which is enough identity for a short-lived toast action without a schema
  * migration. Episodes are only unticked while their current watchedAt still
  * equals that instant, protecting a later correction made before Undo is used.
+ * The title's watchedAt returns to the token's restoreWatchedAt under the same
+ * guard, which takes back an auto-stamp without clearing a date the owner set.
  */
 export async function undoWatchedTransition(
   titleId: string,
   occurredAt: string,
+  restoreWatchedAt: string | null,
 ): Promise<{ ok?: true; error?: string }> {
   const userId = await getUserId();
   if (!userId) return { error: SIGNED_OUT_MESSAGE };
-  const parsed = undoWatchedTransitionSchema.safeParse({ titleId, occurredAt });
+  const parsed = undoWatchedTransitionSchema.safeParse({
+    titleId,
+    occurredAt,
+    restoreWatchedAt,
+  });
   if (!parsed.success) return { error: "Invalid request. Refresh and try again." };
   const transitionAt = toDate(parsed.data.occurredAt);
   if (!transitionAt) return { error: "Invalid request. Refresh and try again." };
+  const restoreAt = toDate(parsed.data.restoreWatchedAt);
 
   const undone = await prisma.$transaction(async (tx) => {
     const rows = await tx.$queryRaw<
@@ -617,6 +637,15 @@ export async function undoWatchedTransition(
         },
       },
     });
+    // Restore the token's date only while watchedAt still holds this instant: a
+    // later change (say a newer logged watch) owns it, as with the episodes. Done
+    // before the recount, so one that re-completes the title stamps a fresh date.
+    if (title.watchedAt?.getTime() === transitionAt.getTime()) {
+      await tx.title.update({
+        where: { id: titleId },
+        data: { watchedAt: restoreAt },
+      });
+    }
 
     const episodeRows = await tx.episode.count({ where: { season: { titleId } } });
     if (episodeRows > 0) {

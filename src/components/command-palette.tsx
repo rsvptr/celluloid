@@ -213,7 +213,11 @@ export function CommandPalette({ titles: seed = [] }: { titles?: TitleIndexEntry
                 action: {
                   label: "Undo",
                   onClick: () => {
-                    void undoWatchedTransition(undo.titleId, undo.occurredAt)
+                    void undoWatchedTransition(
+                      undo.titleId,
+                      undo.occurredAt,
+                      undo.restoreWatchedAt,
+                    )
                       .then((undoResult) => {
                         if (undoResult.error) toast.error(undoResult.error);
                         else toast.success(`Undid watched change for ${title.name}`);
