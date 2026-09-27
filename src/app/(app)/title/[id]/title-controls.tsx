@@ -15,7 +15,6 @@ import { toast } from "sonner";
 import type { WatchStatus } from "@/generated/prisma/client";
 import { Button, Card, Input, Select, Textarea } from "@/components/ui";
 import { RatingStars } from "@/components/rating-stars";
-import { useConfirm } from "@/components/confirm-dialog";
 import { STATUS_META, STATUS_ORDER } from "@/lib/format";
 import {
   logWatch,
@@ -74,7 +73,8 @@ export function TitleControls({
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
-  const { confirm, dialog } = useConfirm();
+  // A double click must not trash twice and stack two undo toasts.
+  const removingRef = useRef(false);
 
   // --- Log-watch dialog -----------------------------------------------------
   const [logOpen, setLogOpen] = useState(false);
@@ -414,7 +414,6 @@ export function TitleControls({
 
   return (
     <>
-      {dialog}
       <Dialog.Root open={logOpen} onOpenChange={setLogOpen}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-[dialog-overlay-in_0.2s_ease-out]" />
@@ -670,20 +669,16 @@ export function TitleControls({
           variant="danger"
           size="sm"
           className="ml-auto"
-          onClick={async () => {
-            if (
-              !(await confirm({
-                title: "Move to Trash?",
-                body: "This moves it to Trash. You can restore it from there.",
-                confirmLabel: "Move to Trash",
-                destructive: true,
-              }))
-            )
-              return;
+          // EM-18: no confirmation. Trash is recoverable twice over (Undo on
+          // the toast, then Trash itself), so the dialog only added a step.
+          onClick={() => {
+            if (removingRef.current) return;
+            removingRef.current = true;
             startTransition(async () => {
               try {
                 const res = await removeTitle(id);
                 if (res.error) {
+                  removingRef.current = false;
                   toast.error(res.error);
                   return;
                 }
@@ -696,7 +691,12 @@ export function TitleControls({
                   onSuccess: () => router.push(`/title/${id}`),
                 });
                 router.push("/");
+                // This button goes with the page. <main> persists across the
+                // navigation, so focus lands there rather than on <body>, as
+                // useConfirm does when a confirmed delete removes its opener.
+                document.getElementById("main")?.focus();
               } catch {
+                removingRef.current = false;
                 toast.error("Couldn't move this title to Trash. Please try again.");
               }
             });
