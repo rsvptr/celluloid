@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, type TestContext } from "node:test";
 import { neonEndpointId, resolveMigrationTarget, toDirectUrl } from "../scripts/db-urls.mjs";
 
 const DEV_POOLED =
@@ -93,6 +93,19 @@ describe("resolveMigrationTarget precedence", () => {
     });
   });
 
+  it("converts a pooled DIRECT_URL or DATABASE_URL_UNPOOLED to the direct host", () => {
+    assert.deepEqual(resolveMigrationTarget({ DIRECT_URL: DEV_POOLED, DATABASE_URL: DEV_POOLED }), {
+      url: DEV_DIRECT,
+      source: "DIRECT_URL",
+      mismatch: null,
+    });
+    assert.deepEqual(resolveMigrationTarget({ DATABASE_URL_UNPOOLED: PROD_POOLED }), {
+      url: PROD_DIRECT,
+      source: "DATABASE_URL_UNPOOLED",
+      mismatch: null,
+    });
+  });
+
   it("lets a blank variable fall through instead of handing Prisma an empty URL (PR-13)", () => {
     assert.deepEqual(
       resolveMigrationTarget({ DIRECT_URL: "", DATABASE_URL_UNPOOLED: "", DATABASE_URL: DEV_POOLED }),
@@ -164,18 +177,49 @@ describe("resolveMigrationTarget same-endpoint guard (NE-06)", () => {
   it("flags a Neon URL paired with a non-Neon one, in either direction", () => {
     assert.match(
       resolveMigrationTarget({ DIRECT_URL: PROD_DIRECT, DATABASE_URL: LOCAL }).mismatch ?? "",
-      /DATABASE_URL points at a non-Neon host/,
+      /DATABASE_URL points at an unparseable or non-Neon URL/,
     );
     assert.match(
       resolveMigrationTarget({ DIRECT_URL: LOCAL, DATABASE_URL: DEV_POOLED }).mismatch ?? "",
-      /DIRECT_URL points at a non-Neon host/,
+      /DIRECT_URL points at an unparseable or non-Neon URL/,
     );
   });
 
   it("accepts the pooled and direct strings of one branch, in any host case", () => {
     assert.equal(
-      resolveMigrationTarget({ DIRECT_URL: DEV_DIRECT.toUpperCase(), DATABASE_URL: DEV_POOLED })
-        .mismatch,
+      resolveMigrationTarget({
+        DIRECT_URL: DEV_DIRECT.replace(/ep-[^/]+/, (host) => host.toUpperCase()),
+        DATABASE_URL: DEV_POOLED,
+      }).mismatch,
+      null,
+    );
+  });
+
+  it("flags another database on the same endpoint, naming both databases", () => {
+    const mismatch = resolveMigrationTarget({
+      DIRECT_URL: DEV_DIRECT.replace("/celluloid?", "/neondb?"),
+      DATABASE_URL: DEV_POOLED,
+    }).mismatch;
+    assert.match(
+      mismatch ?? "",
+      /DIRECT_URL points at database "neondb" on Neon endpoint ep-dev-branch-a1b2c3, but DATABASE_URL points at database "celluloid"/,
+    );
+    assert.doesNotMatch(mismatch ?? "", /p%40ss|owner/);
+    assert.match(
+      resolveMigrationTarget({
+        DATABASE_URL_UNPOOLED: DEV_DIRECT.replace("/celluloid?", "?"),
+        DATABASE_URL: DEV_POOLED,
+      }).mismatch ?? "",
+      /DATABASE_URL_UNPOOLED points at the role's default database/,
+    );
+  });
+
+  it("compares decoded database names and ignores the role", () => {
+    assert.equal(
+      resolveMigrationTarget({
+        DIRECT_URL: DEV_DIRECT.replace("owner:", "migrator:").replace("/celluloid?", "/cellul%6Fid?"),
+        DATABASE_URL: DEV_POOLED,
+      }).mismatch,
       null,
     );
   });
@@ -199,5 +243,41 @@ describe("resolveMigrationTarget same-endpoint guard (NE-06)", () => {
       }).mismatch,
       null,
     );
+  });
+});
+
+describe("prisma.config.ts datasource", () => {
+  // Blank values, not deletions: loadEnv never overrides a key that exists,
+  // so a developer's .env.local can't fill them in.
+  let loads = 0;
+  async function loadConfig(t: TestContext, env: Record<string, string>) {
+    const saved = { ...process.env };
+    const errors: string[] = [];
+    t.mock.method(console, "error", (message: string) => errors.push(message));
+    Object.assign(process.env, { DIRECT_URL: "", DATABASE_URL_UNPOOLED: "", ...env });
+    try {
+      const { default: config } = await import(`../prisma.config.ts?load=${(loads += 1)}`);
+      return { url: config.datasource?.url, errors };
+    } finally {
+      for (const key of ["DIRECT_URL", "DATABASE_URL_UNPOOLED", "DATABASE_URL"]) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
+    }
+  }
+
+  it("withholds the URL when the migration target mismatches", async (t) => {
+    const { url, errors } = await loadConfig(t, {
+      DIRECT_URL: DEV_DIRECT.replace("/celluloid?", "/neondb?"),
+      DATABASE_URL: DEV_POOLED,
+    });
+    assert.equal(url, undefined);
+    assert.match(errors.join("\n"), /No datasource URL was passed to Prisma/);
+  });
+
+  it("passes the direct URL when the target matches", async (t) => {
+    const { url, errors } = await loadConfig(t, { DIRECT_URL: DEV_POOLED, DATABASE_URL: DEV_POOLED });
+    assert.equal(url, DEV_DIRECT);
+    assert.deepEqual(errors, []);
   });
 });

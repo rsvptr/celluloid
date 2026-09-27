@@ -21,10 +21,10 @@
  * Usage: npm run db:deploy:prod        (add --yes to skip the confirmation)
  */
 import { spawnSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { readdirSync, realpathSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { neonEndpointId, toDirectUrl } from "./db-urls.mjs";
 import { loadEnv } from "./load-env.mjs";
 
@@ -186,7 +186,9 @@ async function main() {
   process.exit(result.status ?? 1);
 }
 
+// Node resolves symlinks in import.meta.url but not in argv[1].
 const isDirectRun =
-  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+  process.argv[1] !== undefined &&
+  realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (isDirectRun) await main();
