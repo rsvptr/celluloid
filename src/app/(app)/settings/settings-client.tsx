@@ -58,6 +58,7 @@ import {
   TAG_COLOR_DEFAULT_SWATCH,
   TAG_COLOR_META,
   tagChipClass,
+  tagColorKey,
 } from "@/lib/tag-colors";
 import { isWatchRegion, regionName, WATCH_REGIONS } from "@/lib/tmdb-extras";
 import { TMDB_IMAGE_BASE } from "@/lib/images";
@@ -648,7 +649,7 @@ function MyServicesSection({
                       </span>
                       <span className="min-w-0 flex-1 truncate">{provider.name}</span>
                       {isSelected ? (
-                        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand text-[#04121c]">
+                        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand text-on-accent">
                           <Check aria-hidden="true" size={13} strokeWidth={3} />
                         </span>
                       ) : null}
@@ -1261,16 +1262,18 @@ function TagRow({
 }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(tag.name);
-  const [color, setColor] = useState<string | null>(tag.color);
+  // A colour from the first palette shows as the palette colour it renders as.
+  const storedColor = tagColorKey(tag.color);
+  const [color, setColor] = useState<string | null>(storedColor);
   const [error, setError] = useState<string | null>(null);
   const [busy, start] = useTransition();
 
-  const dirty = name.trim() !== tag.name || color !== tag.color;
+  const dirty = name.trim() !== tag.name || color !== storedColor;
 
   function cancel() {
     setEditing(false);
     setName(tag.name);
-    setColor(tag.color);
+    setColor(storedColor);
     setError(null);
   }
 
@@ -1288,7 +1291,7 @@ function TagRow({
             return;
           }
         }
-        if (color !== tag.color) {
+        if (color !== storedColor) {
           const res = await setTagColor(tag.id, color);
           if (res.error) {
             setError(res.error);

@@ -11,7 +11,7 @@ const buttonBase =
 
 const buttonVariants: Record<ButtonVariant, string> = {
   primary:
-    "text-[#04121c] font-semibold brand-gradient hover:opacity-90 shadow-sm shadow-brand/20",
+    "text-on-accent font-semibold brand-gradient hover:opacity-90 shadow-sm shadow-brand/20",
   secondary:
     "bg-surface-2 text-foreground ring-1 ring-line hover:bg-surface-2/70",
   ghost: "text-muted hover:text-foreground hover:bg-surface-2/60",

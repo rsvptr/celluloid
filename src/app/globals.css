@@ -38,6 +38,48 @@
   --radius-card: 0.9rem;
 }
 
+/* --- Color roles (JK-16/JK-17) ---------------------------------------------
+   Semantic tokens: components use these, and they point at Tailwind's palette
+   primitives. Retune a role here, not at its call sites. The app is dark only,
+   so there is no light block.
+
+   Status: one hue per watch status, owned by that status alone. Tags use other
+   hues (lib/tag-colors.ts). `subtle` and `border` are 15% and 30% tints;
+   `text` sits on them; `solid` is the dot and the stats bar. `text` on
+   `subtle` measures 8.2:1 or more on surface and 7.5:1 or more on surface-2;
+   on the poster chip (bg-black/75 over a white poster) the worst is Dropped
+   at 5.42:1. */
+@theme {
+  /* Text and icons on a filled accent (the brand gradient, bg-brand). */
+  --color-on-accent: #04121c;
+
+  --color-status-watchlist-text: var(--color-sky-300);
+  --color-status-watchlist-solid: var(--color-sky-400);
+  --color-status-watchlist-subtle: color-mix(in oklab, var(--color-sky-500) 15%, transparent);
+  --color-status-watchlist-border: color-mix(in oklab, var(--color-sky-500) 30%, transparent);
+
+  --color-status-watching-text: var(--color-amber-300);
+  --color-status-watching-solid: var(--color-amber-400);
+  --color-status-watching-subtle: color-mix(in oklab, var(--color-amber-500) 15%, transparent);
+  --color-status-watching-border: color-mix(in oklab, var(--color-amber-500) 30%, transparent);
+
+  --color-status-watched-text: var(--color-emerald-300);
+  --color-status-watched-solid: var(--color-emerald-400);
+  --color-status-watched-subtle: color-mix(in oklab, var(--color-emerald-500) 15%, transparent);
+  --color-status-watched-border: color-mix(in oklab, var(--color-emerald-500) 30%, transparent);
+
+  --color-status-on-hold-text: var(--color-slate-300);
+  --color-status-on-hold-solid: var(--color-slate-400);
+  --color-status-on-hold-subtle: color-mix(in oklab, var(--color-slate-500) 15%, transparent);
+  --color-status-on-hold-border: color-mix(in oklab, var(--color-slate-500) 30%, transparent);
+
+  --color-status-dropped-text: var(--color-rose-300);
+  --color-status-dropped-solid: var(--color-rose-400);
+  --color-status-dropped-subtle: color-mix(in oklab, var(--color-rose-500) 15%, transparent);
+  --color-status-dropped-border: color-mix(in oklab, var(--color-rose-500) 30%, transparent);
+}
+/* --- End color roles ------------------------------------------------------- */
+
 :root {
   color-scheme: dark;
   --brand-gradient: linear-gradient(135deg, #2dd4ee 0%, #38bdf8 45%, #2563eb 100%);

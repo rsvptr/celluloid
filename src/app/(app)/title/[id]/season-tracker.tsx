@@ -410,7 +410,7 @@ export function SeasonTracker({
                   className={cn(
                     "focus-ring flex min-h-11 shrink-0 items-center justify-center rounded-md px-2 py-1 text-xs ring-1 press sm:min-h-0",
                     sComplete
-                      ? "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30"
+                      ? "bg-status-watched-subtle text-status-watched-text ring-status-watched-border"
                       : "bg-surface-2 text-muted ring-line hover:text-foreground",
                   )}
                 >
@@ -453,7 +453,7 @@ export function SeasonTracker({
                             )}
                           >
                             {isWatched && (
-                              <Check size={13} className="text-[#04121c]" strokeWidth={3} />
+                              <Check size={13} className="text-on-accent" strokeWidth={3} />
                             )}
                           </span>
                           <span className="w-8 shrink-0 text-xs tabular-nums text-faint">

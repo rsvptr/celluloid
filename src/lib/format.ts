@@ -6,28 +6,28 @@ export const STATUS_META: Record<
 > = {
   WATCHLIST: {
     label: "Watchlist",
-    dot: "bg-sky-400",
-    badge: "bg-sky-500/15 text-sky-300 ring-sky-500/30",
+    dot: "bg-status-watchlist-solid",
+    badge: "bg-status-watchlist-subtle text-status-watchlist-text ring-status-watchlist-border",
   },
   WATCHING: {
     label: "Watching",
-    dot: "bg-amber-400",
-    badge: "bg-amber-500/15 text-amber-300 ring-amber-500/30",
+    dot: "bg-status-watching-solid",
+    badge: "bg-status-watching-subtle text-status-watching-text ring-status-watching-border",
   },
   WATCHED: {
     label: "Watched",
-    dot: "bg-emerald-400",
-    badge: "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30",
+    dot: "bg-status-watched-solid",
+    badge: "bg-status-watched-subtle text-status-watched-text ring-status-watched-border",
   },
   ON_HOLD: {
     label: "On hold",
-    dot: "bg-slate-400",
-    badge: "bg-slate-500/15 text-slate-300 ring-slate-500/30",
+    dot: "bg-status-on-hold-solid",
+    badge: "bg-status-on-hold-subtle text-status-on-hold-text ring-status-on-hold-border",
   },
   DROPPED: {
     label: "Dropped",
-    dot: "bg-rose-400",
-    badge: "bg-rose-500/15 text-rose-300 ring-rose-500/30",
+    dot: "bg-status-dropped-solid",
+    badge: "bg-status-dropped-subtle text-status-dropped-text ring-status-dropped-border",
   },
 };
 

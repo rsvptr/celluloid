@@ -152,7 +152,7 @@ export function libraryFilterKey(filters: LibraryFilters): string {
 }
 
 const addTitleButtonClass =
-  "inline-flex min-h-11 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg brand-gradient px-4 text-sm font-semibold text-[#04121c] shadow-sm shadow-brand/20 press hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 sm:min-h-10";
+  "inline-flex min-h-11 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg brand-gradient px-4 text-sm font-semibold text-on-accent shadow-sm shadow-brand/20 press hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 sm:min-h-10";
 
 // Chrome moves focus to <body> the instant a focused control becomes
 // `disabled`, so every bulk and Trash action left the keyboard back at the skip
@@ -1558,7 +1558,7 @@ const ListRow = memo(function ListRow({
         <span
           className={cn(
             "flex h-5 w-5 shrink-0 items-center justify-center rounded ring-1",
-            selected ? "bg-brand text-[#04121c] ring-brand" : "ring-line-strong",
+            selected ? "bg-brand text-on-accent ring-brand" : "ring-line-strong",
           )}
         >
           {selected && <CheckSquare size={13} />}

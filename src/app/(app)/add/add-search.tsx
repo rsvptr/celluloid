@@ -134,7 +134,7 @@ function AddButton({
       onClick={beginAdd}
       disabled={state.kind === "adding"}
       aria-label={`Add ${name} to your library`}
-      className="focus-ring brand-gradient flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-[#04121c] hover:opacity-90 disabled:opacity-60 sm:min-h-0"
+      className="focus-ring brand-gradient flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-on-accent hover:opacity-90 disabled:opacity-60 sm:min-h-0"
     >
       {state.kind === "adding" ? <Spinner /> : <Plus size={15} aria-hidden="true" />}
       Add

@@ -37,10 +37,13 @@ import {
   writeRememberedCookie,
 } from "@/lib/remembered-state-client";
 
+// Neutral and graded by emphasis, not hue: emerald, amber and slate are the
+// Watched, Watching and On hold statuses, and a "Medium" pick must not read as
+// Watching (JK-17). The label carries the level.
 const CONFIDENCE = {
-  high: "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30",
-  medium: "bg-amber-500/15 text-amber-300 ring-amber-500/30",
-  low: "bg-slate-500/15 text-slate-300 ring-slate-500/30",
+  high: "bg-surface-2 text-foreground ring-line-strong",
+  medium: "bg-surface-2 text-muted ring-line-strong",
+  low: "bg-surface-2 text-faint ring-line",
 } as const;
 
 const CONFIDENCE_LABELS: Record<Recommendation["confidence"], string> = {
@@ -1141,7 +1144,7 @@ function RecCard({
                   }
                 })
               }}
-              className="focus-ring brand-gradient flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-[#04121c] hover:opacity-90 disabled:opacity-60 sm:min-h-0"
+              className="focus-ring brand-gradient flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-on-accent hover:opacity-90 disabled:opacity-60 sm:min-h-0"
             >
               {state.kind === "adding" ? <Spinner /> : <Plus size={15} aria-hidden="true" />}
               Watchlist
@@ -1308,7 +1311,7 @@ function TitlePicker({
                 <span
                   className={cn(
                     "flex h-4 w-4 shrink-0 items-center justify-center rounded ring-1",
-                    on ? "bg-brand text-[#04121c] ring-brand" : "ring-line",
+                    on ? "bg-brand text-on-accent ring-brand" : "ring-line",
                   )}
                 >
                   {on && <Check size={11} aria-hidden="true" />}
