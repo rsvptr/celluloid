@@ -249,10 +249,13 @@ export function AuthForm({ signupsDisabled }: { signupsDisabled: boolean }) {
               // but that clips the Input's focus ring (a box-shadow). The inner
               // padding gives the ring room inside the clip box; the negative
               // margin cancels it in the layout, keeping field rhythm identical.
-              className="-m-1 grid grid-rows-[1fr] overflow-hidden motion-safe:animate-[collapse-in_220ms_cubic-bezier(0.16,1,0.3,1)]"
+              // -mb-3 here and pb-3 inside also cancel the form's gap-4 below
+              // this first child, so the collapsed region takes no space and
+              // the Email field never jumps.
+              className="-m-1 -mb-3 grid grid-rows-[1fr] overflow-hidden motion-safe:animate-[collapse-in_220ms_cubic-bezier(0.16,1,0.3,1)]"
             >
               <div className="min-h-0">
-              <div className="flex flex-col gap-4 p-1">
+              <div className="flex flex-col gap-4 p-1 pb-3">
                 <Field label="Name" htmlFor="login-name">
                   <Input
                     id="login-name"
