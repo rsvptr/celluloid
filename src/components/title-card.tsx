@@ -33,7 +33,7 @@ function TitleCardImpl({
   selectable = false,
   selected = false,
   onToggle,
-  priority = false,
+  lcp,
 }: {
   item: CardItem;
   /** Link target; defaults to the detail page. `null` = non-interactive (read-only). */
@@ -41,8 +41,8 @@ function TitleCardImpl({
   selectable?: boolean;
   selected?: boolean;
   onToggle?: (id: string) => void;
-  /** LCP hint — pass for the first few above-the-fold cards only. */
-  priority?: boolean;
+  /** LCP hint for the first visible row — see Poster's `lcp`. */
+  lcp?: "preload" | "eager";
 }) {
   const status = STATUS_META[item.status];
   const isTv = item.mediaType === "TV";
@@ -72,7 +72,7 @@ function TitleCardImpl({
           name={item.name}
           decorative
           mediaType={item.mediaType}
-          priority={priority}
+          lcp={lcp}
           className={cn(
             "ring-1 ring-line transition duration-200",
             selectable

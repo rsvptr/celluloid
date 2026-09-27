@@ -221,7 +221,11 @@ export default async function SharePage({
             <div className="grid grid-cols-2 gap-x-3 gap-y-8 min-[480px]:grid-cols-3 sm:grid-cols-4 sm:gap-x-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7">
               {items.map((item, index) => (
                 <article key={item.id} className="min-w-0">
-                  <TitleCard item={item} href={null} priority={index < 4} />
+                  <TitleCard
+                    item={item}
+                    href={null}
+                    lcp={index < 2 ? "preload" : index < 7 ? "eager" : undefined}
+                  />
                   {includeNotes && item.notes ? (
                     <blockquote className="mt-3 border-l-2 border-brand-cyan/45 pl-3 text-xs leading-5 text-muted">
                       <span className="sr-only">Note from {ownerName}: </span>

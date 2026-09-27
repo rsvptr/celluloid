@@ -136,9 +136,11 @@ export default async function TitlePage({
               name={title.name}
               decorative
               mediaType={title.mediaType}
-              size="w500"
+              size="w342"
               sizes="(max-width: 640px) 128px, 176px"
-              priority
+              // One preload per page: the backdrop, when there is one, is the
+              // larger LCP candidate.
+              lcp={backdrop ? "eager" : "preload"}
             />
           </div>
           <div className="flex flex-col gap-3">
