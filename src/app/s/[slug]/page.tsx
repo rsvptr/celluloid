@@ -5,6 +5,7 @@ import { notFound } from "next/navigation";
 import { cache } from "react";
 import { Wordmark } from "@/components/brand";
 import { TitleCard } from "@/components/title-card";
+import { TmdbAttribution } from "@/components/tmdb-attribution";
 import { getSharePayload } from "@/lib/data";
 import { rateLimit } from "@/lib/rate-limit";
 
@@ -234,7 +235,7 @@ export default async function SharePage({
         </section>
       </main>
 
-      <footer className="mx-auto flex w-full max-w-7xl flex-col gap-4 border-t border-line/80 px-4 py-8 text-sm text-faint sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
+      <footer className="mx-auto flex w-full max-w-7xl flex-col flex-wrap gap-4 border-t border-line/80 px-4 py-8 text-sm text-faint sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
         <div>
           <span className="sr-only">Celluloid</span>
           <span aria-hidden="true">
@@ -242,6 +243,9 @@ export default async function SharePage({
           </span>
         </div>
         <p className="break-words">A read-only view from {ownerName}&apos;s library.</p>
+        {/* Posters and metadata here come from TMDB, and anonymous visitors
+            can't reach the Settings "About" credit, so attribute here too. */}
+        <TmdbAttribution className="sm:basis-full" />
       </footer>
     </div>
   );

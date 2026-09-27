@@ -14,6 +14,7 @@ import {
   Copy,
   Download,
   Globe,
+  Info,
   KeyRound,
   Link2,
   MonitorSmartphone,
@@ -31,6 +32,7 @@ import type { AccountInfo, ShareSummary } from "@/lib/data";
 import { authClient } from "@/lib/auth-client";
 import { Badge, Button, Card, Input, Select, Spinner } from "@/components/ui";
 import { useConfirm } from "@/components/confirm-dialog";
+import { TmdbAttribution } from "@/components/tmdb-attribution";
 import { fullDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { deleteTag, renameTag, setTagColor } from "@/lib/actions";
@@ -140,6 +142,9 @@ export function SettingsClient({
       </div>
       <BackupSection lastBackupAt={lastBackupAt} backupAgeDays={backupAgeDays} />
       <DangerSection />
+      <div className="lg:col-span-2">
+        <AboutSection />
+      </div>
     </div>
   );
 }
@@ -2502,5 +2507,17 @@ function DangerSection() {
       </div>
       </Section>
     </>
+  );
+}
+
+// TMDB's terms put the attribution in an "About" or "Credits" type section.
+function AboutSection() {
+  return (
+    <Section icon={Info} title="About" description="Where Celluloid's data comes from.">
+      <div className="flex flex-col gap-3">
+        <TmdbAttribution />
+        <p className="text-xs text-faint">Streaming availability via JustWatch.</p>
+      </div>
+    </Section>
   );
 }

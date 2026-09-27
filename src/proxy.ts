@@ -105,6 +105,6 @@ export async function proxy(request: NextRequest) {
 export const config = {
   // Exclude the auth API, Next internals, static assets and PWA files.
   matcher: [
-    "/((?!api|_next/static|_next/image|favicon.ico|manifest.webmanifest|icon-192.png|logo.png|robots.txt|sitemap.xml).*)",
+    "/((?!api|_next/static|_next/image|favicon.ico|manifest.webmanifest|icon-192.png|logo.png|tmdb-logo.svg|robots.txt|sitemap.xml).*)",
   ],
 };
