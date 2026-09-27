@@ -281,6 +281,14 @@ label {
   }
 }
 
+/* Client-mounted Motion entrances start at a hidden `initial`. If the lazy
+   feature chunk fails (motion.tsx flags <html>), nothing would animate them
+   in, so put them at rest. Inline styles need the !important. */
+[data-motion-failed] [data-motion-enter] {
+  opacity: 1 !important;
+  transform: none !important;
+}
+
 /* Respect reduced motion */
 @media (prefers-reduced-motion: reduce) {
   *,

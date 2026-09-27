@@ -1005,6 +1005,7 @@ export function RecommendClient({
                   <motion.div
                     key={recommendationIdentity(r)}
                     layout
+                    data-motion-enter
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -6 }}

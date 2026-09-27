@@ -22,10 +22,19 @@ export { AnimatePresence, LayoutGroup, m as motion, useReducedMotion };
 // a blocker, deploy skew), `m` components simply stay feature-less: the promise
 // never settles, so there is no unhandled rejection and no half-loaded state.
 // Nothing server-rendered starts hidden, so that costs animation, not content.
+// Client-mounted entrances do start hidden, so the failure also flags <html>:
+// globals.css then shows every `data-motion-enter` element at rest, including
+// ones that mounted while the chunk was still pending.
 const loadDomMax = () =>
   import("motion/react")
-    .then((module) => module.domMax)
-    .catch(() => new Promise<never>(() => {}));
+    .then((module) => {
+      delete document.documentElement.dataset.motionFailed;
+      return module.domMax;
+    })
+    .catch(() => {
+      document.documentElement.dataset.motionFailed = "";
+      return new Promise<never>(() => {});
+    });
 
 // A cinematic ease-out curve used for most entrances.
 export const EASE_OUT = [0.16, 1, 0.3, 1] as const;

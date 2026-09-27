@@ -1235,6 +1235,7 @@ function BulkBar({
           // below dialogs/command palette (z-50) so a confirm dialog or the share
           // dialog opened from here still renders on top.
           className="fixed inset-x-0 bottom-0 z-[45] px-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
+          data-motion-enter
           initial={{ y: 80, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
           exit={{ y: 80, opacity: 0 }}
