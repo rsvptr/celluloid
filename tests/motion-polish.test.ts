@@ -43,4 +43,11 @@ describe("motion polish", () => {
     assert.match(card, /exit=\{\{ opacity: 0, scale: 0\.97, transition: \{ duration: 0\.15, ease: EASE_OUT \} \}\}/);
     assert.match(card, /layout: \{ type: "spring", visualDuration: 0\.3, bounce: 0 \}/);
   });
+
+  it("keeps the login glow still (EM-13)", async () => {
+    const [page, css] = await Promise.all([source("app/login/page.tsx"), source("app/globals.css")]);
+    const glow = page.slice(page.lastIndexOf("<div", page.indexOf("blur-[120px]")), page.indexOf("/>", page.indexOf("blur-[120px]")));
+    assert.doesNotMatch(glow, /hero-float|animate-/);
+    assert.doesNotMatch(css, /hero-float/);
+  });
 });
