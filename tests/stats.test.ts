@@ -4,6 +4,7 @@ import {
   computeStreaks,
   dayKeyInZone,
   dayStartInZone,
+  isIanaTimeZone,
   resolveTimeZone,
 } from "../src/lib/data";
 
@@ -49,6 +50,27 @@ describe("resolveTimeZone", () => {
     // Intl accepts offset identifiers; Postgres reads their sign the other way.
     assert.equal(resolveTimeZone("+05:30"), "UTC");
     assert.equal(resolveTimeZone("'; DROP TABLE \"Title\"; --"), "UTC");
+  });
+});
+
+// Also the preferences form's check. It used Intl.supportedValuesOf, which
+// omits aliases, so a stored UTC failed validation on every save.
+describe("isIanaTimeZone", () => {
+  it("accepts UTC, Etc/* zones and aliases that supportedValuesOf omits", () => {
+    for (const zone of ["UTC", "Etc/UTC", "Etc/GMT+5", "Etc/GMT-14", "GMT", "US/Eastern"]) {
+      assert.equal(isIanaTimeZone(zone), true, zone);
+    }
+  });
+
+  it("accepts every zone the preferences picker lists", () => {
+    const rejected = Intl.supportedValuesOf("timeZone").filter((zone) => !isIanaTimeZone(zone));
+    assert.deepEqual(rejected, []);
+  });
+
+  it("rejects junk, unknown zones and offsets", () => {
+    for (const zone of ["", "Mars/Olympus_Mons", "Etc/Unknown", "+05:30", "UTC; --", "../UTC"]) {
+      assert.equal(isIanaTimeZone(zone), false, zone);
+    }
   });
 });
 

@@ -342,10 +342,11 @@ function ProfileSection({ name, email }: { name: string; email: string }) {
 }
 
 /** Time zones offered in the preferences picker (IANA identifiers). Falls
- * back to a minimal list if the enumeration API isn't available. */
+ * back to a minimal list if the enumeration API isn't available. UTC, the
+ * default, leads the list: supportedValuesOf omits it as a non-canonical alias. */
 const TIME_ZONES: string[] =
   typeof Intl !== "undefined" && typeof Intl.supportedValuesOf === "function"
-    ? Intl.supportedValuesOf("timeZone")
+    ? ["UTC", ...Intl.supportedValuesOf("timeZone").filter((z) => z !== "UTC")]
     : ["UTC"];
 
 function PreferencesSection({

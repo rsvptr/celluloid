@@ -824,12 +824,21 @@ const IANA_TIME_ZONE = /^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)*$/;
  * IANA name degrades to UTC — the same fallback dayKeyInZone applies.
  */
 export function resolveTimeZone(timeZone: string): string {
-  if (!IANA_TIME_ZONE.test(timeZone)) return "UTC";
+  return isIanaTimeZone(timeZone) ? timeZone : "UTC";
+}
+
+/**
+ * True for a zone resolveTimeZone keeps. Asks Intl.DateTimeFormat rather than
+ * Intl.supportedValuesOf, which lists only canonical zones and so omits valid
+ * aliases such as UTC, Etc/UTC and US/Eastern.
+ */
+export function isIanaTimeZone(timeZone: string): boolean {
+  if (!IANA_TIME_ZONE.test(timeZone)) return false;
   try {
     new Intl.DateTimeFormat("en-US", { timeZone });
-    return timeZone;
+    return true;
   } catch {
-    return "UTC";
+    return false;
   }
 }
 
