@@ -1,5 +1,12 @@
 import { toast } from "sonner";
 
+// JK-07: Sonner's 4 s default is gone before a keyboard user can reach Undo
+// (it pauses on hover, not on focus; Alt+T focuses the toasts and pauses them),
+// so undo toasts stay 10 s and carry a close button to dismiss them sooner.
+export const UNDO_TOAST_DURATION = 10_000;
+// The confirmation or error that replaces it goes back to Sonner's default.
+const OUTCOME_DURATION = 4000;
+
 type UndoToastOptions = {
   /** Runs the undo. A returned `error` shows on the toast; a throw shows `failure`. */
   undo: () => Promise<{ error?: string }>;
@@ -22,6 +29,8 @@ type UndoToastOptions = {
 export function undoToast(message: string, options: UndoToastOptions) {
   const { undo, success, failure, onSuccess, onError } = options;
   const id = toast.success(message, {
+    duration: UNDO_TOAST_DURATION,
+    closeButton: true,
     action: {
       label: "Undo",
       onClick: (event) => {
@@ -30,16 +39,16 @@ export function undoToast(message: string, options: UndoToastOptions) {
         void undo().then(
           (result) => {
             if (result.error) {
-              toast.error(result.error, { id });
+              toast.error(result.error, { id, duration: OUTCOME_DURATION });
               onError?.();
               return;
             }
-            if (success) toast.success(success, { id });
+            if (success) toast.success(success, { id, duration: OUTCOME_DURATION });
             else toast.dismiss(id);
             onSuccess?.();
           },
           () => {
-            toast.error(failure, { id });
+            toast.error(failure, { id, duration: OUTCOME_DURATION });
             onError?.();
           },
         );
