@@ -6,7 +6,7 @@ async function source(path: string) {
   return readFile(new URL(path, import.meta.url), "utf8");
 }
 
-const settingsPath = "../src/app/(app)/settings/settings-client.tsx";
+const settingsPath = "../src/app/(app)/settings/two-factor-section.tsx";
 
 function between(file: string, start: string, end: string): string {
   const from = file.indexOf(start);
@@ -33,7 +33,7 @@ describe("turning 2FA on signs out other devices (BA-07)", () => {
   });
 
   it("reloads the Devices list when 2FA flips", async () => {
-    const settings = await source(settingsPath);
+    const settings = await source("../src/app/(app)/settings/settings-client.tsx");
     assert.match(
       settings,
       /<DevicesSection key=\{info\.twoFactorEnabled \? "2fa-on" : "2fa-off"\} \/>/,

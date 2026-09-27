@@ -6,6 +6,12 @@ async function source(path: string) {
   return readFile(new URL(path, import.meta.url), "utf8");
 }
 
+/** These files of the settings route, read as one text. */
+async function settingsSource(...names: string[]) {
+  const files = await Promise.all(names.map((name) => source(`../src/app/(app)/settings/${name}.tsx`)));
+  return files.join("\n");
+}
+
 function between(file: string, start: string, end: string): string {
   const from = file.indexOf(start);
   assert.notEqual(from, -1, `marker not found: ${start}`);
@@ -26,7 +32,7 @@ function elementWithId(file: string, id: string): string {
 // issue 7). Each now moves focus somewhere sensible that exists afterwards.
 describe("focus after an action removes its own control", () => {
   it("deleted rows hand focus to their section's heading", async () => {
-    const settings = await source("../src/app/(app)/settings/settings-client.tsx");
+    const settings = await settingsSource("settings-ui", "shared-links-section", "tags-section", "devices-section");
     const heading = between(settings, "function Section(", "function Notice(");
     assert.match(heading, /id=\{headingId\}\s+tabIndex=\{headingId \? -1 : undefined\}/);
 
@@ -47,7 +53,7 @@ describe("focus after an action removes its own control", () => {
   });
 
   it("the 2FA panel swaps move focus into the panel that replaces them", async () => {
-    const settings = await source("../src/app/(app)/settings/settings-client.tsx");
+    const settings = await source("../src/app/(app)/settings/two-factor-section.tsx");
     for (const [handler, end, state, id] of [
       ["async function beginEnable()", "async function confirmEnable()", 'setPhase("setup");', "settings-two-factor-setup-start"],
       ["async function confirmEnable()", "async function disable()", "setOn(true);", "settings-two-factor-on"],
@@ -70,14 +76,14 @@ describe("focus after an action removes its own control", () => {
   });
 
   it("a restore hands focus to its result once the preview is gone", async () => {
-    const settings = await source("../src/app/(app)/settings/settings-client.tsx");
+    const settings = await settingsSource("backup-section", "settings-ui");
     const body = between(settings, "async function commitRestore()", "return (");
     assert.match(
       body,
       /flushSync\(\(\) => \{\s*setResult\(restored\);\s*setPreview\(null\);\s*\}\);\s*document\.getElementById\("settings-restore-result"\)\?\.focus\(\);/,
     );
     assert.match(settings, /<Notice kind="ok" focusId="settings-restore-result">/);
-    const notice = between(settings, "function Notice(", "function MetadataSyncSection(");
+    const notice = between(settings, "function Notice(", "async function copyText(");
     assert.match(notice, /id=\{focusId\}\s+tabIndex=\{focusId \? -1 : undefined\}/);
   });
 });

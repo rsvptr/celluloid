@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { describe, it } from "node:test";
 import { STATUS_META } from "../src/lib/format";
 import {
@@ -61,7 +61,7 @@ describe("status color tokens (JK-16)", () => {
       "../src/components/title-card.tsx",
       "../src/app/(app)/add/add-search.tsx",
       "../src/app/(app)/title/[id]/season-tracker.tsx",
-      "../src/app/(app)/settings/settings-client.tsx",
+      "../src/app/(app)/settings/my-services-section.tsx",
       "../src/app/(app)/recommend/rec-card.tsx",
       "../src/app/(app)/recommend/title-picker.tsx",
     ];
@@ -69,6 +69,11 @@ describe("status color tokens (JK-16)", () => {
       const text = await source(file);
       assert.doesNotMatch(text, /#04121c/, file);
       assert.match(text, /text-on-accent/, file);
+    }
+    // Settings is split across files; none of them may hard-code the color.
+    const settingsDir = new URL("../src/app/(app)/settings/", import.meta.url);
+    for (const name of await readdir(settingsDir)) {
+      assert.doesNotMatch(await readFile(new URL(name, settingsDir), "utf8"), /#04121c/, name);
     }
     assert.match(await source("../src/app/globals.css"), /--color-on-accent: #04121c;/);
   });

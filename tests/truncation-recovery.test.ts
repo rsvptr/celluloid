@@ -20,7 +20,7 @@ describe("truncated text stays recoverable (JK-27)", () => {
   });
 
   it("settings share names and shared titles carry a title", async () => {
-    const settings = await source("../src/app/(app)/settings/settings-client.tsx");
+    const settings = await source("../src/app/(app)/settings/shared-links-section.tsx");
     assert.match(settings, /title=\{s\.name \?\? undefined\}/);
     assert.match(settings, /truncate text-foreground\/90" title=\{t\.name\}/);
   });

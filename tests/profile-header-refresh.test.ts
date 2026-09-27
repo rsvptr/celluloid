@@ -35,7 +35,7 @@ describe("profile save refreshes the header name", () => {
 
   it("ProfileSection calls router.refresh() after a successful save", async () => {
     const src = await readFile(
-      new URL("../src/app/(app)/settings/settings-client.tsx", import.meta.url),
+      new URL("../src/app/(app)/settings/profile-section.tsx", import.meta.url),
       "utf8",
     );
     const start = src.indexOf("function ProfileSection(");

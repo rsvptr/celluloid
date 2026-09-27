@@ -8,7 +8,7 @@ import { describe, it } from "node:test";
 describe("preferences time zone", async () => {
   const read = (path: string) => readFile(new URL(path, import.meta.url), "utf8");
   const actions = await read("../src/lib/settings-actions.ts");
-  const client = await read("../src/app/(app)/settings/settings-client.tsx");
+  const client = await read("../src/app/(app)/settings/preferences-section.tsx");
 
   it("validates with isIanaTimeZone, not the canonical-only list", () => {
     assert.match(actions, /timeZone: z[\s\S]*?\.refine\(isIanaTimeZone,/);
