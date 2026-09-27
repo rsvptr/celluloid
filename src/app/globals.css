@@ -418,9 +418,9 @@ label {
    - Kill switch: every CSS animation, including any added later, finishes at
      once and never loops, unless it is allowed below. That stops the shimmer
      and any other decorative loop.
-   - Transitions keep their authored durations, but only on properties that
-     don't move anything: colour, opacity and shadow still ease; transform,
-     translate, scale, rotate and size changes snap.
+   - Single-duration transitions keep their duration, but only on properties
+     that don't move anything: colour, opacity and shadow still ease;
+     transform, translate, scale, rotate and size changes snap.
    - Allowed: the dialog fades (the content fades without its scale), and the
      spinner pulses in place, so it still shows that work is under way.
    Motion's own animations follow MotionConfig reducedMotion="user". */

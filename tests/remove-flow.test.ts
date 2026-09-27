@@ -22,9 +22,10 @@ describe("remove flow (EM-18)", () => {
     const remove = buttonLabelled(controls, /<Trash2 size=\{\d+\} \/>\s*Remove\n/);
     assert.match(remove, /await removeTitle\(id\)/);
     assert.match(remove, /undoToast\("Moved to Trash", \{\s*undo: \(\) => restoreTitle\(id\)/);
-    // One remove per click burst, released again when it fails.
+    // One remove per click burst, released again when it fails or is undone.
     assert.match(remove, /if \(removingRef\.current\) return;\s*removingRef\.current = true;/);
-    assert.equal(remove.match(/removingRef\.current = false;/g)?.length, 2);
+    assert.equal(remove.match(/removingRef\.current = false;/g)?.length, 3);
+    assert.match(remove, /onSuccess: \(\) => \{\s*removingRef\.current = false;\s*router\.push\(`\/title\/\$\{id\}`\);/);
     // The button leaves with the page; focus goes to the persistent <main>.
     assert.match(remove, /router\.push\("\/"\);[\s\S]*getElementById\("main"\)\?\.focus\(\)/);
   });

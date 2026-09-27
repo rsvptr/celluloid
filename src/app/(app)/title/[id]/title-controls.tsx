@@ -696,8 +696,13 @@ export function TitleControls({
                   success: "Restored to your library",
                   failure: "Couldn't undo that. Restore the title from Trash.",
                   // The restore revalidated, which clears the router's
-                  // caches, so the push renders the title fresh.
-                  onSuccess: () => router.push(`/title/${id}`),
+                  // caches, so the push renders the title fresh. Release the
+                  // guard too: if Undo lands before the push to / commits,
+                  // this page never unmounts.
+                  onSuccess: () => {
+                    removingRef.current = false;
+                    router.push(`/title/${id}`);
+                  },
                 });
                 router.push("/");
                 // This button goes with the page. <main> persists across the
