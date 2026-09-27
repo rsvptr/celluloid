@@ -36,7 +36,6 @@ export default async function AppLayout({
       <LazyCommandPalette />
       <Toaster
         theme="dark"
-        richColors
         position="bottom-right"
         // 4.5rem clears the mobile tab bar, but not the library's bulk bar,
         // which is taller and sat under the toast for its whole four seconds.
@@ -60,6 +59,11 @@ export default async function AppLayout({
           },
           classNames: {
             actionButton: "min-h-11 sm:min-h-0",
+            // The inline style above beat richColors (JK-20), so errors looked
+            // like successes. They get the danger token on the border (its
+            // `!` beats the inline style) and the icon (6.4:1 on surface);
+            // the text stays foreground (15:1).
+            error: "border-danger/60! [&_[data-icon]]:text-danger",
           },
         }}
       />
