@@ -83,8 +83,10 @@ export function TitleControls({
   const logDateId = useId();
   const logNoteId = useId();
   const logContentRef = useRef<HTMLDivElement>(null);
+  const logTriggerRef = useRef<HTMLButtonElement | null>(null);
 
-  function openLog() {
+  function openLog(e: React.MouseEvent<HTMLButtonElement>) {
+    logTriggerRef.current = e.currentTarget;
     setLogDate(todayLocalDate());
     setLogNote("");
     setLogOpen(true);
@@ -422,6 +424,13 @@ export function TitleControls({
                 return;
               }
               document.getElementById(logDateId)?.focus();
+            }}
+            onCloseAutoFocus={(e) => {
+              // Radix returns focus only to a Dialog.Trigger inside this Root,
+              // and the Log watch button lives in the Card below, so focus fell
+              // to <body> on close (JK-03). Hand it back by hand.
+              e.preventDefault();
+              logTriggerRef.current?.focus();
             }}
             className="fixed left-1/2 top-1/2 z-50 max-h-[85dvh] w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[var(--radius-card)] bg-surface p-5 ring-1 ring-line focus:outline-none data-[state=open]:animate-[dialog-content-in_0.2s_cubic-bezier(0.16,1,0.3,1)]"
           >
