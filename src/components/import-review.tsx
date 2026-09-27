@@ -40,6 +40,12 @@ const CONFIDENCE_LABELS: Record<ConfidenceBucket, string> = {
   high: "High confidence",
 };
 
+// Chrome moves focus to <body> the instant a focused control becomes
+// `disabled`. Cancel import opens a confirm and then goes busy, so it carries
+// `aria-disabled` and returns early instead, keeping focus after confirming
+// (JK-03). These classes reproduce Button's `disabled:` styling.
+const softDisabledClass = "aria-disabled:cursor-not-allowed aria-disabled:opacity-50";
+
 /** Least confident first, matching the default row order. */
 const CONFIDENCE_ORDER: ConfidenceBucket[] = ["needs", "check", "good", "high"];
 
@@ -620,7 +626,17 @@ export function ImportReview({
         </ul>
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
-          <Button type="button" variant="ghost" size="sm" disabled={committing || cancelling || closed} onClick={cancel}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className={softDisabledClass}
+            aria-disabled={committing || cancelling || closed}
+            onClick={() => {
+              if (committing || cancelling || closed) return;
+              void cancel();
+            }}
+          >
             {cancelling ? <Spinner /> : <Square size={13} aria-hidden="true" />}
             Cancel import
           </Button>

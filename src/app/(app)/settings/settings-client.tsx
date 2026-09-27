@@ -86,6 +86,12 @@ export interface MetadataFailureSummary {
   metadataLastError: string | null;
 }
 
+// Chrome moves focus to <body> the instant a focused control becomes
+// `disabled`. The buttons that open a confirm and then go busy carry
+// `aria-disabled` and return early instead, so focus is still on them after
+// confirming (JK-03). These classes reproduce Button's `disabled:` styling.
+const softDisabledClass = "aria-disabled:cursor-not-allowed aria-disabled:opacity-50";
+
 export function SettingsClient({
   info,
   shares,
@@ -1052,16 +1058,28 @@ function ShareRow({
               {pendingAction === `restore:${s.id}` ? "Restoring…" : "Un-revoke"}
             </Button>
           ) : active ? (
-            <Button variant="ghost" size="sm" disabled={busy} onClick={onRevoke}>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-disabled={busy}
+              className={softDisabledClass}
+              onClick={() => {
+                if (busy) return;
+                onRevoke();
+              }}
+            >
               {pendingAction === `revoke:${s.id}` ? "Revoking…" : "Revoke"}
             </Button>
           ) : null}
           <Button
             variant="ghost"
             size="sm"
-            className="text-rose-300 hover:text-rose-200"
-            disabled={busy}
-            onClick={onDelete}
+            className={cn("text-rose-300 hover:text-rose-200", softDisabledClass)}
+            aria-disabled={busy}
+            onClick={() => {
+              if (busy) return;
+              onDelete();
+            }}
           >
             {pendingAction === `delete:${s.id}` ? "Deleting…" : "Delete"}
           </Button>
@@ -1304,9 +1322,12 @@ function TagRow({
           <Button
             variant="ghost"
             size="sm"
-            className="text-rose-300 hover:text-rose-200"
-            disabled={busy || deleting}
-            onClick={onDelete}
+            className={cn("text-rose-300 hover:text-rose-200", softDisabledClass)}
+            aria-disabled={busy || deleting}
+            onClick={() => {
+              if (busy || deleting) return;
+              onDelete();
+            }}
           >
             {deleting ? "Deleting…" : "Delete"}
           </Button>
@@ -1687,10 +1708,13 @@ function DevicesSection() {
                         <Button
                           variant="danger"
                           size="sm"
-                          className="self-start sm:self-auto"
+                          className={cn("self-start sm:self-auto", softDisabledClass)}
                           aria-label={`Sign out ${label}`}
-                          disabled={busy || !currentToken}
-                          onClick={() => void revokeSession(session)}
+                          aria-disabled={busy || !currentToken}
+                          onClick={() => {
+                            if (busy || !currentToken) return;
+                            void revokeSession(session);
+                          }}
                         >
                           {pendingToken === session.token ? "Signing out…" : "Sign out"}
                         </Button>
@@ -1709,8 +1733,12 @@ function DevicesSection() {
               <Button
                 variant="danger"
                 size="sm"
-                disabled={busy || !currentToken || otherSessionCount === 0}
-                onClick={() => void revokeOtherSessions()}
+                className={softDisabledClass}
+                aria-disabled={busy || !currentToken || otherSessionCount === 0}
+                onClick={() => {
+                  if (busy || !currentToken || otherSessionCount === 0) return;
+                  void revokeOtherSessions();
+                }}
               >
                 {revokingOthers ? "Signing out…" : "Sign out everywhere else"}
               </Button>
@@ -1847,9 +1875,12 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
           <Button
             variant="danger"
             size="sm"
-            className="self-start"
-            disabled={busy || !password}
-            onClick={disable}
+            className={cn("self-start", softDisabledClass)}
+            aria-disabled={busy || !password}
+            onClick={() => {
+              if (busy || !password) return;
+              void disable();
+            }}
           >
             {busy ? <Spinner /> : null} Disable 2FA
           </Button>
@@ -2389,9 +2420,12 @@ function BackupSection({
                 type="button"
                 variant={mode === "replace-personal" ? "danger" : "primary"}
                 size="sm"
-                className="mt-3"
-                disabled={busy !== null}
-                onClick={commitRestore}
+                className={cn("mt-3", softDisabledClass)}
+                aria-disabled={busy !== null}
+                onClick={() => {
+                  if (busy !== null) return;
+                  void commitRestore();
+                }}
               >
                 {busy === "restore" ? <Spinner /> : <ArchiveRestore aria-hidden="true" size={15} />}
                 {busy === "restore" ? "Restoring\u2026" : "Restore backup"}
@@ -2476,9 +2510,10 @@ function DangerSection() {
         <Button
           variant="danger"
           size="sm"
-          className="mt-4"
-          disabled={pending || !password}
+          className={cn("mt-4", softDisabledClass)}
+          aria-disabled={pending || !password}
           onClick={async () => {
+            if (pending || !password) return;
             if (
               !(await confirm({
                 title: "Delete your account?",

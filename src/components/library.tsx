@@ -1811,9 +1811,12 @@ function TrashView({
             <Button
               size="sm"
               variant="danger"
-              disabled={pending}
-              onClick={purgeAll}
-              className="shrink-0"
+              aria-disabled={pending}
+              onClick={() => {
+                if (pending) return;
+                void purgeAll();
+              }}
+              className={cn("shrink-0", softDisabledClass)}
             >
               <Trash2 size={14} /> Empty trash
             </Button>
