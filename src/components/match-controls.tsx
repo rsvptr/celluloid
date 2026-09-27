@@ -30,6 +30,12 @@ export function MatchControls({
   // A title with no tmdbId has never been matched, so every string here has to
   // read as a first match rather than a correction.
   const unmatched = tmdbId == null;
+  // What the dialog shows, held while it plays its exit (EM-03). A successful
+  // pick closes it in the same commit that ends `pending` and brings the
+  // rematched title's props, which would swap the heading and drop the saving
+  // row mid-fade. Taken afresh on every open.
+  const [shown, setShown] = useState({ name, unmatched, saved: false });
+  const busy = pending || shown.saved;
 
   function pick(r: SearchResult) {
     if (pending) return; // one rematch at a time; a second pick would race it
@@ -50,6 +56,7 @@ export function MatchControls({
         return;
       }
       toast.success(unmatched ? "Match saved" : "Match updated");
+      setShown((s) => ({ ...s, saved: true }));
       setOpen(false);
     });
   }
@@ -74,6 +81,7 @@ export function MatchControls({
         size="sm"
         onClick={(e) => {
           opener.current = e.currentTarget;
+          setShown({ name, unmatched, saved: false });
           setOpen(true);
         }}
       >
@@ -89,7 +97,7 @@ export function MatchControls({
 
       <Dialog.Root open={open} onOpenChange={setOpen}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-[dialog-overlay-in_0.2s_var(--ease-out)]" />
+          <Dialog.Overlay className="dialog-overlay fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
           <Dialog.Content
             ref={contentRef}
             onOpenAutoFocus={(e) => {
@@ -107,7 +115,7 @@ export function MatchControls({
                 opener.current.focus();
               }
             }}
-            className="fixed left-1/2 top-1/2 z-50 flex max-h-[85dvh] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col rounded-[var(--radius-card)] bg-surface p-5 ring-1 ring-line focus:outline-none data-[state=open]:animate-[dialog-content-in_0.2s_var(--ease-out)]"
+            className="dialog-content fixed left-1/2 top-1/2 z-50 flex max-h-[85dvh] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col rounded-[var(--radius-card)] bg-surface p-5 ring-1 ring-line focus:outline-none"
           >
             <Dialog.Close
               className="absolute right-3 top-3 -m-3 flex min-h-11 min-w-11 items-center justify-center rounded text-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 sm:m-0 sm:min-h-0 sm:min-w-0"
@@ -116,16 +124,16 @@ export function MatchControls({
               <X size={18} />
             </Dialog.Close>
             <Dialog.Title className="text-sm font-semibold">
-              {unmatched ? "Find a match for" : "Change match for"} “{name}”
+              {shown.unmatched ? "Find a match for" : "Change match for"} “{shown.name}”
             </Dialog.Title>
             <Dialog.Description className="mt-0.5 text-xs text-muted">
-              {unmatched
+              {shown.unmatched
                 ? "Pick the matching title to pull in its poster, cast, and episode list. Your status, rating, notes, tags, and watch history stay put."
                 : "Pick the correct title. Your status, rating, notes, tags, and watch history stay put; episode progress resets for a different show."}
             </Dialog.Description>
             <div
               className={
-                pending
+                busy
                   ? "pointer-events-none mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain opacity-60"
                   : "mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain"
               }
@@ -134,13 +142,13 @@ export function MatchControls({
                 autoFocus
                 onPick={pick}
                 placeholder={
-                  unmatched ? "Search for this title…" : "Search the correct title…"
+                  shown.unmatched ? "Search for this title…" : "Search the correct title…"
                 }
               />
             </div>
-            {pending && (
+            {busy && (
               <p className="mt-3 flex items-center gap-2 text-sm text-muted">
-                <Spinner /> {unmatched ? "Saving match…" : "Updating match…"}
+                <Spinner /> {shown.unmatched ? "Saving match…" : "Updating match…"}
               </p>
             )}
           </Dialog.Content>

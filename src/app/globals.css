@@ -226,6 +226,11 @@ label {
   /* Panels docked to a screen edge (the bulk bar). */
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
 }
+:root {
+  /* Radix dialogs: exits run faster than entrances. */
+  --duration-dialog-in: 200ms;
+  --duration-dialog-out: 150ms;
+}
 /* ======================== end of motion tokens ========================== */
 
 /* Press feedback (emil-design-eng): scale on pointer-down. It replaces
@@ -244,13 +249,22 @@ label {
   }
 }
 
-/* Radix dialog entrance (close is instant — Radix unmounts immediately) */
+/* Radix dialogs (EM-03). Radix's Presence sees the closed state change
+   animation-name, waits for that animation to end, and only then unmounts,
+   so the exit plays in full. Content that changes on close would show during
+   those 150 ms: see share-dialog.tsx and import-review.tsx. The content keeps
+   transform-origin at its centre, which modals are exempt from. */
 @keyframes dialog-overlay-in {
   from {
     opacity: 0;
   }
   to {
     opacity: 1;
+  }
+}
+@keyframes dialog-overlay-out {
+  to {
+    opacity: 0;
   }
 }
 @keyframes dialog-content-in {
@@ -262,6 +276,24 @@ label {
     opacity: 1;
     scale: 1;
   }
+}
+@keyframes dialog-content-out {
+  to {
+    opacity: 0;
+    scale: 0.97;
+  }
+}
+.dialog-overlay[data-state="open"] {
+  animation: dialog-overlay-in var(--duration-dialog-in) var(--ease-out);
+}
+.dialog-overlay[data-state="closed"] {
+  animation: dialog-overlay-out var(--duration-dialog-out) var(--ease-out);
+}
+.dialog-content[data-state="open"] {
+  animation: dialog-content-in var(--duration-dialog-in) var(--ease-out);
+}
+.dialog-content[data-state="closed"] {
+  animation: dialog-content-out var(--duration-dialog-out) var(--ease-out);
 }
 
 /* Entrances that run from the first paint, with no JS. Sites apply them with

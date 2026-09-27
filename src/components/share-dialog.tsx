@@ -53,12 +53,12 @@ export function ShareDialog({
     setError(null);
   }
 
-  // Radix unmounts the content on close, so resetting here can't clobber a reopen.
+  // Closing only reports up. The form resets in onCloseAutoFocus instead,
+  // which Radix fires once the exit animation has unmounted the content
+  // (EM-03); resetting here snapped a created link back to the empty form
+  // while the dialog was still fading out.
   function handleOpenChange(next: boolean) {
-    if (!next) {
-      onClose();
-      reset();
-    }
+    if (!next) onClose();
   }
 
   function create() {
@@ -95,7 +95,7 @@ export function ShareDialog({
   return (
     <Dialog.Root open={open} onOpenChange={handleOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-[dialog-overlay-in_0.2s_var(--ease-out)]" />
+        <Dialog.Overlay className="dialog-overlay fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
         <Dialog.Content
           onOpenAutoFocus={(e) => {
             // No autofocus on mobile: keep Radix's default so the on-screen
@@ -105,12 +105,13 @@ export function ShareDialog({
             titleInputRef.current?.focus();
           }}
           onCloseAutoFocus={(e) => {
+            reset();
             if (opener?.current) {
               e.preventDefault();
               opener.current.focus();
             }
           }}
-          className="fixed left-1/2 top-1/2 z-50 max-h-[85dvh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[var(--radius-card)] bg-surface p-5 ring-1 ring-line focus:outline-none data-[state=open]:animate-[dialog-content-in_0.2s_var(--ease-out)]"
+          className="dialog-content fixed left-1/2 top-1/2 z-50 max-h-[85dvh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[var(--radius-card)] bg-surface p-5 ring-1 ring-line focus:outline-none"
         >
           <Dialog.Close
             className="absolute right-3 top-3 -m-3 flex min-h-11 min-w-11 items-center justify-center rounded text-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 sm:m-0 sm:min-h-0 sm:min-w-0"
