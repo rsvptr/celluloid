@@ -106,16 +106,6 @@ export function serviceAvailabilityState(
     : "NO_MATCH";
 }
 
-/**
- * The filter state a URL encodes, as one comparable string. `Library` adopts an
- * incoming `initialFilters` only when this key differs from the one the last
- * prop carried, which is what keeps a re-render from being mistaken for a
- * navigation.
- */
-export function libraryFilterKey(filters: LibraryFilters): string {
-  return filtersToParams(filters).toString();
-}
-
 export function Library({
   items,
   languages,
@@ -161,11 +151,12 @@ export function Library({
   // when the page came back from the router's cache for an earlier URL (Back
   // to a URL this component had mirrored), and then the address bar is right.
   const searchParams = useSearchParams();
-  const urlFilters = libraryUrlFilters(initialFilters, searchParams, {
-    languages,
-    tags,
-    genres,
-  });
+  const urlFilters = libraryUrlFilters(
+    initialFilters,
+    searchParams,
+    { languages, tags, genres },
+    rememberFilters,
+  );
   const [filters, dispatchFilters] = useReducer(
     libraryFiltersReducer,
     urlFilters,
@@ -174,26 +165,26 @@ export function Library({
   const { query, view, onlyOnServices } = filters;
   const setFilters = (update: LibraryFilterUpdate) =>
     dispatchFilters({ type: "set", update });
-  // The filters the server last handed down, so a genuinely new set can be told
-  // from the same set arriving again.
-  const [appliedFilterKey, setAppliedFilterKey] = useState(() =>
-    libraryFilterKey(initialFilters),
-  );
+  // The router's URL the filters were last taken from, so a navigation can be
+  // told from a re-render of the same URL.
+  const urlKey = searchParams.toString();
+  const [appliedUrlKey, setAppliedUrlKey] = useState(urlKey);
 
-  // Adopt the server's filters when they actually change, adjusted during
-  // render (React's "adjusting state when a prop changes" pattern, the same one
-  // the Trash count uses below). <Library> used to be keyed on these filters
-  // instead: once any filter had been changed, the re-render that ends every
-  // bulk and Trash action re-rendered the page from the params this
-  // component had itself mirrored with replaceState, the key changed, and the
-  // remount threw away select mode, the selection, the open filters panel and
-  // Trash mode. That re-render now lands here with a key the last prop already
-  // carried, or with the mirrored one whose adopt is a no-op (the reducer
-  // keeps the same state), while back/forward navigation still re-applies its
-  // URL.
-  const incomingFilterKey = libraryFilterKey(initialFilters);
-  if (incomingFilterKey !== appliedFilterKey) {
-    setAppliedFilterKey(incomingFilterKey);
+  // Adopt the address bar's filters when the router's URL changes, adjusted
+  // during render (React's "adjusting state when a prop changes" pattern, the
+  // same one the Trash count uses below). <Library> used to be keyed on the
+  // server's filters instead: once any filter had been changed, the re-render
+  // that ends every bulk and Trash action brought filters other than the
+  // mounted ones, the key changed, and the remount threw away select mode, the
+  // selection, the open filters panel and Trash mode. Adopting on those same
+  // filters kept that state but still reset the search: the router never sees
+  // the mirror's replaceState, so the re-render is for the URL it last
+  // navigated to, whose filters (on a bare URL with remember-filters on, the
+  // cookie's, which has no search) the owner may have changed since. The
+  // router's URL changes only on a navigation or Back/Forward, never on a
+  // re-render or the mirror's own write, so typing is never reset either.
+  if (urlKey !== appliedUrlKey) {
+    setAppliedUrlKey(urlKey);
     dispatchFilters({ type: "adopt", filters: urlFilters });
   }
 
@@ -226,13 +217,15 @@ export function Library({
   // version fires this on every keystroke. Safari throttles replaceState to
   // ~100 calls/30s and throws a SecurityError past that. The very first mirror
   // (initial mount) still runs immediately so a stale query string is never
-  // briefly on screen; every mirror after that is debounced. The cookie write
+  // briefly on screen, and so does the one after a server re-render (below);
+  // only a filter change is debounced. The cookie write
   // is additionally skipped when its encoded value hasn't changed since the
   // last write (mirrorLastCookieRef) — the cookie doesn't even carry `query`
   // (see LibraryRememberedState), so same-query keystrokes were writing an
   // identical value on every call.
   const mirrorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const mirrorIsFirstRunRef = useRef(true);
+  // The server filters the mirror last ran with; null before its first run.
+  const mirrorServerFiltersRef = useRef<LibraryFilters | null>(null);
   const mirrorLastCookieRef = useRef<string | null | undefined>(undefined);
   // Holds the latest pending mirror so the unmount-flush effect below can run
   // it directly instead of re-deriving filter state from scratch.
@@ -254,6 +247,16 @@ export function Library({
         window.location.pathname === pathname &&
         `${window.location.pathname}${window.location.search}` !== next
       ) {
+        // The router's own history state carries its __NA marker, so the
+        // router never takes this URL as a navigation (see libraryUrlFilters).
+        // Known limitation: a revalidating server action navigates with
+        // "push", and the router then pushes a new entry whenever the address
+        // bar differs from its own URL, as it does once anything is mirrored.
+        // Each such action leaves a duplicate library entry, so the next Back
+        // seems to do nothing. Only a router that knows the mirrored URL
+        // avoids that: replaceState without this state mismatches the page
+        // segment on every refresh and action (scroll to top, then a hard
+        // reload), and router.replace costs a server render per mirror.
         window.history.replaceState(window.history.state, "", next);
       }
       if (rememberFilters) {
@@ -266,8 +269,13 @@ export function Library({
       mirrorPendingRef.current = null;
     };
 
-    if (mirrorIsFirstRunRef.current) {
-      mirrorIsFirstRunRef.current = false;
+    // The first run, and the first after a server re-render, mirror at once.
+    // The re-render has just had the router write its own URL over the
+    // address bar, and a navigation within a debounce would leave that URL on
+    // the library's history entry: the router pushes the new route before the
+    // unmount flush below runs, so the flush's pathname guard skips the write.
+    if (mirrorServerFiltersRef.current !== initialFilters) {
+      mirrorServerFiltersRef.current = initialFilters;
       mirror();
       return;
     }
@@ -284,7 +292,8 @@ export function Library({
     // exactly when a filter does, as it did with a dependency per filter.
     // initialFilters is new on every server re-render (router.refresh, a
     // server action), and each of those has the router rewrite the address
-    // bar to the last URL it navigated to, so the mirror runs again after it.
+    // bar to the last URL it navigated to, so the mirror runs again after it,
+    // at once.
   }, [filters, rememberFilters, initialFilters]);
 
   // Flushes a still-pending debounced mirror on unmount so the last keystroke's

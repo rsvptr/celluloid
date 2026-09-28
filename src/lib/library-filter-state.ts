@@ -6,6 +6,7 @@
 
 import { STATUS_META, languageName } from "@/lib/format";
 import {
+  DEFAULT_FILTERS,
   hasExplicitLibraryFilterParams,
   parseLibraryFilters,
   type FilterFacets,
@@ -162,20 +163,26 @@ export function libraryExportHref(filters: LibraryFilters): string {
 
 /**
  * The filters the address bar stands for, by the rule the page applies on the
- * server: the URL's own params when it has any, otherwise `serverFilters` (the
- * remembered filters or the defaults a bare URL gets). Library mirrors its
- * filters with replaceState, which the router never sees, so on Back the page
- * can be the one rendered for the URL before the mirror (no search) while the
- * address bar still holds the mirrored one. Reading the URL keeps the search.
+ * server: the URL's own params when it has any; for a bare URL, the remembered
+ * filters (`serverFilters`) with remember-filters on, otherwise the defaults.
+ * Library mirrors its filters with replaceState, which the router never sees,
+ * so on Back the page can be the one rendered for the URL before the mirror
+ * (no search) while the address bar still holds the mirrored one. Reading the
+ * URL keeps the search, and the defaults keep a filter the owner cleared to a
+ * bare URL from coming back from that page. With remember-filters on, that
+ * page's `serverFilters` can be stale too; only the current cookie could say,
+ * and reading it during render would not match the server's render.
  */
 export function libraryUrlFilters(
   serverFilters: LibraryFilters,
   params: URLSearchParams,
   facets: FilterFacets,
+  rememberFilters: boolean,
 ): LibraryFilters {
   // get() is the first value, like the server's parse of a repeated param.
   const raw = Object.fromEntries([...params.keys()].map((key) => [key, params.get(key) ?? undefined]));
-  return hasExplicitLibraryFilterParams(raw) ? parseLibraryFilters(raw, facets) : serverFilters;
+  if (hasExplicitLibraryFilterParams(raw)) return parseLibraryFilters(raw, facets);
+  return rememberFilters ? serverFilters : DEFAULT_FILTERS;
 }
 
 /** What the URL and the remembered-filters cookie mirror: the filters, search trimmed. */
