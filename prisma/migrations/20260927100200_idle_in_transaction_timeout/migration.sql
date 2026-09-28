@@ -7,17 +7,23 @@
 --
 -- A role setting applies to sessions that start after it, not to open ones,
 -- such as server connections Neon's pooler already holds. It lands on
--- CURRENT_USER, the role running migrations; if the app connects as another
--- role, set it there by hand. `prisma migrate diff` does not compare role
--- settings, so the drift check neither needs nor sees this.
+-- CURRENT_USER, the role running migrations, in this database only, so
+-- replaying the migrations as a local superuser leaves its other databases
+-- alone. If the app connects as another role, set it there by hand.
+-- `prisma migrate diff` does not compare role settings, so the drift check
+-- neither needs nor sees this.
 --
--- A role that may not change its own settings gets a NOTICE, not a failed
--- deploy.
+-- Any error gets a NOTICE, not a failed deploy: a failed migration would block
+-- every later deploy until someone resolves it by hand, and this is optional.
 DO $$
 BEGIN
-  ALTER ROLE CURRENT_USER SET idle_in_transaction_session_timeout = '60s';
+  EXECUTE format(
+    'ALTER ROLE %I IN DATABASE %I SET idle_in_transaction_session_timeout = %L',
+    current_user, current_database(), '60s'
+  );
 EXCEPTION
-  WHEN insufficient_privilege THEN
-    RAISE NOTICE 'Skipped setting idle_in_transaction_session_timeout for role %: %', current_user, SQLERRM;
+  WHEN OTHERS THEN
+    RAISE NOTICE 'Skipped setting idle_in_transaction_session_timeout for role % in database %: % (SQLSTATE %)',
+      current_user, current_database(), SQLERRM, SQLSTATE;
 END
 $$;
