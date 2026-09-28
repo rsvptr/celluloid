@@ -71,8 +71,7 @@ describe("regenerating backup codes (BA-09)", () => {
     const panel = between(settings, 'id="settings-new-backup-codes"', "Done\n");
     assert.match(panel, /won&apos;t be shown again/);
     assert.match(panel, /copyText\(newCodes\.join\("\\n"\), "Backup codes copied"\)/);
-    assert.match(panel, /saveBlob\(/);
-    assert.match(panel, /"celluloid-backup-codes\.txt"/);
+    assert.match(panel, /onClick=\{\(\) => downloadBackupCodes\(newCodes\)\}/);
     // Turning 2FA off clears codes still on screen.
     assert.match(between(settings, "function reset()", "async function"), /setNewCodes\(null\)/);
   });
@@ -82,16 +81,19 @@ describe("regenerating backup codes (BA-09)", () => {
 describe("backup codes at 2FA setup", () => {
   it("offer Copy and the same Download as regenerating", async () => {
     const settings = await source(settingsPath);
-    // The same Blob and filename in both places.
-    const blob = (codes: string) =>
-      new RegExp(
-        String.raw`saveBlob\(\s*new Blob\(\[\`\$\{${codes}\.join\("\\n"\)\}\\n\`\], \{ type: "text/plain" \}\),\s*"celluloid-backup-codes\.txt",?\s*\)`,
-      );
+    // One helper builds the Blob and filename, and both places call it.
+    const helper = between(settings, "function downloadBackupCodes(codes: string[]) {", "\n}\n");
+    assert.match(
+      helper,
+      /^function downloadBackupCodes\(codes: string\[\]\) \{\s*saveBlob\(\s*new Blob\(\[`\$\{codes\.join\("\\n"\)\}\\n`\], \{ type: "text\/plain" \}\),\s*"celluloid-backup-codes\.txt",?\s*\);\s*$/,
+    );
+    assert.equal(settings.match(/saveBlob\(/g)?.length, 1, "saveBlob is called only from the helper");
+    const download = (codes: string) => new RegExp(String.raw`onClick=\{\(\) => downloadBackupCodes\(${codes}\)\}`);
     const regenerate = between(settings, 'id="settings-new-backup-codes"', "Done\n");
-    assert.match(regenerate, blob("newCodes"));
+    assert.match(regenerate, download("newCodes"));
     const setup = between(settings, "2. Keep these backup codes somewhere safe.", "3. Enter the 6-digit code");
     assert.match(setup, /copyText\(backupCodes\.join\("\\n"\), "Backup codes copied"\)/);
-    assert.match(setup, blob("backupCodes"));
+    assert.match(setup, download("backupCodes"));
     assert.match(setup, /<Download size=\{12\} \/> Download/);
   });
 });
