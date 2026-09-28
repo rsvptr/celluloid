@@ -2,7 +2,9 @@
 
 import { useState, useTransition } from "react";
 import { Sparkles } from "lucide-react";
-import { Button, Input } from "@/components/ui";
+import { Button, Input, softDisabledClass } from "@/components/ui";
+import { useConfirm } from "@/components/confirm-dialog";
+import { cn } from "@/lib/utils";
 import { removeAnthropicKey, setAnthropicKey } from "@/lib/settings-actions";
 import { Notice, Section } from "./settings-ui";
 
@@ -18,9 +20,41 @@ export function ApiKeySection({
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  const { confirm, dialog } = useConfirm();
+
+  async function removeKey() {
+    if (
+      !(await confirm({
+        title: "Remove your API key?",
+        body: hasServerKey
+          ? "Recommendations will use the app's shared key, and any daily limit its owner set, until you add a key again."
+          : "AI recommendations will stop working until you add a key again.",
+        confirmLabel: "Remove key",
+        destructive: true,
+      }))
+    )
+      return;
+    start(async () => {
+      setError(null);
+      setStatus(null);
+      try {
+        const result = await removeAnthropicKey();
+        if (result?.error) {
+          setError(result.error);
+          return;
+        }
+        setSaved(false);
+        setStatus("Personal API key removed.");
+      } catch {
+        setError("Celluloid couldn't remove the API key. Check your connection and retry.");
+      }
+    });
+  }
 
   return (
-    <Section
+    <>
+      {dialog}
+      <Section
       icon={Sparkles}
       title="Anthropic API key"
       description="Powers your AI recommendations. Stored encrypted. You can grab one at console.anthropic.com."
@@ -92,30 +126,19 @@ export function ApiKeySection({
             <Button
               variant="ghost"
               size="sm"
-              disabled={pending}
-              onClick={() =>
-                start(async () => {
-                  setError(null);
-                  setStatus(null);
-                  try {
-                    const result = await removeAnthropicKey();
-                    if (result?.error) {
-                      setError(result.error);
-                      return;
-                    }
-                    setSaved(false);
-                    setStatus("Personal API key removed.");
-                  } catch {
-                    setError("Celluloid couldn't remove the API key. Check your connection and retry.");
-                  }
-                })
-              }
+              className={cn("text-rose-300 hover:text-rose-200", softDisabledClass)}
+              aria-disabled={pending}
+              onClick={() => {
+                if (pending) return;
+                void removeKey();
+              }}
             >
               Remove
             </Button>
           )}
         </div>
       </form>
-    </Section>
+      </Section>
+    </>
   );
 }

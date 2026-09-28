@@ -42,7 +42,7 @@ function assertSoftDisabled({ button, handler }: { button: string; handler: stri
 // JK-08 aria-disabled pattern instead.
 describe("confirm openers keep focus after confirming (JK-03)", () => {
   it("settings openers soft-disable", async () => {
-    const settings = await settingsSource("shared-links-section", "tags-section", "devices-section", "two-factor-section", "backup-section", "danger-section");
+    const settings = await settingsSource("shared-links-section", "tags-section", "devices-section", "two-factor-section", "backup-section", "danger-section", "api-key-section");
     for (const marker of [
       "{pendingAction === `revoke:",
       "{pendingAction === `delete:",
@@ -52,6 +52,7 @@ describe("confirm openers keep focus after confirming (JK-03)", () => {
       ": null} Turn off 2FA",
       "void commitRestore()",
       "Delete my account",
+      "void removeKey()",
     ]) {
       assertSoftDisabled(buttonAround(settings, marker), marker);
     }
@@ -79,6 +80,7 @@ describe("soft-disabled styling", () => {
       "../src/app/(app)/settings/two-factor-section.tsx",
       "../src/app/(app)/settings/backup-section.tsx",
       "../src/app/(app)/settings/danger-section.tsx",
+      "../src/app/(app)/settings/api-key-section.tsx",
       "../src/components/library-bulk-bar.tsx",
       "../src/components/library-trash.tsx",
       "../src/components/import-review.tsx",
