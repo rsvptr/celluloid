@@ -1,3 +1,4 @@
+import type Anthropic from "@anthropic-ai/sdk";
 import { prisma } from "@/lib/prisma";
 import { MediaType } from "@/generated/prisma/client";
 import { getExportRows } from "@/lib/data";
@@ -18,12 +19,13 @@ import {
 } from "@/lib/anthropic";
 import { createRecExtractor } from "@/lib/rec-stream";
 import {
-  DEFAULT_REC_MODEL,
   eraById,
   isRecModel,
   MODEL_CACHE_MIN_TOKENS,
   MODEL_CAPS,
+  resolveRecModel,
   type RecEraId,
+  type RecModelId,
 } from "@/lib/models";
 import { languageName } from "@/lib/format";
 
@@ -161,14 +163,14 @@ const REC_SCHEMA: Record<string, unknown> = {
 };
 
 // Static so the prompt prefix stays byte-identical across runs (prompt cache).
-const SYSTEM_PROMPT = `You are a film and TV curator with deep, worldwide knowledge of cinema — mainstream and regional, classic and current. You are given one person's complete watch history and asked for recommendations.
+const SYSTEM_PROMPT = `You are a film and TV curator with deep, worldwide knowledge of cinema — mainstream and regional, classic and current. You are given one person's watch history and asked for recommendations.
 
 Rules:
-- Recommend only real, released titles. Use the year of ORIGINAL release (first air date for TV).
+- Recommend only real, released titles. Use the year of original release (first air date for TV).
 - Report each title's original language as an ISO-639-1 code.
 - Never recommend anything in the person's history or watchlist, anything they were already shown, or near-duplicates of either (remakes/re-releases count as duplicates only if they are the same work).
-- Titles rated 8+ and favorites are the strongest positive signal; low ratings, abandoned and dropped titles describe what to avoid; recent watches describe current mood.
-- Write each reason as ONE specific sentence tied to named titles or clear patterns in their history — never generic praise.
+- Rewatches, titles rated 8+ and favorites are the strongest positive signal; low ratings, abandoned and dropped titles describe what to avoid; recent watches describe current mood.
+- Write each reason as one specific sentence tied to named titles or clear patterns in their history — never generic praise.
 - Be honest with confidence: "high" only when the fit is strong and specific.
 - If a hard requirement is given (language, genre, era, type), every suggestion must satisfy it.
 - Order the list from most to least confident.`;
@@ -179,7 +181,7 @@ function buildBriefBlock(summary: string): string {
 }
 
 /**
- * How many titles the "do NOT suggest these" clause carries. Naming the cap
+ * How many titles the "don't suggest these" clause carries. Naming the cap
  * lets mergeExcludeNames fill it deliberately instead of guessing at the slice
  * below.
  */
@@ -206,7 +208,7 @@ export function buildRequestBlock(
     : "";
   const excludeClause =
     exclude && exclude.length
-      ? ` I have already been shown these, so do NOT suggest any of them again: ${exclude.slice(0, PROMPT_EXCLUDE_CAP).join(", ")}.`
+      ? ` I have already been shown these, so don't suggest any of them again: ${exclude.slice(0, PROMPT_EXCLUDE_CAP).join(", ")}.`
       : "";
   const prefClause = [
     language ? `originally in ${languageName(language)}` : "",
@@ -218,7 +220,7 @@ export function buildRequestBlock(
   const preferClause = prefClause
     ? ` Hard requirement: every suggestion must be ${prefClause}.`
     : "";
-  return `Based on my taste brief above, recommend ${count} titles I have NOT seen and that are NOT already on my watchlist.${focusClause}${preferClause}${excludeClause} ${typeClause} Strongly prefer titles that match what I rated highly; avoid obvious blockbusters unless they genuinely fit. Return the full ${count} suggestions: when you run out of strong fits, include lower-confidence picks and label their confidence honestly rather than shortening the list.`;
+  return `Based on my taste brief above, recommend ${count} titles I haven't seen and that aren't already on my watchlist.${focusClause}${preferClause}${excludeClause} ${typeClause} Strongly prefer titles that match what I rated highly; avoid obvious blockbusters unless they genuinely fit. Return the full ${count} suggestions: when you run out of strong fits, include lower-confidence picks and label their confidence honestly rather than shortening the list.`;
 }
 
 /**
@@ -522,7 +524,7 @@ export async function enrichRec(
 // plus adaptive thinking can't be rejected or silently truncated. A model with
 // no entry falls back to the smallest ceiling.
 const MODEL_OUTPUT_CEILING: Record<string, number> = {
-  "claude-opus-5": 128000,
+  "claude-opus-5-5": 128000,
   "claude-sonnet-5": 128000,
   "claude-haiku-4-5": 64000,
 };
@@ -531,6 +533,97 @@ const MODEL_OUTPUT_CEILING: Record<string, number> = {
 // brief is title names and short notes. Only used to decide whether to attach
 // the prompt-cache breakpoint, so erring low costs at most one missed cache.
 const APPROX_CHARS_PER_TOKEN = 4;
+
+// The beta that gates `fallbacks: "default"`. The array form of `fallbacks`
+// takes a different header (server-side-fallback-2026-06-01), and pairing
+// either header with the other form is a 400.
+const SERVER_SIDE_FALLBACK_BETA = "server-side-fallback-2026-07-01";
+
+/**
+ * The Messages API request for one run on `model`. Pure, so each model's
+ * request surface (thinking, effort, output budget, cache breakpoint, refusal
+ * fallback) is unit-testable without a live stream. None of the models take
+ * sampling parameters or an assistant prefill, and the JSON shape comes from
+ * structured outputs, not a forced tool call.
+ */
+export function buildRecRequest(
+  model: RecModelId,
+  askCount: number,
+  brief: string,
+  request: string,
+) {
+  // Fail safe if a model is ever added to REC_MODELS without a caps entry.
+  const caps = MODEL_CAPS[model] ?? {
+    effort: false,
+    adaptiveThinking: false,
+    serverFallback: false,
+  };
+
+  // Scale the output budget with the ask so a large batch (askCount up to 50)
+  // plus adaptive thinking — max_tokens is a single cap covering thinking AND
+  // response text — can't truncate mid-JSON. The base (~the old flat budget)
+  // covers thinking + the JSON envelope; the per-item budget covers each
+  // suggestion and its share of thinking. Capped a safe margin under the
+  // model's streaming ceiling. This is a ceiling, not a target: generation is
+  // aborted once `count` are accepted, so the headroom only prevents
+  // truncation, it never costs tokens.
+  const outputCeiling = MODEL_OUTPUT_CEILING[model] ?? 64000;
+  const maxTokens = Math.min(outputCeiling - 8000, 16000 + askCount * 800);
+
+  // The cacheable prefix is system + brief, so both count toward the model's
+  // minimum. Under it the breakpoint is silently ignored and we'd pay the
+  // cache-write premium for nothing, so leave it off.
+  const cacheMinTokens = MODEL_CACHE_MIN_TOKENS[model] ?? 4096;
+  const briefIsCacheable =
+    (SYSTEM_PROMPT.length + brief.length) / APPROX_CHARS_PER_TOKEN >= cacheMinTokens;
+
+  return {
+    model,
+    max_tokens: maxTokens,
+    // Opus / Sonnet take adaptive thinking; Haiku 4.5 doesn't. Opus 5.5 and
+    // Sonnet 5 think adaptively even with the field omitted, but sending it
+    // keeps the request shape identical across the models that support it.
+    // Their thinking text streams empty (display defaults to "omitted"); the
+    // run's "thinking" phase keys off the block start, not the text.
+    ...(caps.adaptiveThinking ? { thinking: { type: "adaptive" as const } } : {}),
+    output_config: {
+      // `effort` 400s on Haiku 4.5 — only send it where supported. Opus 5.5
+      // and Sonnet 5 take the full low|medium|high|xhigh|max ladder; "medium"
+      // stays deliberate here because this is an interactive stream and the
+      // higher rungs buy depth we don't need at the cost of time-to-first-card.
+      // (Opus 5.5 defaults to medium and Sonnet 5 to high, so it is always sent.)
+      ...(caps.effort ? { effort: "medium" as const } : {}),
+      format: { type: "json_schema" as const, schema: REC_SCHEMA },
+    },
+    system: [{ type: "text" as const, text: SYSTEM_PROMPT }],
+    messages: [
+      {
+        role: "user" as const,
+        content: [
+          {
+            type: "text" as const,
+            text: brief,
+            // Cache breakpoint AFTER the brief: system + brief form a stable
+            // prefix, so "Show different" and preset re-runs within the TTL
+            // reprocess only the short run request below (~90% cheaper, faster
+            // time-to-first-suggestion). Attached only for a library big enough
+            // to clear the model's minimum — see briefIsCacheable above.
+            ...(briefIsCacheable ? { cache_control: { type: "ephemeral" as const } } : {}),
+          },
+          { type: "text" as const, text: request },
+        ],
+      },
+    ],
+    // A safety-classifier decline reruns server-side on the model Anthropic
+    // recommends for that refusal category, on the same stream: a decline
+    // before any output is seamless, and one mid-stream keeps the partial
+    // text and continues from it. Only a refusal from every model in the
+    // chain comes back as stop_reason "refusal".
+    ...(caps.serverFallback
+      ? { betas: [SERVER_SIDE_FALLBACK_BETA], fallbacks: "default" as const }
+      : {}),
+  } satisfies Anthropic.Beta.Messages.MessageCreateParams;
+}
 
 /**
  * What to emit once the model stream ends, given how many suggestions were
@@ -541,8 +634,9 @@ const APPROX_CHARS_PER_TOKEN = 4;
  *
  * A refusal only produces its own error when nothing usable came out of the
  * run. If suggestions were already accepted before the model declined,
- * partial results beat an error: the run falls through to the ordinary
- * warning/done handling below and hitRefusal is ignored.
+ * partial results beat an error: each one is a complete, validated pick, so
+ * they stay, with a warning that the list stopped short rather than a silent
+ * short list that reads as finished.
  */
 export function terminalRecEvents(
   accepted: number,
@@ -585,6 +679,12 @@ export function terminalRecEvents(
     events.push({
       type: "warning",
       message: `Claude hit its length limit after ${accepted} of ${count} suggestions. Ask for fewer titles for a complete set.`,
+    });
+  }
+  if (flags.hitRefusal && accepted < count) {
+    events.push({
+      type: "warning",
+      message: `Claude stopped after ${accepted} of ${count} suggestions and declined the rest. Reword your focus and run it again for a fuller list.`,
     });
   }
   // A TMDB outage must read differently to a genuine no-match: these
@@ -697,13 +797,9 @@ export async function runRecommendationStream(
     });
     return;
   }
-  // Precedence: explicit per-run model > the user's saved default > server default.
-  let model = explicitModel ?? DEFAULT_REC_MODEL;
-  if (!explicitModel && isRecModel(userPref?.recommendModel)) {
-    model = userPref.recommendModel;
-  }
-  // Fail safe if a model is ever added to REC_MODELS without a caps entry.
-  const caps = MODEL_CAPS[model] ?? { effort: false, adaptiveThinking: false };
+  // Precedence: explicit per-run model > the user's saved default > server
+  // default. A saved default naming a retired model runs on its successor.
+  const model = explicitModel ?? resolveRecModel(userPref?.recommendModel);
 
   // Scope which titles inform the suggestions. The watchlist exclusion always
   // uses the full library so "don't recommend what I've already planned" holds
@@ -802,24 +898,6 @@ export async function runRecommendationStream(
     tallies: { filteredOut: 0, lookupFailed: 0 },
   };
 
-  // Scale the output budget with the ask so a large batch (askCount up to 50)
-  // plus adaptive thinking — max_tokens is a single cap covering thinking AND
-  // response text — can't truncate mid-JSON. The base (~the old flat budget)
-  // covers thinking + the JSON envelope; the per-item budget covers each
-  // suggestion and its share of thinking. Capped a safe margin under the
-  // model's streaming ceiling. This is a ceiling, not a target: generation is
-  // aborted once `count` are accepted, so the headroom only prevents
-  // truncation, it never costs tokens.
-  const outputCeiling = MODEL_OUTPUT_CEILING[model] ?? 64000;
-  const maxTokens = Math.min(outputCeiling - 8000, 16000 + askCount * 800);
-
-  // The cacheable prefix is system + brief, so both count toward the model's
-  // minimum. Under it the breakpoint is silently ignored and we'd pay the
-  // cache-write premium for nothing, so leave it off.
-  const cacheMinTokens = MODEL_CACHE_MIN_TOKENS[model] ?? 4096;
-  const briefIsCacheable =
-    (SYSTEM_PROMPT.length + brief.length) / APPROX_CHARS_PER_TOKEN >= cacheMinTokens;
-
   if (runSignal.aborted) return;
   let sharedReservationDay: string | null = null;
   const releaseUnusedSharedSlot = () => {
@@ -854,41 +932,10 @@ export async function runRecommendationStream(
   }
 
   const client = anthropicClient(key);
-  const stream = client.messages.stream({
-    model,
-    max_tokens: maxTokens,
-    // Opus / Sonnet take adaptive thinking; Haiku 4.5 doesn't. Opus 5 thinks
-    // adaptively even with the field omitted, but sending it keeps the request
-    // shape identical across the models that support it.
-    ...(caps.adaptiveThinking ? { thinking: { type: "adaptive" as const } } : {}),
-    output_config: {
-      // `effort` 400s on Haiku 4.5 — only send it where supported. Opus 5 takes
-      // the full low|medium|high|xhigh|max ladder; "medium" stays deliberate
-      // here because this is an interactive stream and the higher rungs buy
-      // depth we don't need at the cost of time-to-first-card.
-      ...(caps.effort ? { effort: "medium" as const } : {}),
-      format: { type: "json_schema", schema: REC_SCHEMA },
-    },
-    system: [{ type: "text", text: SYSTEM_PROMPT }],
-    messages: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: brief,
-            // Cache breakpoint AFTER the brief: system + brief form a stable
-            // prefix, so "Show different" and preset re-runs within the TTL
-            // reprocess only the short run request below (~90% cheaper, faster
-            // time-to-first-suggestion). Attached only for a library big enough
-            // to clear the model's minimum — see briefIsCacheable above.
-            ...(briefIsCacheable ? { cache_control: { type: "ephemeral" as const } } : {}),
-          },
-          { type: "text", text: request },
-        ],
-      },
-    ],
-  });
+  // The beta namespace, because `fallbacks` is a beta parameter. It is the
+  // same endpoint, and a request without beta headers behaves as it would on
+  // client.messages.
+  const stream = client.beta.messages.stream(buildRecRequest(model, askCount, brief, request));
   if (signal) {
     // Client went away (or asked to stop): stop paying for generation. Guard the
     // race where the signal fired between the last checkpoint and here — a fresh
@@ -910,6 +957,12 @@ export async function runRecommendationStream(
   // land — which is the normal path, and one that leaves no final message.
   let cacheCreated: number | null = null;
   let cacheRead: number | null = null;
+  // The model that served the opening usage, and the one producing output
+  // now. With the server-side fallback neither has to be `model`: a decline
+  // before any output, or sticky routing after an earlier one, opens on the
+  // fallback model, and a mid-stream decline switches at a fallback block.
+  let cacheModel: string = model;
+  let servedModel: string = model;
   // A bounded queue preserves burst candidates until rejected matches release
   // capacity. Five active lookups remain the concurrency ceiling.
   const pending: Recommendation[] = [];
@@ -995,11 +1048,23 @@ export async function runRecommendationStream(
         sawMessageStart = true;
         cacheCreated = event.message.usage.cache_creation_input_tokens;
         cacheRead = event.message.usage.cache_read_input_tokens;
+        cacheModel = servedModel = event.message.model;
+        // Sticky-routed runs carry no fallback block, so this is their only trail.
+        if (servedModel !== model) {
+          console.warn(`Recommendation served by ${servedModel} instead of ${model}.`);
+        }
       } else if (event.type === "content_block_start") {
         if (event.content_block.type === "thinking" && statusSent === null) {
           statusSent = "thinking";
           lastHeartbeatAt = Date.now();
           emit({ type: "status", phase: "thinking" });
+        } else if (event.content_block.type === "fallback") {
+          // The requested model declined and another took over on this
+          // stream; otherwise invisible, so leave a trail like the cache one.
+          servedModel = event.content_block.to.model;
+          console.warn(
+            `Recommendation fell back from ${event.content_block.from.model} to ${event.content_block.to.model}.`,
+          );
         }
       } else if (event.type === "content_block_delta") {
         if (event.delta.type === "thinking_delta" && statusSent !== "generating") {
@@ -1021,10 +1086,17 @@ export async function runRecommendationStream(
         // budget was exhausted mid-generation (likely truncating the JSON), which
         // needs a specific message rather than the generic "no results" below.
         if (event.delta.stop_reason === "max_tokens") hitMaxTokens = true;
-        // Opus 5's safety classifier can decline with a normal HTTP 200 rather
+        // Opus 5.5's safety classifiers can decline with a normal HTTP 200 rather
         // than a thrown error — same event, stop_reason "refusal" instead of an
         // exception, so it's detected here rather than in the catch block below.
-        else if (event.delta.stop_reason === "refusal") hitRefusal = true;
+        // stop_details is informational only (it can be null on a refusal), so
+        // it goes to the log, never into the branch.
+        else if (event.delta.stop_reason === "refusal") {
+          hitRefusal = true;
+          console.warn(
+            `Recommendation declined by ${servedModel} (category: ${event.delta.stop_details?.category ?? "none"}).`,
+          );
+        }
       }
     }
   } catch (e) {
@@ -1050,7 +1122,7 @@ export async function runRecommendationStream(
   // under the model's minimum is ignored without any error — so leave a trail.
   if (cacheCreated !== null || cacheRead !== null) {
     console.debug(
-      `Recommend prompt cache (${model}): written=${cacheCreated ?? 0}, read=${cacheRead ?? 0}`,
+      `Recommend prompt cache (${cacheModel}): written=${cacheCreated ?? 0}, read=${cacheRead ?? 0}`,
     );
   }
   for (const e of terminalRecEvents(accepted, count, {

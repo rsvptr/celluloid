@@ -3,7 +3,7 @@ import {
   runRecommendationStream,
   type RecStreamEvent,
 } from "@/lib/recommend";
-import { isRecEra, isRecModel } from "@/lib/models";
+import { isRecEra, knownRecModel, resolveRecModel } from "@/lib/models";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 import { z } from "zod";
 
@@ -21,7 +21,15 @@ export const recommendRequestSchema = z
     count: z.number().int().min(1).max(30).optional(),
     type: z.enum(["all", "movie", "tv"]).default("all"),
     focus: z.string().trim().max(280).optional(),
-    model: z.string().refine(isRecModel, "Unknown recommendation model").optional(),
+    // A tab opened before the model lineup changed still sends the old id;
+    // run it on the successor rather than failing the request. An id that was
+    // never offered is rejected: it must not run on a model nobody picked, or
+    // outrank the saved preference.
+    model: z
+      .string()
+      .refine((id) => knownRecModel(id) !== null, "Unknown recommendation model")
+      .transform(resolveRecModel)
+      .optional(),
     basis: z
       .discriminatedUnion("mode", [
         z.object({ mode: z.literal("recent"), recentCount: recentCountSchema }),

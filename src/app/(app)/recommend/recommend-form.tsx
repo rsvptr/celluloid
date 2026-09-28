@@ -1,6 +1,6 @@
 "use client";
 
-import { Sparkles } from "lucide-react";
+import { Sparkles, X } from "lucide-react";
 import { Button, Card, Input, Spinner } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
@@ -15,6 +15,11 @@ const PRESETS: { label: string; focus: string; type?: "movie" | "tv" }[] = [
   { label: "🎬 Short & light", focus: "short, easy watches", type: "movie" },
 ];
 
+/** A tag quick start, built the same way whether it's clicked or restored. */
+function tagPreset(tag: string): { key: string; focus: string } {
+  return { key: `tag:${tag}`, focus: `more titles like the ones I tagged "${tag}"` };
+}
+
 export function resolvePreset(
   key: string | null | undefined,
   tags: string[],
@@ -24,12 +29,12 @@ export function resolvePreset(
   if (preset) return { key, focus: preset.focus, type: preset.type };
   if (!key.startsWith("tag:")) return null;
   const tag = key.slice(4);
-  return tags.includes(tag)
-    ? { key, focus: `similar to the titles I tagged \"${tag}\"` }
-    : null;
+  return tags.includes(tag) ? tagPreset(tag) : null;
 }
 
 const COUNT_OPTIONS = [6, 12, 20] as const;
+/** Tags offered as quick starts; a remembered one past these gets its own chip. */
+const TAG_QUICK_STARTS = 6;
 
 /**
  * The taste brief: focus, quick starts, type and count, the submit button and
@@ -79,6 +84,13 @@ export function RecommendForm({
     setFocus(p.focus);
     if (p.type) setType(p.type);
   }
+
+  const quickStartTags = tags.slice(0, TAG_QUICK_STARTS);
+  // A remembered tag quick start can name a tag past the ones offered above.
+  const rememberedTag =
+    activePreset?.startsWith("tag:") && !quickStartTags.includes(activePreset.slice(4))
+      ? activePreset.slice(4)
+      : null;
 
   return (
     <Card className="p-5">
@@ -139,20 +151,16 @@ export function RecommendForm({
                 </button>
               );
             })}
-            {tags.slice(0, 6).map((tag) => {
-              const key = `tag:${tag}`;
-              const selected = activePreset === key;
+            {quickStartTags.map((tag) => {
+              const preset = tagPreset(tag);
+              const selected = activePreset === preset.key;
               return (
                 <button
-                  key={key}
+                  key={preset.key}
                   type="button"
                   aria-pressed={selected}
                   disabled={loading}
-                  onClick={() =>
-                    applyPreset(key, {
-                      focus: `more titles like the ones I tagged "${tag}"`,
-                    })
-                  }
+                  onClick={() => applyPreset(preset.key, preset)}
                   className={cn(
                     "focus-ring min-h-11 max-w-full min-w-0 break-words rounded-full px-3 py-1.5 text-sm ring-1 press disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0",
                     selected
@@ -164,6 +172,24 @@ export function RecommendForm({
                 </button>
               );
             })}
+            {rememberedTag !== null ? (
+              <button
+                type="button"
+                aria-label={`Remove the #${rememberedTag} quick start`}
+                disabled={loading}
+                onClick={(event) => {
+                  // The chip leaves with the preset, so hand focus to the box it cleared.
+                  const box = event.currentTarget.form?.elements.namedItem("recommendation-focus");
+                  setActivePreset(null);
+                  setFocus("");
+                  if (box && box instanceof HTMLElement) box.focus();
+                }}
+                className="focus-ring inline-flex min-h-11 max-w-full min-w-0 items-center gap-1.5 rounded-full bg-brand/20 px-3 py-1.5 text-sm text-brand ring-1 ring-brand/50 press disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0"
+              >
+                <span className="min-w-0 break-words">#{rememberedTag}</span>
+                <X size={13} aria-hidden className="shrink-0" />
+              </button>
+            ) : null}
           </div>
         </div>
 
@@ -250,7 +276,8 @@ export function RecommendForm({
             {loading ? "Thinking…" : "Get suggestions"}
           </Button>
           <p className="max-w-2xl text-xs leading-relaxed text-faint">
-            Suggestions appear as they&apos;re ready. Opus can take up to a minute to start.
+            Suggestions appear as they&apos;re ready. The first can take up to a minute on more
+            capable models.
           </p>
           <p className="max-w-2xl text-xs leading-relaxed text-faint">
             Celluloid sends the selected library context to Anthropic to build this

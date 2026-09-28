@@ -31,7 +31,7 @@
     "test:e2e:install": "playwright install chromium"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.104.1",
+    "@anthropic-ai/sdk": "^0.128.0",
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
     "@radix-ui/react-alert-dialog": "^1.1.16",

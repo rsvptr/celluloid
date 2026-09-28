@@ -52,6 +52,20 @@ describe("focus after an action removes its own control", () => {
     }
   });
 
+  it("removing the API key hands focus to the key field", async () => {
+    const section = await source("../src/app/(app)/settings/api-key-section.tsx");
+    const body = between(section, "async function removeKey()", "return (");
+    const after = body.slice(body.indexOf('setStatus("Personal API key removed.");'));
+    assert.match(
+      after,
+      /^[^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*document\.getElementById\("settings-anthropic-api-key"\)\?\.focus\(\);/,
+      "focus doesn't move on success",
+    );
+    // Only on success: a failed removal keeps the Remove button, and its focus.
+    assert.ok(body.indexOf("setError(result.error);") < body.indexOf("setSaved(false);"));
+    assert.match(elementWithId(section, "settings-anthropic-api-key"), /^<Input/);
+  });
+
   it("the 2FA panel swaps move focus into the panel that replaces them", async () => {
     const settings = await source("../src/app/(app)/settings/two-factor-section.tsx");
     for (const [handler, end, state, id] of [

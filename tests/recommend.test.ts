@@ -9,6 +9,7 @@ import type { TmdbSearchItem } from "../src/lib/tmdb";
 import type { ExportRow } from "../src/lib/export/format";
 
 const {
+  buildRecRequest,
   buildRequestBlock,
   enrichRec,
   genreFilterAdvisory,
@@ -398,7 +399,92 @@ describe("buildRequestBlock", () => {
   it("weaves in the focus and exclusion clauses", () => {
     const s = buildRequestBlock(9, "all", "cozy mysteries", ["Alien", "Heat"]);
     assert.ok(s.includes('Pay special attention to this request: "cozy mysteries".'));
-    assert.ok(s.includes("do NOT suggest any of them again: Alien, Heat."));
+    assert.ok(s.includes("don't suggest any of them again: Alien, Heat."));
+  });
+
+  it("states the ask at normal volume", () => {
+    const s = buildRequestBlock(9, "all", "cozy mysteries", ["Alien"], "ko", "Drama", "1990s");
+    assert.doesNotMatch(s, /\b[A-Z]{3,}\b/);
+    assert.ok(s.includes("recommend 9 titles I haven't seen and that aren't already on my watchlist."));
+  });
+});
+
+// --- buildRecRequest ---------------------------------------------------------
+
+describe("buildRecRequest", () => {
+  const shortBrief = "One watched movie.";
+  // Comfortably over every model's minimum (4096 tokens at ~4 chars a token).
+  const longBrief = "- A Title (2001) 9/10\n".repeat(1200);
+
+  it("gives Opus 5.5 adaptive thinking and an explicit medium effort", () => {
+    const req = buildRecRequest("claude-opus-5-5", 24, shortBrief, "Ask.");
+    assert.equal(req.model, "claude-opus-5-5");
+    // Thinking can't be disabled on Opus 5.5: `disabled` and budget_tokens 400.
+    assert.deepEqual(req.thinking, { type: "adaptive" });
+    // Its default is medium, one level under Opus 5's high, so it is sent.
+    assert.equal(req.output_config.effort, "medium");
+    assert.equal(req.output_config.format.type, "json_schema");
+  });
+
+  it("gives Sonnet 5 the same thinking and effort", () => {
+    const req = buildRecRequest("claude-sonnet-5", 24, shortBrief, "Ask.");
+    assert.deepEqual(req.thinking, { type: "adaptive" });
+    assert.equal(req.output_config.effort, "medium");
+  });
+
+  it("sends Haiku 4.5 neither thinking nor effort, which it rejects", () => {
+    const req = buildRecRequest("claude-haiku-4-5", 24, shortBrief, "Ask.");
+    assert.equal("thinking" in req, false);
+    assert.equal("effort" in req.output_config, false);
+    assert.equal(req.output_config.format.type, "json_schema");
+  });
+
+  it("opts only Opus 5.5 into the server-side refusal fallback", () => {
+    const opus = buildRecRequest("claude-opus-5-5", 12, shortBrief, "Ask.");
+    assert.equal(opus.fallbacks, "default");
+    // The "default" form takes this header; the array form's -06-01 is a 400.
+    assert.deepEqual(opus.betas, ["server-side-fallback-2026-07-01"]);
+    for (const model of ["claude-sonnet-5", "claude-haiku-4-5"] as const) {
+      const req = buildRecRequest(model, 12, shortBrief, "Ask.");
+      assert.equal("fallbacks" in req, false, model);
+      assert.equal("betas" in req, false, model);
+    }
+  });
+
+  it("never sends sampling parameters, a tool choice or an assistant prefill", () => {
+    for (const model of ["claude-opus-5-5", "claude-sonnet-5", "claude-haiku-4-5"] as const) {
+      const req = buildRecRequest(model, 50, longBrief, "Ask.") as Record<string, unknown>;
+      for (const key of ["temperature", "top_p", "top_k", "tool_choice", "tools", "stop_sequences"]) {
+        assert.equal(key in req, false, `${model} sends ${key}`);
+      }
+      const messages = req.messages as Array<{ role: string }>;
+      assert.equal(messages.at(-1)?.role, "user");
+    }
+  });
+
+  it("scales max_tokens with the ask and keeps it under each model's output ceiling", () => {
+    assert.equal(buildRecRequest("claude-opus-5-5", 12, shortBrief, "Ask.").max_tokens, 25600);
+    // 50 asked is 56000, which stays under Opus 5.5's and Sonnet 5's 128K and
+    // is exactly Haiku 4.5's 64K ceiling less the 8K margin.
+    assert.equal(buildRecRequest("claude-opus-5-5", 50, shortBrief, "Ask.").max_tokens, 56000);
+    assert.equal(buildRecRequest("claude-sonnet-5", 50, shortBrief, "Ask.").max_tokens, 56000);
+    assert.equal(buildRecRequest("claude-haiku-4-5", 50, shortBrief, "Ask.").max_tokens, 56000);
+  });
+
+  it("puts the cache breakpoint on the brief only when the prefix clears the model's minimum", () => {
+    const brief = (tokens: number) => "x".repeat(tokens * 4);
+    const cached = (model: Parameters<typeof buildRecRequest>[0], text: string) => {
+      const [briefBlock, requestBlock] = buildRecRequest(model, 12, text, "Ask.").messages[0]
+        .content as Array<Record<string, unknown>>;
+      assert.equal("cache_control" in requestBlock, false);
+      return "cache_control" in briefBlock;
+    };
+    // A brief of ~600 tokens clears Opus 5.5's 512 but not Sonnet 5's 1024.
+    assert.equal(cached("claude-opus-5-5", brief(600)), true);
+    assert.equal(cached("claude-sonnet-5", brief(600)), false);
+    assert.equal(cached("claude-haiku-4-5", brief(2000)), false);
+    assert.equal(cached("claude-haiku-4-5", longBrief), true);
+    assert.equal(cached("claude-opus-5-5", shortBrief), false);
   });
 });
 
@@ -425,9 +511,16 @@ describe("terminalRecEvents", () => {
     ]);
   });
 
-  it("lets the run finish normally (no error) when a refusal follows at least one accepted pick", () => {
+  it("keeps picks accepted before a refusal, and says the list stopped short", () => {
     const events = terminalRecEvents(3, 12, { hitMaxTokens: false, hitRefusal: true });
-    assert.deepEqual(events, [{ type: "done", total: 3 }]);
+    assert.deepEqual(events, [
+      {
+        type: "warning",
+        message:
+          "Claude stopped after 3 of 12 suggestions and declined the rest. Reword your focus and run it again for a fuller list.",
+      },
+      { type: "done", total: 3 },
+    ]);
   });
 
   it("prioritizes the refusal message over max_tokens when both fired with nothing accepted", () => {

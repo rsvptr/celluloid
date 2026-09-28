@@ -15,6 +15,7 @@ let streamEvents: StreamEvent[] = [];
 let streamError: Error | null = null;
 let capturedRequest: unknown = null;
 let ownedTitles: Array<Record<string, unknown>> = [];
+let storedModel: string | null = null;
 
 function modelRec(title: string, year = 2020) {
   return {
@@ -27,10 +28,13 @@ function modelRec(title: string, year = 2020) {
   };
 }
 
-function messageStart(): StreamEvent {
+// Without a model, the stream mock names the requested one, as the API does
+// when no fallback served the run.
+function messageStart(model?: string): StreamEvent {
   return {
     type: "message_start",
     message: {
+      ...(model ? { model } : {}),
       usage: { cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
     },
   };
@@ -47,7 +51,7 @@ function textEvent(recommendations: unknown[]): StreamEvent {
 }
 
 const fakePrisma = {
-  user: { findUnique: async () => ({ recommendModel: null }) },
+  user: { findUnique: async () => ({ recommendModel: storedModel }) },
   suppression: { findMany: async () => [] },
   title: { findMany: async () => ownedTitles },
 };
@@ -96,7 +100,10 @@ Object.assign(globalThis, {
       async *[Symbol.asyncIterator]() {
         for (const event of streamEvents) {
           if (aborted) break;
-          yield event;
+          const message = event.message as Record<string, unknown> | undefined;
+          yield event.type === "message_start" && !message?.model
+            ? { ...event, message: { ...message, model: (request as { model: string }).model } }
+            : event;
         }
         if (streamError) throw streamError;
       },
@@ -118,14 +125,16 @@ export async function resolve(specifier, context, nextResolve) {
             ? "export const resolveAnthropicKey = globalThis.__CELLULOID_REC_KEY__;" +
               "export const reserveSharedAiRun = globalThis.__CELLULOID_REC_RESERVE__;" +
               "export const releaseSharedAiRun = globalThis.__CELLULOID_REC_RELEASE__;" +
-              "export const anthropicClient = () => ({ messages: { stream: globalThis.__CELLULOID_REC_STREAM__ } });" +
+              "export const anthropicClient = () => ({ beta: { messages: { stream: globalThis.__CELLULOID_REC_STREAM__ } } });" +
               "export const friendlyAnthropicError = () => 'Friendly stream error.';"
             : (specifier === "@/lib/tmdb" || normalized.endsWith("/src/lib/tmdb"))
               ? "export const searchByType = globalThis.__CELLULOID_REC_SEARCH__;" +
                 "export async function getGenreIdsByName() { return new Set(); }"
               : (specifier === "@/generated/prisma/client" || normalized.endsWith("/src/generated/prisma/client"))
                 ? "export const MediaType = { MOVIE: 'MOVIE', TV: 'TV' };"
-                : undefined;
+                : (specifier === "@/lib/session" || normalized.endsWith("/src/lib/session"))
+                  ? "export async function getSession() { return null; }"
+                  : undefined;
   if (source !== undefined) {
     return { url: "data:text/javascript," + encodeURIComponent(source), shortCircuit: true };
   }
@@ -138,6 +147,7 @@ const {
   RECOMMEND_KEEPALIVE_MS,
   runRecommendationStream,
 } = await import("../src/lib/recommend");
+const { recommendRequestSchema } = await import("../src/app/api/recommend/route");
 
 function reset() {
   usedFallback = false;
@@ -150,6 +160,7 @@ function reset() {
   streamError = null;
   capturedRequest = null;
   ownedTitles = [];
+  storedModel = null;
 }
 
 afterEach(reset);
@@ -298,5 +309,187 @@ describe("recommendation stream orchestration", { concurrency: false }, () => {
     );
     assert.ok(statuses.every(({ event }) => event.phase === "generating"));
     assert.deepEqual(searchCalls, ["First"]);
+  });
+});
+
+describe("refusals and thinking phases", { concurrency: false }, () => {
+  const refusal: StreamEvent = {
+    type: "message_delta",
+    delta: {
+      stop_reason: "refusal",
+      stop_details: { type: "refusal", category: "cyber", explanation: null },
+    },
+  };
+
+  it("explains a refusal that arrives before any output", async () => {
+    streamEvents = [messageStart(), refusal];
+    const emitted: StreamEvent[] = [];
+    await runRecommendationStream("user-1", { count: 3 }, (event) => emitted.push(event));
+    assert.equal(emitted.some((event) => event.type === "rec"), false);
+    assert.deepEqual(emitted.at(-1), {
+      type: "error",
+      error:
+        "Claude declined this request. This can happen when the brief or focus text trips a safety filter, so reword it and try again.",
+    });
+  });
+
+  it("keeps the picks that completed before a mid-stream refusal and warns the list is short", async () => {
+    const first = JSON.stringify(modelRec("Finished Film"));
+    streamEvents = [
+      messageStart(),
+      {
+        type: "content_block_delta",
+        delta: { type: "text_delta", text: `{"recommendations":[${first},{"title":"Cut Of` },
+      },
+      refusal,
+    ];
+    const emitted: StreamEvent[] = [];
+    await runRecommendationStream("user-1", { count: 3 }, (event) => emitted.push(event));
+    const recs = emitted.filter((event) => event.type === "rec");
+    assert.deepEqual(recs.map((event) => (event.rec as { title: string }).title), ["Finished Film"]);
+    assert.deepEqual(emitted.slice(-2), [
+      {
+        type: "warning",
+        message:
+          "Claude stopped after 1 of 3 suggestions and declined the rest. Reword your focus and run it again for a fuller list.",
+      },
+      { type: "done", total: 1 },
+    ]);
+  });
+
+  it("keeps reading picks across a server-side fallback on the same stream", async () => {
+    const first = JSON.stringify(modelRec("Before Fallback"));
+    const second = JSON.stringify(modelRec("Across Fallback"));
+    const cut = second.indexOf('"reason"');
+    streamEvents = [
+      messageStart(),
+      {
+        type: "content_block_delta",
+        delta: { type: "text_delta", text: `{"recommendations":[${first},${second.slice(0, cut)}` },
+      },
+      {
+        type: "content_block_start",
+        content_block: {
+          type: "fallback",
+          from: { model: "claude-opus-5-5" },
+          to: { model: "claude-opus-5" },
+          trigger: { type: "refusal" },
+        },
+      },
+      { type: "content_block_stop" },
+      {
+        type: "content_block_delta",
+        delta: { type: "text_delta", text: `${second.slice(cut)},${JSON.stringify(modelRec("After Fallback"))}]}` },
+      },
+      { type: "message_delta", delta: { stop_reason: "end_turn", stop_details: null } },
+    ];
+    const emitted: StreamEvent[] = [];
+    await runRecommendationStream(
+      "user-1",
+      { count: 3, model: "claude-opus-5-5" },
+      (event) => emitted.push(event),
+    );
+    assert.equal((capturedRequest as { fallbacks?: string }).fallbacks, "default");
+    assert.deepEqual(
+      emitted.filter((event) => event.type === "rec").map((event) => (event.rec as { title: string }).title),
+      ["Before Fallback", "Across Fallback", "After Fallback"],
+    );
+    assert.deepEqual(emitted.at(-1), { type: "done", total: 3 });
+  });
+
+  it("logs the model that served the run, not the one requested", async (t) => {
+    const warn = t.mock.method(console, "warn", () => {});
+    const debug = t.mock.method(console, "debug", () => {});
+    const logged = (mock: typeof warn) => mock.mock.calls.map((call) => String(call.arguments[0]));
+
+    // Sticky routing: the whole run comes from the fallback model, with no
+    // fallback block to announce it.
+    streamEvents = [messageStart("claude-opus-5"), textEvent([modelRec("Sticky Film")])];
+    await runRecommendationStream("user-1", { count: 1, model: "claude-opus-5-5" }, () => {});
+    assert.deepEqual(logged(warn), ["Recommendation served by claude-opus-5 instead of claude-opus-5-5."]);
+    assert.deepEqual(logged(debug), ["Recommend prompt cache (claude-opus-5): written=0, read=0"]);
+
+    // A mid-stream switch whose fallback model also declines.
+    warn.mock.resetCalls();
+    debug.mock.resetCalls();
+    streamEvents = [
+      messageStart(),
+      {
+        type: "content_block_start",
+        content_block: {
+          type: "fallback",
+          from: { model: "claude-opus-5-5" },
+          to: { model: "claude-opus-4-8" },
+          trigger: { type: "refusal" },
+        },
+      },
+      refusal,
+    ];
+    await runRecommendationStream("user-1", { count: 1, model: "claude-opus-5-5" }, () => {});
+    assert.deepEqual(logged(warn), [
+      "Recommendation fell back from claude-opus-5-5 to claude-opus-4-8.",
+      "Recommendation declined by claude-opus-4-8 (category: cyber).",
+    ]);
+    assert.deepEqual(logged(debug), ["Recommend prompt cache (claude-opus-5-5): written=0, read=0"]);
+
+    // No fallback at all: nothing extra in the logs.
+    warn.mock.resetCalls();
+    streamEvents = [messageStart(), textEvent([modelRec("Plain Film")])];
+    await runRecommendationStream("user-1", { count: 1, model: "claude-opus-5-5" }, () => {});
+    assert.deepEqual(logged(warn), []);
+  });
+
+  it("enters the thinking phase on the block start, with no thinking text streamed", async () => {
+    // Opus 5.5 and Sonnet 5 stream thinking blocks with empty text by default.
+    streamEvents = [
+      messageStart(),
+      { type: "content_block_start", content_block: { type: "thinking", thinking: "" } },
+      { type: "content_block_stop" },
+      textEvent([modelRec("Only Film")]),
+    ];
+    const emitted: StreamEvent[] = [];
+    await runRecommendationStream("user-1", { count: 1 }, (event) => emitted.push(event));
+    assert.deepEqual(
+      emitted.filter((event) => event.type === "status").map((event) => event.phase),
+      ["thinking", "generating"],
+    );
+  });
+});
+
+describe("retired model ids", { concurrency: false }, () => {
+  function requestedModel() {
+    return (capturedRequest as { model: string }).model;
+  }
+
+  it("runs a saved Opus 5 preference on Opus 5.5", async () => {
+    storedModel = "claude-opus-5";
+    streamEvents = [messageStart()];
+    await runRecommendationStream("user-1", { count: 1 }, () => {});
+    assert.equal(requestedModel(), "claude-opus-5-5");
+  });
+
+  it("runs an unknown saved preference on the default model", async () => {
+    storedModel = "gpt-9000";
+    streamEvents = [messageStart()];
+    await runRecommendationStream("user-1", { count: 1 }, () => {});
+    assert.equal(requestedModel(), "claude-sonnet-5");
+  });
+
+  it("accepts an old id from a stale tab instead of rejecting the request", () => {
+    assert.equal(recommendRequestSchema.parse({ model: "claude-opus-5" }).model, "claude-opus-5-5");
+    assert.equal(recommendRequestSchema.parse({ model: "claude-haiku-4-5" }).model, "claude-haiku-4-5");
+    assert.equal(recommendRequestSchema.parse({}).model, undefined);
+  });
+
+  it("rejects an id that was never offered rather than running another model", () => {
+    for (const model of ["gpt-9000", "claude-opus-4-8", "claude-sonnet-4-6", ""]) {
+      const parsed = recommendRequestSchema.safeParse({ model });
+      assert.equal(parsed.success, false, model);
+      assert.deepEqual(
+        parsed.error?.issues.map((issue) => [issue.path.join("."), issue.message]),
+        [["model", "Unknown recommendation model"]],
+        model,
+      );
+    }
   });
 });
