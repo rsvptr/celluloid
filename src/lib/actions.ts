@@ -961,18 +961,24 @@ export async function deleteWatchEvent(
       SELECT id, "watchedAt" FROM "Title" WHERE id = ${event.titleId} FOR UPDATE`;
     const title = rows[0];
     if (!title) return 0; // title removed concurrently
+    let deleted = true;
     try {
       await tx.watchEvent.delete({ where: { id: event.id } });
     } catch (err) {
       // Another tab deleted it since the read above, so it's gone, as asked.
-      // That delete already resynced the date; doing it again below changes
-      // nothing, and the count still reports what survives (PR-10).
+      // That delete already resynced the date, and the count still reports
+      // what survives (PR-10).
       if (!isRecordNotFound(err, "WatchEvent")) throw err;
+      deleted = false;
     }
+    // Only this delete may move the date back. After a lost race the title's
+    // date, read under the lock, is the fresh one: the stale read's instant
+    // could match a date the owner has set since, and clearing it would lower
+    // that date to the latest surviving watch (P7X-11).
     await syncWatchedAtFromEvents(
       tx,
       event.titleId,
-      title.watchedAt?.getTime() === event.occurredAt.getTime()
+      deleted && title.watchedAt?.getTime() === event.occurredAt.getTime()
         ? null
         : title.watchedAt,
     );

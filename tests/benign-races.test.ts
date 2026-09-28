@@ -26,6 +26,7 @@ type State = {
   updateError: unknown;
   titleUpdates: unknown[];
   surviving: number;
+  latest: Date | null;
   revalidated: string[];
 };
 const state: State = {
@@ -34,6 +35,7 @@ const state: State = {
   updateError: null,
   titleUpdates: [],
   surviving: 0,
+  latest: null,
   revalidated: [],
 };
 
@@ -48,7 +50,7 @@ const tx = {
       if (state.updateError) throw state.updateError;
       return {};
     },
-    findFirst: async () => null,
+    findFirst: async () => (state.latest ? { occurredAt: state.latest } : null),
     count: async () => state.surviving,
   },
   title: {
@@ -126,6 +128,7 @@ beforeEach(() => {
     updateError: null,
     titleUpdates: [],
     surviving: 0,
+    latest: null,
     revalidated: [],
   });
 });
@@ -156,6 +159,27 @@ describe("benign write races (PR-10)", { concurrency: false }, () => {
     state.surviving = 2;
     assert.deepEqual(await deleteWatchEvent("event-1"), { ok: true, watchCount: 2 });
     assert.ok(state.revalidated.includes("/"));
+  });
+
+  // P7X-11: the lost race resynced as if this tab's delete had removed the
+  // watch the title's date came from. The title's date here is the event's
+  // instant, as the owner could set by hand after the other tab's delete; an
+  // earlier watch survives.
+  it("keeps the title's date after losing a delete race", async () => {
+    state.deleteError = watchEventMissing("a delete");
+    state.latest = new Date("2026-08-01T20:00:00.000Z");
+    assert.deepEqual(await deleteWatchEvent("event-1"), { ok: true, watchCount: 0 });
+    assert.deepEqual(state.titleUpdates, [
+      { where: { id: "title-1" }, data: { watchedAt: new Date("2026-09-01T20:00:00.000Z") } },
+    ]);
+  });
+
+  it("still moves the date back when its own delete removed that watch", async () => {
+    state.latest = new Date("2026-08-01T20:00:00.000Z");
+    assert.deepEqual(await deleteWatchEvent("event-1"), { ok: true, watchCount: 0 });
+    assert.deepEqual(state.titleUpdates, [
+      { where: { id: "title-1" }, data: { watchedAt: new Date("2026-08-01T20:00:00.000Z") } },
+    ]);
   });
 
   it("still throws any other failure to delete a watch", async () => {
