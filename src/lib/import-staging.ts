@@ -701,11 +701,14 @@ async function applyStagedStatus(
     // `watched` when it airs, so its "New" badge never fires and the episode the
     // owner was waiting for arrives looking like something already seen. A null
     // airDate means TMDB doesn't know, which counts as aired — the same rule the
-    // episode tracker's bulk marks use.
+    // episode tracker's bulk marks use. Episodes already watched keep their
+    // date: a seed retry can find the owner's own ticks, and withdrawn rows are
+    // always watched (P7X-2).
     const now = new Date();
     await tx.episode.updateMany({
       where: {
         season: { titleId },
+        watched: false,
         OR: [{ airDate: null }, { airDate: { lte: now } }],
       },
       data: { watched: true, watchedAt: null },
