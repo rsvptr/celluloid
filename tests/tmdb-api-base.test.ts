@@ -26,8 +26,12 @@ describe("TMDB_API_BASE_URL (test-only TMDB override)", { concurrency: false }, 
     assert.equal(resolveTmdbApiBase({ TMDB_API_BASE_URL: STUB }), STUB);
     assert.equal(resolveTmdbApiBase({ TMDB_API_BASE_URL: `${STUB}/3/` }), `${STUB}/3`);
     assert.equal(
-      resolveTmdbApiBase({ TMDB_API_BASE_URL: "https://tmdb.example.test/api" }),
-      "https://tmdb.example.test/api",
+      resolveTmdbApiBase({ TMDB_API_BASE_URL: "https://localhost:8443/api" }),
+      "https://localhost:8443/api",
+    );
+    assert.equal(
+      resolveTmdbApiBase({ TMDB_API_BASE_URL: "http://[::1]:3101" }),
+      "http://[::1]:3101",
     );
     // `next build`, and a Vercel preview running the production build.
     assert.equal(
@@ -68,9 +72,12 @@ describe("TMDB_API_BASE_URL (test-only TMDB override)", { concurrency: false }, 
     }
   });
 
-  it("refuses anything but a plain http(s) URL", () => {
+  it("refuses anything but a plain http(s) URL on this machine", () => {
     for (const value of [
       "not a url",
+      "https://tmdb.example.test/api",
+      "http://10.0.0.5:3101",
+      "http://127.0.0.1.example.test:3101",
       "127.0.0.1:3101",
       "ftp://127.0.0.1:3101",
       "http://user:secret@127.0.0.1:3101",

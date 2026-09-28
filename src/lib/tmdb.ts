@@ -28,14 +28,17 @@ import {
 import { norm, resultNames } from "@/lib/tmdb-match";
 
 const DEFAULT_TMDB_API_BASE = "https://api.themoviedb.org/3";
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 /**
  * The TMDB API root. TMDB_API_BASE_URL exists only so the end-to-end suite can
  * point the server at its local stub (e2e/tmdb-stub.mjs). A production
  * deployment ignores it, by the same test env.ts applies, so a leftover test
  * value can't send TMDB traffic, and the Bearer token with it, anywhere else.
- * Elsewhere a set value must be an http(s) URL with no credentials, query or
- * hash; anything else throws when this module loads.
+ * Elsewhere a set value must be an http(s) URL on this machine (localhost,
+ * 127.0.0.1 or [::1]) with no credentials, query or hash, so a preview
+ * deployment can't send the token off-host either; anything else throws when
+ * this module loads.
  */
 export function resolveTmdbApiBase(
   source: Readonly<Record<string, string | undefined>> = process.env,
@@ -52,13 +55,14 @@ export function resolveTmdbApiBase(
   if (
     !url ||
     (url.protocol !== "http:" && url.protocol !== "https:") ||
+    !LOOPBACK_HOSTS.has(url.hostname) ||
     url.username ||
     url.password ||
     url.search ||
     url.hash
   ) {
     throw new Error(
-      "TMDB_API_BASE_URL must be an http(s) URL without credentials, a query or a hash.",
+      "TMDB_API_BASE_URL must be an http(s) URL on localhost, 127.0.0.1 or [::1], without credentials, a query or a hash.",
     );
   }
   return url.origin + url.pathname.replace(/\/+$/, "");
