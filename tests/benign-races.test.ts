@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { register } from "node:module";
 import { beforeEach, describe, it } from "node:test";
 import { Prisma } from "../src/generated/prisma/client";
@@ -26,6 +27,7 @@ type State = {
   updateError: unknown;
   titleUpdates: unknown[];
   surviving: number;
+  latest: Date | null;
   revalidated: string[];
 };
 const state: State = {
@@ -34,6 +36,7 @@ const state: State = {
   updateError: null,
   titleUpdates: [],
   surviving: 0,
+  latest: null,
   revalidated: [],
 };
 
@@ -48,7 +51,7 @@ const tx = {
       if (state.updateError) throw state.updateError;
       return {};
     },
-    findFirst: async () => null,
+    findFirst: async () => (state.latest ? { occurredAt: state.latest } : null),
     count: async () => state.surviving,
   },
   title: {
@@ -126,6 +129,7 @@ beforeEach(() => {
     updateError: null,
     titleUpdates: [],
     surviving: 0,
+    latest: null,
     revalidated: [],
   });
 });
@@ -156,6 +160,27 @@ describe("benign write races (PR-10)", { concurrency: false }, () => {
     state.surviving = 2;
     assert.deepEqual(await deleteWatchEvent("event-1"), { ok: true, watchCount: 2 });
     assert.ok(state.revalidated.includes("/"));
+  });
+
+  // P7X-11: the lost race resynced as if this tab's delete had removed the
+  // watch the title's date came from. The title's date here is the event's
+  // instant, as the owner could set by hand after the other tab's delete; an
+  // earlier watch survives.
+  it("keeps the title's date after losing a delete race", async () => {
+    state.deleteError = watchEventMissing("a delete");
+    state.latest = new Date("2026-08-01T20:00:00.000Z");
+    assert.deepEqual(await deleteWatchEvent("event-1"), { ok: true, watchCount: 0 });
+    assert.deepEqual(state.titleUpdates, [
+      { where: { id: "title-1" }, data: { watchedAt: new Date("2026-09-01T20:00:00.000Z") } },
+    ]);
+  });
+
+  it("still moves the date back when its own delete removed that watch", async () => {
+    state.latest = new Date("2026-08-01T20:00:00.000Z");
+    assert.deepEqual(await deleteWatchEvent("event-1"), { ok: true, watchCount: 0 });
+    assert.deepEqual(state.titleUpdates, [
+      { where: { id: "title-1" }, data: { watchedAt: new Date("2026-08-01T20:00:00.000Z") } },
+    ]);
   });
 
   it("still throws any other failure to delete a watch", async () => {
@@ -190,5 +215,33 @@ describe("benign write races (PR-10)", { concurrency: false }, () => {
       { ok: true },
     );
     assert.ok(state.revalidated.includes("/"));
+  });
+});
+
+// P7X-9: after "Watch not found." the stale row and its open editor stayed
+// until a navigation, since the action writes nothing and nothing re-renders.
+describe("history rows deleted in another tab (P7X-9)", () => {
+  it("closes the editor and refreshes when the action can't find the watch", async () => {
+    const client = await readFile(
+      new URL("../src/app/(app)/title/[id]/watch-history-client.tsx", import.meta.url),
+      "utf8",
+    );
+    const drop = client.slice(client.indexOf("function dropStaleRow("), client.indexOf("function save("));
+    assert.match(drop, /focusAfterRemoveId\.current = neighbourOf\(event\);\s*setEditingId\(null\);\s*router\.refresh\(\);/);
+    const staleCheck = /toast\.error\(res\.error\);\s*if \(res\.error === "Watch not found\."\) dropStaleRow\(event\);\s*return;/;
+    assert.match(client.slice(client.indexOf("function save("), client.indexOf("async function remove(")), staleCheck);
+    assert.match(client.slice(client.indexOf("async function remove(")), staleCheck);
+  });
+
+  it("matches the copy both actions return", async () => {
+    // Stubbed Prisma above: the pre-read finds the watch, the write loses the race.
+    state.updateError = watchEventMissing("an update");
+    assert.deepEqual(
+      await updateWatchEvent("event-1", { occurredAt: "2026-09-02T20:00:00.000Z" }),
+      { error: "Watch not found." },
+    );
+    const actions = await readFile(new URL("../src/lib/actions.ts", import.meta.url), "utf8");
+    const del = actions.slice(actions.indexOf("export async function deleteWatchEvent("));
+    assert.match(del.slice(0, del.indexOf("prisma.$transaction")), /if \(!event\) return \{ error: "Watch not found\." \};/);
   });
 });

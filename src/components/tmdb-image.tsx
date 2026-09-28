@@ -10,9 +10,13 @@ import { TMDB_IMAGE_BASE, tmdbSize, type TmdbImageKind, type TmdbSize } from "@/
  * A loader on each TMDB image rather than images.loaderFile, which would apply
  * to every next/image and stop optimizing local files such as logo.png.
  *
- * `maxSize` is the size the slot fetched before this loader, so no slot
- * downloads a heavier file than it used to. A client component because the
- * loader is a function, which a server component can't pass as a prop.
+ * `maxSize` is the size the slot fetched before this loader, so no slot gets
+ * fewer pixels than it used to. Some DPR 1 slots now download a larger file,
+ * though: TMDB's nearest size at or above the requested width replaces the
+ * optimizer's exact re-encode (a 180 px grid card fetches w342, not 256 px).
+ * VE-07 accepted that to stop paying for Vercel image transformations.
+ * A client component because the loader is a function, which a server
+ * component can't pass as a prop.
  */
 export function TmdbImage<K extends TmdbImageKind>({
   path,

@@ -23,8 +23,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { CheckSquare, Dices, LayoutGrid, List, Share2 } from "lucide-react";
 import { toast } from "sonner";
 import type { LibraryItem, TrashedTitle } from "@/lib/data";
-import dynamic from "next/dynamic";
 import { whenIdle } from "@/lib/when-idle";
+import { lazyDialog } from "./lazy-dialog";
 import { BulkBar } from "./library-bulk-bar";
 import { LibraryFilterPanel } from "./library-filter-panel";
 import { LibraryFiltersContext } from "./library-filters-context";
@@ -44,11 +44,26 @@ import {
 // like this module's other helpers.
 export { uncheckedProviderCopy };
 
-// Keeps Radix Dialog out of the library's first load (VE-11). ssr: false gives
-// it its own Suspense boundary, so loading it never suspends the library.
-const ShareDialog = dynamic(() => import("./share-dialog").then((m) => m.ShareDialog), {
-  ssr: false,
-});
+/** Stands in when the share dialog's chunk won't load (P7U-1). */
+function ShareUnavailable({
+  open,
+  onClose,
+}: React.ComponentProps<typeof import("./share-dialog").ShareDialog>) {
+  useEffect(() => {
+    if (!open) return;
+    toast.error("Couldn't open sharing. Try again.");
+    onClose();
+  }, [open, onClose]);
+  return null;
+}
+
+// Keeps Radix Dialog out of the library's first load (VE-11). lazyDialog gives
+// it its own Suspense boundary, so loading it never suspends the library, and
+// a failed load shows ShareUnavailable's toast instead of the error screen.
+const ShareDialog = lazyDialog(
+  () => import("./share-dialog").then((m) => m.ShareDialog),
+  ShareUnavailable,
+);
 
 /**
  * Case- and diacritic-insensitive fold for search. A library that leans

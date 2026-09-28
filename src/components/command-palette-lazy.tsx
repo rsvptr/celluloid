@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
+import { whenIdle } from "@/lib/when-idle";
 
 const CommandPalette = dynamic(
   () => import("@/components/command-palette").then((m) => m.CommandPalette),
@@ -28,17 +29,11 @@ export function LazyCommandPalette() {
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("celluloid:command", arm);
-    // typeof probe rather than `in`: lib.dom declares requestIdleCallback
-    // unconditionally, so an `in` check narrows the else branch to `never`,
-    // while at runtime older Safari really does lack the API.
-    const hasIdle = typeof window.requestIdleCallback === "function";
-    const idleId = hasIdle ? window.requestIdleCallback(arm, { timeout: 2000 }) : 0;
-    const timeoutId = hasIdle ? 0 : window.setTimeout(arm, 300);
+    const cancelIdle = whenIdle(arm);
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("celluloid:command", arm);
-      if (hasIdle) window.cancelIdleCallback(idleId);
-      else window.clearTimeout(timeoutId);
+      cancelIdle();
     };
   }, [ready]);
   return ready ? <CommandPalette /> : null;

@@ -295,6 +295,39 @@ describe("imports count only active episodes (PR-11)", { concurrency: false }, (
     });
   });
 
+  // P7X-2: the seed marked every aired episode watched with watchedAt null,
+  // wiping the date on episodes the owner had already watched, and on the
+  // withdrawn row, which is always watched.
+  it("keeps the dates of episodes already watched when it retries the seed", async () => {
+    const { titleId } = await seedShow(450, { withdrawn: true, firstWatched: true });
+    const { jobId, itemId } = await stageWatchedRow(450, {
+      action: "FAILED",
+      titleId,
+      attempts: 1,
+    });
+
+    await commitImportJobChunk("owner", jobId);
+
+    const item = await prisma.importItem.findUniqueOrThrow({ where: { id: itemId } });
+    assert.equal(item.action, "CREATE");
+    assert.equal(item.errorCode, null);
+    const episodes = await prisma.episode.findMany({
+      where: { season: { titleId } },
+      orderBy: { episodeNumber: "asc" },
+      select: { episodeNumber: true, watched: true, watchedAt: true },
+    });
+    assert.deepEqual(
+      episodes.map((e) => [e.episodeNumber, e.watched, e.watchedAt?.toISOString() ?? null]),
+      [
+        [1, true, "2026-01-01T00:00:00.000Z"],
+        [2, true, null],
+        [3, true, null],
+        [7, true, "2026-02-07T20:00:00.000Z"],
+      ],
+    );
+    assert.equal((await counts(titleId)).watchedEpisodes, 3);
+  });
+
   it("leaves withdrawn episodes out of the legacy import's counters", async () => {
     const { titleId } = await seedShow(500, { withdrawn: true, firstWatched: true });
     searchResults.set("Show 500", 500);

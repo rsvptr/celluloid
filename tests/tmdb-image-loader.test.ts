@@ -93,3 +93,18 @@ describe("TMDB loader wiring", () => {
     assert.equal(sites, 5);
   });
 });
+
+// P7U-2: no slot gets fewer pixels, but some DPR 1 slots now fetch a larger
+// file than the optimizer's re-encode. The comments said otherwise.
+describe("TMDB image size comments (P7U-2)", () => {
+  it("state the byte trade instead of claiming no heavier file", async () => {
+    const [image, poster] = await Promise.all([
+      readFile(new URL("../src/components/tmdb-image.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../src/components/poster.tsx", import.meta.url), "utf8"),
+    ]);
+    assert.doesNotMatch(image, /heavier file/);
+    assert.match(image, /no slot gets\s+\* fewer pixels than it used to\. Some DPR 1 slots now download a larger file/);
+    assert.match(image, /VE-07 accepted that to stop paying for Vercel image transformations\./);
+    assert.match(poster, /a card fetches w342 even at DPR 1\. That's a larger file than the\s+\/\/ old 256 px re-encode/);
+  });
+});

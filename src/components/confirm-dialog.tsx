@@ -1,15 +1,28 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import dynamic from "next/dynamic";
+import { useCallback, useEffect, useRef, useState, type ComponentProps } from "react";
 import { whenIdle } from "@/lib/when-idle";
+import { lazyDialog } from "./lazy-dialog";
+
+type ConfirmViewProps = ComponentProps<typeof import("./confirm-dialog-view").ConfirmDialogView>;
+
+/**
+ * Stands in when the dialog's chunk won't load (P7U-1): the browser's own
+ * confirm asks the same question, so every awaiting caller still settles.
+ */
+function NativeConfirm({ open, opts, onSettle }: ConfirmViewProps) {
+  useEffect(() => {
+    if (open) onSettle(window.confirm(opts.body ? `${opts.title}\n\n${opts.body}` : opts.title));
+  }, [open, opts, onSettle]);
+  return null;
+}
 
 // The AlertDialog markup, and Radix with it, loads after the page (VE-11).
-// ssr: false gives it its own Suspense boundary, so loading never suspends the
-// component that renders {dialog}.
-const ConfirmDialogView = dynamic(
+// lazyDialog gives it its own Suspense boundary, so loading never suspends the
+// component that renders {dialog}, and a failed load falls back to NativeConfirm.
+const ConfirmDialogView = lazyDialog(
   () => import("./confirm-dialog-view").then((m) => m.ConfirmDialogView),
-  { ssr: false },
+  NativeConfirm,
 );
 
 export interface ConfirmOptions {
@@ -44,6 +57,11 @@ export function useConfirm() {
   const opener = useRef<HTMLElement | null>(null);
 
   const confirm = useCallback((o: ConfirmOptions) => {
+    // A second confirm before the first is answered (a double click while the
+    // chunk loads) cancels the first rather than sharing its answer: a stale
+    // request never gets a "yes" it didn't show, and its caller still settles
+    // and clears any busy state (P7U-3).
+    resolver.current(false);
     opener.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setOpts(o);

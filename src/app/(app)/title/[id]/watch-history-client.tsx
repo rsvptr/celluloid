@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { Check, Pencil, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button, Card, Input } from "@/components/ui";
@@ -62,6 +63,7 @@ export function WatchHistoryList({
    *  these dates in and stats bucket them in. */
   timeZone?: string;
 }) {
+  const router = useRouter();
   const [pending, start] = useTransition();
   const { confirm, dialog } = useConfirm();
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -113,6 +115,22 @@ export function WatchHistoryList({
     setEditingId(null);
   }
 
+  /** The row that takes `event`'s place once it leaves the list. */
+  function neighbourOf(event: WatchEventVM): string | null {
+    const index = events.findIndex((e) => e.id === event.id);
+    return events[index + 1]?.id ?? events[index - 1]?.id ?? null;
+  }
+
+  // Deleted in another tab since this list rendered: the action says "Watch
+  // not found." and writes nothing, so nothing re-renders. Close the editor
+  // and refresh, so the stale row goes rather than lingering until a
+  // navigation (P7X-9).
+  function dropStaleRow(event: WatchEventVM) {
+    focusAfterRemoveId.current = neighbourOf(event);
+    setEditingId(null);
+    router.refresh();
+  }
+
   function save(event: WatchEventVM) {
     if (!draftDate) return;
     start(async () => {
@@ -132,6 +150,7 @@ export function WatchHistoryList({
       });
       if (res.error) {
         toast.error(res.error);
+        if (res.error === "Watch not found.") dropStaleRow(event);
         return;
       }
       closeEdit(event);
@@ -152,12 +171,12 @@ export function WatchHistoryList({
       }))
     )
       return;
-    const index = events.findIndex((e) => e.id === event.id);
-    const neighbour = events[index + 1]?.id ?? events[index - 1]?.id ?? null;
+    const neighbour = neighbourOf(event);
     start(async () => {
       const res = await deleteWatchEvent(event.id);
       if (res.error) {
         toast.error(res.error);
+        if (res.error === "Watch not found.") dropStaleRow(event);
         return;
       }
       focusAfterRemoveId.current = neighbour;

@@ -67,7 +67,6 @@ export default async function TitlePage({
   if (!title) notFound();
 
   const status = STATUS_META[title.status];
-  const backdrop = title.backdropPath;
   const isTv = title.mediaType === "TV";
 
   // Region precedence: the per-device cookie (set by the inline picker) beats
@@ -136,10 +135,10 @@ export default async function TitlePage({
 
       {/* Hero */}
       <div className="relative overflow-hidden rounded-[var(--radius-card)] ring-1 ring-line">
-        {backdrop && (
+        {title.backdropPath && (
           <div className="absolute inset-0">
             <TmdbImage
-              path={backdrop}
+              path={title.backdropPath}
               kind="backdrop"
               // w780, not w1280: it sits at 30% under two gradients (TM-13).
               maxSize="w780"
@@ -164,7 +163,7 @@ export default async function TitlePage({
               sizes="(max-width: 640px) 128px, 176px"
               // One preload per page: the backdrop, when there is one, is the
               // larger LCP candidate.
-              lcp={backdrop ? "eager" : "preload"}
+              lcp={title.backdropPath ? "eager" : "preload"}
             />
           </div>
           {/* min-w-0: as a row flex item from sm up, this column would otherwise

@@ -49,6 +49,9 @@ export function Poster({
           maxSize={size}
           alt={decorative ? "" : name}
           fill
+          // The grid default: 40vw keeps Next's candidates at 256 px and up, so
+          // a card fetches w342 even at DPR 1. That's a larger file than the
+          // old 256 px re-encode, the trade VE-07 accepted (P7U-2).
           sizes={sizes ?? "(max-width: 640px) 40vw, 180px"}
           className="object-cover"
           preload={lcp === "preload"}
