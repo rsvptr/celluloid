@@ -41,6 +41,15 @@ describe("title page hero (JK-15)", () => {
   });
 });
 
+describe("title page backdrop (P7U-7)", () => {
+  it("reads backdropPath directly, with no leftover alias", async () => {
+    const page = await source("../src/app/(app)/title/[id]/page.tsx");
+    assert.doesNotMatch(page, /const backdrop = /);
+    assert.match(page, /\{title\.backdropPath && \(\s*<div className="absolute inset-0">\s*<TmdbImage\s+path=\{title\.backdropPath\}/);
+    assert.match(page, /lcp=\{title\.backdropPath \? "eager" : "preload"\}/);
+  });
+});
+
 describe("title page TMDB request", () => {
   it("starts one bundle request and shares it with everything drawn from TMDB", async () => {
     const [page, extras, releases] = await Promise.all([
