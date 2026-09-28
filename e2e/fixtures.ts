@@ -1,4 +1,4 @@
-import { test as base, expect } from "@playwright/test";
+import { test as base, expect, type Page } from "@playwright/test";
 
 /** The server's SIGNUP_INVITE_CODE (playwright.config.ts). Not a secret. */
 export const INVITE_CODE = "e2e-invite-code-not-a-secret";
@@ -28,5 +28,16 @@ export const test = base.extend({
     expect(external, "requests outside the app").toEqual([]);
   },
 });
+
+/**
+ * page.goto, then waits until React has hydrated the page: the root layout's
+ * HydrationMarker sets `data-hydrated` on <html>. A click, fill, option change
+ * or Enter before then can miss React's handlers, so every page's first
+ * interaction comes after this.
+ */
+export async function gotoHydrated(page: Page, url: string) {
+  await page.goto(url);
+  await expect(page.locator("html")).toHaveAttribute("data-hydrated", "true");
+}
 
 export { expect };
