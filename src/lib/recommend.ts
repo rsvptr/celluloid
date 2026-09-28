@@ -163,14 +163,14 @@ const REC_SCHEMA: Record<string, unknown> = {
 };
 
 // Static so the prompt prefix stays byte-identical across runs (prompt cache).
-const SYSTEM_PROMPT = `You are a film and TV curator with deep, worldwide knowledge of cinema — mainstream and regional, classic and current. You are given one person's complete watch history and asked for recommendations.
+const SYSTEM_PROMPT = `You are a film and TV curator with deep, worldwide knowledge of cinema — mainstream and regional, classic and current. You are given one person's watch history and asked for recommendations.
 
 Rules:
-- Recommend only real, released titles. Use the year of ORIGINAL release (first air date for TV).
+- Recommend only real, released titles. Use the year of original release (first air date for TV).
 - Report each title's original language as an ISO-639-1 code.
 - Never recommend anything in the person's history or watchlist, anything they were already shown, or near-duplicates of either (remakes/re-releases count as duplicates only if they are the same work).
-- Titles rated 8+ and favorites are the strongest positive signal; low ratings, abandoned and dropped titles describe what to avoid; recent watches describe current mood.
-- Write each reason as ONE specific sentence tied to named titles or clear patterns in their history — never generic praise.
+- Rewatches, titles rated 8+ and favorites are the strongest positive signal; low ratings, abandoned and dropped titles describe what to avoid; recent watches describe current mood.
+- Write each reason as one specific sentence tied to named titles or clear patterns in their history — never generic praise.
 - Be honest with confidence: "high" only when the fit is strong and specific.
 - If a hard requirement is given (language, genre, era, type), every suggestion must satisfy it.
 - Order the list from most to least confident.`;
@@ -181,7 +181,7 @@ function buildBriefBlock(summary: string): string {
 }
 
 /**
- * How many titles the "do NOT suggest these" clause carries. Naming the cap
+ * How many titles the "don't suggest these" clause carries. Naming the cap
  * lets mergeExcludeNames fill it deliberately instead of guessing at the slice
  * below.
  */
@@ -208,7 +208,7 @@ export function buildRequestBlock(
     : "";
   const excludeClause =
     exclude && exclude.length
-      ? ` I have already been shown these, so do NOT suggest any of them again: ${exclude.slice(0, PROMPT_EXCLUDE_CAP).join(", ")}.`
+      ? ` I have already been shown these, so don't suggest any of them again: ${exclude.slice(0, PROMPT_EXCLUDE_CAP).join(", ")}.`
       : "";
   const prefClause = [
     language ? `originally in ${languageName(language)}` : "",
@@ -220,7 +220,7 @@ export function buildRequestBlock(
   const preferClause = prefClause
     ? ` Hard requirement: every suggestion must be ${prefClause}.`
     : "";
-  return `Based on my taste brief above, recommend ${count} titles I have NOT seen and that are NOT already on my watchlist.${focusClause}${preferClause}${excludeClause} ${typeClause} Strongly prefer titles that match what I rated highly; avoid obvious blockbusters unless they genuinely fit. Return the full ${count} suggestions: when you run out of strong fits, include lower-confidence picks and label their confidence honestly rather than shortening the list.`;
+  return `Based on my taste brief above, recommend ${count} titles I haven't seen and that aren't already on my watchlist.${focusClause}${preferClause}${excludeClause} ${typeClause} Strongly prefer titles that match what I rated highly; avoid obvious blockbusters unless they genuinely fit. Return the full ${count} suggestions: when you run out of strong fits, include lower-confidence picks and label their confidence honestly rather than shortening the list.`;
 }
 
 /**

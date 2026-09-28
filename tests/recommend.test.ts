@@ -399,7 +399,13 @@ describe("buildRequestBlock", () => {
   it("weaves in the focus and exclusion clauses", () => {
     const s = buildRequestBlock(9, "all", "cozy mysteries", ["Alien", "Heat"]);
     assert.ok(s.includes('Pay special attention to this request: "cozy mysteries".'));
-    assert.ok(s.includes("do NOT suggest any of them again: Alien, Heat."));
+    assert.ok(s.includes("don't suggest any of them again: Alien, Heat."));
+  });
+
+  it("states the ask at normal volume", () => {
+    const s = buildRequestBlock(9, "all", "cozy mysteries", ["Alien"], "ko", "Drama", "1990s");
+    assert.doesNotMatch(s, /\b[A-Z]{3,}\b/);
+    assert.ok(s.includes("recommend 9 titles I haven't seen and that aren't already on my watchlist."));
   });
 });
 
