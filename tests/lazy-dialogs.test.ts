@@ -63,7 +63,7 @@ describe("lazy library dialogs (VE-11)", () => {
     const library = await source("components/library.tsx");
     assert.match(
       library,
-      /const ShareDialog = dynamic\(\(\) => import\("\.\/share-dialog"\)\.then\(\(m\) => m\.ShareDialog\), \{\s*ssr: false,\s*\}\);/,
+      /const ShareDialog = lazyDialog\(\s*\(\) => import\("\.\/share-dialog"\)\.then\(\(m\) => m\.ShareDialog\),\s*ShareUnavailable,\s*\);/,
     );
     assert.match(library, /useEffect\(\(\) => whenIdle\(\(\) => setShareMounted\(true\)\), \[\]\);/);
     const openShare = library.slice(library.indexOf("function openShare("), library.indexOf("function surprise("));
@@ -80,7 +80,7 @@ describe("lazy library dialogs (VE-11)", () => {
     assert.doesNotMatch(confirm, /from "@radix-ui\//);
     assert.match(
       confirm,
-      /const ConfirmDialogView = dynamic\(\s*\(\) => import\("\.\/confirm-dialog-view"\)\.then\(\(m\) => m\.ConfirmDialogView\),\s*\{ ssr: false \},\s*\);/,
+      /const ConfirmDialogView = lazyDialog\(\s*\(\) => import\("\.\/confirm-dialog-view"\)\.then\(\(m\) => m\.ConfirmDialogView\),\s*NativeConfirm,\s*\);/,
     );
     assert.match(confirm, /useEffect\(\(\) => whenIdle\(\(\) => setMounted\(true\)\), \[\]\);/);
     const confirmFn = confirm.slice(confirm.indexOf("const confirm = useCallback("), confirm.indexOf("const settle = useCallback("));
