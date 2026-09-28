@@ -19,7 +19,7 @@ describe("friendlyAnthropicError", () => {
     assert.match(e.message, /\{"type":"error"/);
     assert.equal(
       friendlyAnthropicError(e),
-      "Claude couldn't accept this request (prompt is too long: 215000 tokens > 200000 maximum). Try another model, or base the run on fewer titles.",
+      "Claude couldn't accept this request (prompt is too long: 215000 tokens > 200000 maximum). Try another model.",
     );
   });
 
@@ -30,6 +30,35 @@ describe("friendlyAnthropicError", () => {
     assert.match(
       friendlyAnthropicError(new Anthropic.APIConnectionError({ message: "socket hang up" })),
       /Couldn't reach the Anthropic API/,
+    );
+  });
+
+  it("gives an overload or rate limit partway through a stream its specific copy", () => {
+    // The SDK throws a mid-stream SSE error event as a base APIError with no
+    // status (core/streaming.js), so only `type` can tell these apart.
+    const streamError = (type: Anthropic.ErrorType, message: string) =>
+      new Anthropic.APIError(
+        undefined,
+        { type: "error", error: { type, message } },
+        undefined,
+        new Headers(),
+        type,
+      );
+    const overloaded = streamError("overloaded_error", "Overloaded");
+    assert.equal(overloaded.status, undefined);
+    assert.ok(!(overloaded instanceof Anthropic.InternalServerError));
+    assert.equal(
+      friendlyAnthropicError(overloaded),
+      friendlyAnthropicError(apiError(529, "overloaded_error", "Overloaded")),
+    );
+    assert.match(friendlyAnthropicError(overloaded), /briefly overloaded/);
+    assert.equal(
+      friendlyAnthropicError(streamError("rate_limit_error", "Rate limited")),
+      friendlyAnthropicError(apiError(429, "rate_limit_error", "Rate limited")),
+    );
+    assert.equal(
+      friendlyAnthropicError(streamError("api_error", "Internal server error")),
+      friendlyAnthropicError(apiError(500, "api_error", "Internal server error")),
     );
   });
 
