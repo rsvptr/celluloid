@@ -2054,6 +2054,9 @@ export async function bulkSetStatus(ids: string[], status: WatchStatus) {
   });
   const now = new Date();
   let failed = 0;
+  // Titles removed or transferred while the request waited for their lock:
+  // neither updated nor failed, so they count toward neither (P7X-7).
+  let gone = 0;
 
   if (status === WatchStatus.WATCHED) {
     // Each title is its own bounded transaction: lock, reread, mutate, and log.
@@ -2072,7 +2075,7 @@ export async function bulkSetStatus(ids: string[], status: WatchStatus) {
         >`SELECT status, "mediaType", "watchedAt" FROM "Title"
           WHERE id = ${titleId} AND "userId" = ${userId} FOR UPDATE`;
         const current = rows[0];
-        if (!current) return; // removed or transferred while the request waited
+        if (!current) return false; // removed or transferred while the request waited
 
         const transitions = current.status !== WatchStatus.WATCHED;
         const completedAt = current.watchedAt ?? now;
@@ -2142,7 +2145,10 @@ export async function bulkSetStatus(ids: string[], status: WatchStatus) {
             },
           });
         }
-      }, { maxWait: 10_000 }).catch((err) => {
+        return true;
+      }, { maxWait: 10_000 }).then((updated) => {
+        if (!updated) gone += 1;
+      }).catch((err) => {
         console.error(`bulkSetStatus failed (titleId=${titleId}):`, err);
         failed += 1;
       }),
@@ -2164,9 +2170,10 @@ export async function bulkSetStatus(ids: string[], status: WatchStatus) {
   }
 
   revalidateAll();
-  if (failed === 0) return { count: owned.length };
-  if (failed === owned.length) return { error: "Couldn't update those titles. Try again." };
-  return { count: owned.length - failed, failed };
+  const updated = owned.length - failed - gone;
+  if (failed === 0) return { count: updated };
+  if (updated === 0) return { error: "Couldn't update those titles. Try again." };
+  return { count: updated, failed };
 }
 
 export async function bulkSetFavorite(ids: string[], favorite: boolean) {

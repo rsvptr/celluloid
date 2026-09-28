@@ -1125,7 +1125,7 @@ describe("watch transition locking", { concurrency: false }, () => {
     Object.assign(activeDb.prisma, {
       title: { ...activeDb.prisma.title, findMany: async () => ids.map((id) => ({ id })) },
       $transaction: async (
-        operation: (tx: { $queryRaw: () => Promise<unknown[]> }) => Promise<unknown>,
+        operation: (tx: SavedMovieTx) => Promise<unknown>,
         options?: { maxWait?: number },
       ) => {
         maxWaits.push(options?.maxWait);
@@ -1133,8 +1133,7 @@ describe("watch transition locking", { concurrency: false }, () => {
         peak = Math.max(peak, inFlight);
         try {
           await new Promise((resolve) => setTimeout(resolve, 5));
-          // An empty lock read is the "title vanished" early return.
-          return await operation({ $queryRaw: async () => [] });
+          return await operation(savedMovieTx());
         } finally {
           inFlight -= 1;
         }
@@ -1146,19 +1145,31 @@ describe("watch transition locking", { concurrency: false }, () => {
     assert.deepEqual(maxWaits, ids.map(() => 10_000));
   });
 
+  type SavedMovieTx = {
+    $queryRaw: (strings: TemplateStringsArray, titleId: string) => Promise<unknown[]>;
+    title: { update: () => Promise<unknown> };
+  };
+
+  /** A lock read that finds an already-watched movie, which saves with one update. */
+  function savedMovieTx(onRead?: (titleId: string) => Promise<void>): SavedMovieTx {
+    return {
+      $queryRaw: async (_strings, titleId) => {
+        await onRead?.(titleId);
+        return [{ status: WatchStatus.WATCHED, mediaType: MediaType.MOVIE, watchedAt: null }];
+      },
+      title: { update: async () => ({}) },
+    };
+  }
+
   /** Bulk WATCHED over `ids`, where the titles in `failing` throw P2028. */
   function failingBulkDb(ids: string[], failing: ReadonlySet<string>) {
     activeDb = new FakeWatchDb();
     const saved: string[] = [];
     Object.assign(activeDb.prisma, {
       title: { ...activeDb.prisma.title, findMany: async () => ids.map((id) => ({ id })) },
-      $transaction: async (
-        operation: (tx: {
-          $queryRaw: (strings: TemplateStringsArray, titleId: string) => Promise<unknown[]>;
-        }) => Promise<unknown>,
-      ) =>
-        operation({
-          $queryRaw: async (_strings, titleId) => {
+      $transaction: async (operation: (tx: SavedMovieTx) => Promise<unknown>) =>
+        operation(
+          savedMovieTx(async (titleId) => {
             await new Promise((resolve) => setTimeout(resolve, 5));
             if (failing.has(titleId)) {
               throw new Prisma.PrismaClientKnownRequestError(
@@ -1167,10 +1178,8 @@ describe("watch transition locking", { concurrency: false }, () => {
               );
             }
             saved.push(titleId);
-            // An empty lock read is the "title vanished" early return.
-            return [];
-          },
-        }),
+          }),
+        ),
     });
     const revalidated: string[] = [];
     Object.assign(globalThis, { __CELLULOID_ACTIONS_REVALIDATED__: revalidated });
@@ -1197,6 +1206,39 @@ describe("watch transition locking", { concurrency: false }, () => {
     } finally {
       Object.assign(globalThis, { __CELLULOID_ACTIONS_REVALIDATED__: undefined });
     }
+  });
+
+  // P7X-7: a title removed or transferred while its lock was awaited returned
+  // early without an error, and counted as updated.
+  it("doesn't count titles that vanished under the lock as updated", async () => {
+    const ids = ["title-1", "title-2", "title-3", "title-4"];
+    const vanished = new Set(["title-2"]);
+    const failing = new Set(["title-4"]);
+    activeDb = new FakeWatchDb();
+    Object.assign(activeDb.prisma, {
+      title: {
+        ...activeDb.prisma.title,
+        findMany: async ({ where }: { where: { id: { in: string[] } } }) =>
+          where.id.in.map((id) => ({ id })),
+      },
+      $transaction: async (operation: (tx: SavedMovieTx) => Promise<unknown>) => {
+        const tx = savedMovieTx(async (titleId) => {
+          if (failing.has(titleId)) throw new Error("connection lost");
+        });
+        return operation({
+          ...tx,
+          $queryRaw: async (strings, titleId) =>
+            vanished.has(titleId) ? [] : tx.$queryRaw(strings, titleId),
+        });
+      },
+    });
+
+    assert.deepEqual(await bulkSetStatus(ids, WatchStatus.WATCHED), { count: 2, failed: 1 });
+    assert.deepEqual(await bulkSetStatus(ids.slice(0, 3), WatchStatus.WATCHED), { count: 2 });
+    // Nothing saved: one vanished, the other failed.
+    assert.deepEqual(await bulkSetStatus(["title-2", "title-4"], WatchStatus.WATCHED), {
+      error: "Couldn't update those titles. Try again.",
+    });
   });
 
   it("returns an error when a bulk WATCHED saves none of them (PR-01)", async () => {
