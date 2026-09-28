@@ -27,7 +27,45 @@ import {
 // we asked for?" answered the same way the matcher will answer it.
 import { norm, resultNames } from "@/lib/tmdb-match";
 
-const BASE = "https://api.themoviedb.org/3";
+const DEFAULT_TMDB_API_BASE = "https://api.themoviedb.org/3";
+
+/**
+ * The TMDB API root. TMDB_API_BASE_URL exists only so the end-to-end suite can
+ * point the server at its local stub (e2e/tmdb-stub.mjs). A production
+ * deployment ignores it, by the same test env.ts applies, so a leftover test
+ * value can't send TMDB traffic, and the Bearer token with it, anywhere else.
+ * Elsewhere a set value must be an http(s) URL with no credentials, query or
+ * hash; anything else throws when this module loads.
+ */
+export function resolveTmdbApiBase(
+  source: Readonly<Record<string, string | undefined>> = process.env,
+): string {
+  const raw = source.TMDB_API_BASE_URL?.trim();
+  const production =
+    source.VERCEL_ENV === "production" ||
+    (!source.VERCEL &&
+      source.NODE_ENV === "production" &&
+      source.NEXT_PHASE !== "phase-production-build");
+  if (!raw || production) return DEFAULT_TMDB_API_BASE;
+
+  const url = URL.canParse(raw) ? new URL(raw) : null;
+  if (
+    !url ||
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error(
+      "TMDB_API_BASE_URL must be an http(s) URL without credentials, a query or a hash.",
+    );
+  }
+  return url.origin + url.pathname.replace(/\/+$/, "");
+}
+
+/** Shared with metadata-sync, which makes its own uncached requests. */
+export const TMDB_API_BASE = resolveTmdbApiBase();
 
 function getToken(): string {
   const t = process.env.TMDB_ACCESS_TOKEN;
@@ -103,7 +141,7 @@ async function tmdb<T>(
   params: Record<string, string | number | boolean | undefined> = {},
   opts: TmdbOptions = {},
 ): Promise<T> {
-  const url = new URL(BASE + path);
+  const url = new URL(TMDB_API_BASE + path);
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
   }
