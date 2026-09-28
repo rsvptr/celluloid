@@ -136,11 +136,12 @@ export function Library({
   // when the page came back from the router's cache for an earlier URL (Back
   // to a URL this component had mirrored), and then the address bar is right.
   const searchParams = useSearchParams();
-  const urlFilters = libraryUrlFilters(initialFilters, searchParams, {
-    languages,
-    tags,
-    genres,
-  });
+  const urlFilters = libraryUrlFilters(
+    initialFilters,
+    searchParams,
+    { languages, tags, genres },
+    rememberFilters,
+  );
   const [filters, dispatchFilters] = useReducer(
     libraryFiltersReducer,
     urlFilters,
