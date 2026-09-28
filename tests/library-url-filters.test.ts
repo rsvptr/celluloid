@@ -108,4 +108,18 @@ describe("Library reads its filters from the address bar", () => {
     assert.match(page, /<Library\s/);
     assert.doesNotMatch(page, /<Library[^>]*\skey=/);
   });
+
+  it("mirrors at once on mount and after a server re-render, and debounces a filter change", async () => {
+    const source = await readFile(new URL("../src/components/library.tsx", import.meta.url), "utf8");
+    // The re-render has the router write its own URL over the address bar; a
+    // navigation within a debounce would leave that URL on the library's
+    // history entry, and Back would lose the search.
+    assert.match(
+      source,
+      /if \(mirrorServerFiltersRef\.current !== initialFilters\) \{\s*mirrorServerFiltersRef\.current = initialFilters;\s*mirror\(\);\s*return;\s*\}/,
+    );
+    assert.match(source, /const mirrorServerFiltersRef = useRef<LibraryFilters \| null>\(null\);/);
+    // Typing stays debounced (Safari throttles replaceState).
+    assert.match(source, /mirrorTimeoutRef\.current = setTimeout\(mirror, 300\);/);
+  });
 });

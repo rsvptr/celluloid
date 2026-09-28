@@ -202,13 +202,15 @@ export function Library({
   // version fires this on every keystroke. Safari throttles replaceState to
   // ~100 calls/30s and throws a SecurityError past that. The very first mirror
   // (initial mount) still runs immediately so a stale query string is never
-  // briefly on screen; every mirror after that is debounced. The cookie write
+  // briefly on screen, and so does the one after a server re-render (below);
+  // only a filter change is debounced. The cookie write
   // is additionally skipped when its encoded value hasn't changed since the
   // last write (mirrorLastCookieRef) — the cookie doesn't even carry `query`
   // (see LibraryRememberedState), so same-query keystrokes were writing an
   // identical value on every call.
   const mirrorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const mirrorIsFirstRunRef = useRef(true);
+  // The server filters the mirror last ran with; null before its first run.
+  const mirrorServerFiltersRef = useRef<LibraryFilters | null>(null);
   const mirrorLastCookieRef = useRef<string | null | undefined>(undefined);
   // Holds the latest pending mirror so the unmount-flush effect below can run
   // it directly instead of re-deriving filter state from scratch.
@@ -242,8 +244,13 @@ export function Library({
       mirrorPendingRef.current = null;
     };
 
-    if (mirrorIsFirstRunRef.current) {
-      mirrorIsFirstRunRef.current = false;
+    // The first run, and the first after a server re-render, mirror at once.
+    // The re-render has just had the router write its own URL over the
+    // address bar, and a navigation within a debounce would leave that URL on
+    // the library's history entry: the router pushes the new route before the
+    // unmount flush below runs, so the flush's pathname guard skips the write.
+    if (mirrorServerFiltersRef.current !== initialFilters) {
+      mirrorServerFiltersRef.current = initialFilters;
       mirror();
       return;
     }
@@ -260,7 +267,8 @@ export function Library({
     // exactly when a filter does, as it did with a dependency per filter.
     // initialFilters is new on every server re-render (router.refresh, a
     // server action), and each of those has the router rewrite the address
-    // bar to the last URL it navigated to, so the mirror runs again after it.
+    // bar to the last URL it navigated to, so the mirror runs again after it,
+    // at once.
   }, [filters, rememberFilters, initialFilters]);
 
   // Flushes a still-pending debounced mirror on unmount so the last keystroke's
