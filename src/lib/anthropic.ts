@@ -130,10 +130,26 @@ export function anthropicClient(apiKey: string): Anthropic {
 }
 
 /**
+ * The API's own sentence from an error body. The SDK folds the whole JSON body
+ * (`{"type":"error","error":{...},"request_id":...}`) into `e.message`, which
+ * is no way to show a person an error, so read the structured field instead.
+ */
+function apiErrorDetail(e: InstanceType<typeof Anthropic.APIError>): string | null {
+  const message = (e.error as { error?: { message?: unknown } } | undefined)?.error?.message;
+  return typeof message === "string" && message.trim() ? message.trim().replace(/\.$/, "") : null;
+}
+
+/**
  * Map an Anthropic SDK error to a message a person can act on, using the SDK's
- * typed error classes (never string-matching). Falls back to the raw message.
+ * typed error classes, most specific first (never string-matching).
  */
 export function friendlyAnthropicError(e: unknown): string {
+  if (e instanceof Anthropic.BadRequestError) {
+    // The request itself, not the key or the service: most often a model that
+    // won't take this run's shape or size (a big library on a smaller window).
+    const detail = apiErrorDetail(e);
+    return `Claude couldn't accept this request${detail ? ` (${detail})` : ""}. Try another model, or base the run on fewer titles.`;
+  }
   if (e instanceof Anthropic.AuthenticationError) {
     return "Your Anthropic API key was rejected. Check it in Settings (it may have been revoked).";
   }
@@ -155,7 +171,8 @@ export function friendlyAnthropicError(e: unknown): string {
     return "Couldn't reach the Anthropic API. Check your connection and try again.";
   }
   if (e instanceof Anthropic.APIError) {
-    return `AI request failed: ${e.message}`;
+    const detail = apiErrorDetail(e);
+    return detail ? `AI request failed: ${detail}.` : "AI request failed. Try again in a moment.";
   }
   // Unknown, non-SDK error: never surface its raw message (it can carry stack
   // internals or upstream response text). The caller logs the raw error

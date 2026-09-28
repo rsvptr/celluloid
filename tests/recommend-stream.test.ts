@@ -306,6 +306,68 @@ describe("recommendation stream orchestration", { concurrency: false }, () => {
   });
 });
 
+describe("refusals and thinking phases", { concurrency: false }, () => {
+  const refusal: StreamEvent = {
+    type: "message_delta",
+    delta: {
+      stop_reason: "refusal",
+      stop_details: { type: "refusal", category: "cyber", explanation: null },
+    },
+  };
+
+  it("explains a refusal that arrives before any output", async () => {
+    streamEvents = [messageStart(), refusal];
+    const emitted: StreamEvent[] = [];
+    await runRecommendationStream("user-1", { count: 3 }, (event) => emitted.push(event));
+    assert.equal(emitted.some((event) => event.type === "rec"), false);
+    assert.deepEqual(emitted.at(-1), {
+      type: "error",
+      error:
+        "Claude declined this request. This can happen when the brief or focus text trips a safety filter, so reword it and try again.",
+    });
+  });
+
+  it("keeps the picks that completed before a mid-stream refusal and warns the list is short", async () => {
+    const first = JSON.stringify(modelRec("Finished Film"));
+    streamEvents = [
+      messageStart(),
+      {
+        type: "content_block_delta",
+        delta: { type: "text_delta", text: `{"recommendations":[${first},{"title":"Cut Of` },
+      },
+      refusal,
+    ];
+    const emitted: StreamEvent[] = [];
+    await runRecommendationStream("user-1", { count: 3 }, (event) => emitted.push(event));
+    const recs = emitted.filter((event) => event.type === "rec");
+    assert.deepEqual(recs.map((event) => (event.rec as { title: string }).title), ["Finished Film"]);
+    assert.deepEqual(emitted.slice(-2), [
+      {
+        type: "warning",
+        message:
+          "Claude stopped after 1 of 3 suggestions because a safety filter declined the rest. Reword your focus and run it again for a fuller list.",
+      },
+      { type: "done", total: 1 },
+    ]);
+  });
+
+  it("enters the thinking phase on the block start, with no thinking text streamed", async () => {
+    // Opus 5.5 and Sonnet 5 stream thinking blocks with empty text by default.
+    streamEvents = [
+      messageStart(),
+      { type: "content_block_start", content_block: { type: "thinking", thinking: "" } },
+      { type: "content_block_stop" },
+      textEvent([modelRec("Only Film")]),
+    ];
+    const emitted: StreamEvent[] = [];
+    await runRecommendationStream("user-1", { count: 1 }, (event) => emitted.push(event));
+    assert.deepEqual(
+      emitted.filter((event) => event.type === "status").map((event) => event.phase),
+      ["thinking", "generating"],
+    );
+  });
+});
+
 describe("retired model ids", { concurrency: false }, () => {
   function requestedModel() {
     return (capturedRequest as { model: string }).model;

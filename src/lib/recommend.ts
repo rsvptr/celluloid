@@ -1,3 +1,4 @@
+import type Anthropic from "@anthropic-ai/sdk";
 import { prisma } from "@/lib/prisma";
 import { MediaType } from "@/generated/prisma/client";
 import { getExportRows } from "@/lib/data";
@@ -24,6 +25,7 @@ import {
   MODEL_CAPS,
   resolveRecModel,
   type RecEraId,
+  type RecModelId,
 } from "@/lib/models";
 import { languageName } from "@/lib/format";
 
@@ -533,6 +535,80 @@ const MODEL_OUTPUT_CEILING: Record<string, number> = {
 const APPROX_CHARS_PER_TOKEN = 4;
 
 /**
+ * The Messages API request for one run on `model`. Pure, so each model's
+ * request surface (thinking, effort, output budget, cache breakpoint) is
+ * unit-testable without a live stream. None of the models take sampling
+ * parameters or an assistant prefill, and the JSON shape comes from
+ * structured outputs, not a forced tool call.
+ */
+export function buildRecRequest(
+  model: RecModelId,
+  askCount: number,
+  brief: string,
+  request: string,
+) {
+  // Fail safe if a model is ever added to REC_MODELS without a caps entry.
+  const caps = MODEL_CAPS[model] ?? { effort: false, adaptiveThinking: false };
+
+  // Scale the output budget with the ask so a large batch (askCount up to 50)
+  // plus adaptive thinking — max_tokens is a single cap covering thinking AND
+  // response text — can't truncate mid-JSON. The base (~the old flat budget)
+  // covers thinking + the JSON envelope; the per-item budget covers each
+  // suggestion and its share of thinking. Capped a safe margin under the
+  // model's streaming ceiling. This is a ceiling, not a target: generation is
+  // aborted once `count` are accepted, so the headroom only prevents
+  // truncation, it never costs tokens.
+  const outputCeiling = MODEL_OUTPUT_CEILING[model] ?? 64000;
+  const maxTokens = Math.min(outputCeiling - 8000, 16000 + askCount * 800);
+
+  // The cacheable prefix is system + brief, so both count toward the model's
+  // minimum. Under it the breakpoint is silently ignored and we'd pay the
+  // cache-write premium for nothing, so leave it off.
+  const cacheMinTokens = MODEL_CACHE_MIN_TOKENS[model] ?? 4096;
+  const briefIsCacheable =
+    (SYSTEM_PROMPT.length + brief.length) / APPROX_CHARS_PER_TOKEN >= cacheMinTokens;
+
+  return {
+    model,
+    max_tokens: maxTokens,
+    // Opus / Sonnet take adaptive thinking; Haiku 4.5 doesn't. Opus 5.5 and
+    // Sonnet 5 think adaptively even with the field omitted, but sending it
+    // keeps the request shape identical across the models that support it.
+    // Their thinking text streams empty (display defaults to "omitted"); the
+    // run's "thinking" phase keys off the block start, not the text.
+    ...(caps.adaptiveThinking ? { thinking: { type: "adaptive" as const } } : {}),
+    output_config: {
+      // `effort` 400s on Haiku 4.5 — only send it where supported. Opus 5.5
+      // and Sonnet 5 take the full low|medium|high|xhigh|max ladder; "medium"
+      // stays deliberate here because this is an interactive stream and the
+      // higher rungs buy depth we don't need at the cost of time-to-first-card.
+      // (Opus 5.5 defaults to medium and Sonnet 5 to high, so it is always sent.)
+      ...(caps.effort ? { effort: "medium" as const } : {}),
+      format: { type: "json_schema" as const, schema: REC_SCHEMA },
+    },
+    system: [{ type: "text" as const, text: SYSTEM_PROMPT }],
+    messages: [
+      {
+        role: "user" as const,
+        content: [
+          {
+            type: "text" as const,
+            text: brief,
+            // Cache breakpoint AFTER the brief: system + brief form a stable
+            // prefix, so "Show different" and preset re-runs within the TTL
+            // reprocess only the short run request below (~90% cheaper, faster
+            // time-to-first-suggestion). Attached only for a library big enough
+            // to clear the model's minimum — see briefIsCacheable above.
+            ...(briefIsCacheable ? { cache_control: { type: "ephemeral" as const } } : {}),
+          },
+          { type: "text" as const, text: request },
+        ],
+      },
+    ],
+  } satisfies Anthropic.MessageStreamParams;
+}
+
+/**
  * What to emit once the model stream ends, given how many suggestions were
  * accepted and which stop-reason flags fired during the run. Pure — no stream
  * or network access — so the refusal/max_tokens/plain-empty priority is
@@ -541,8 +617,9 @@ const APPROX_CHARS_PER_TOKEN = 4;
  *
  * A refusal only produces its own error when nothing usable came out of the
  * run. If suggestions were already accepted before the model declined,
- * partial results beat an error: the run falls through to the ordinary
- * warning/done handling below and hitRefusal is ignored.
+ * partial results beat an error: each one is a complete, validated pick, so
+ * they stay, with a warning that the list stopped short rather than a silent
+ * short list that reads as finished.
  */
 export function terminalRecEvents(
   accepted: number,
@@ -585,6 +662,12 @@ export function terminalRecEvents(
     events.push({
       type: "warning",
       message: `Claude hit its length limit after ${accepted} of ${count} suggestions. Ask for fewer titles for a complete set.`,
+    });
+  }
+  if (flags.hitRefusal && accepted < count) {
+    events.push({
+      type: "warning",
+      message: `Claude stopped after ${accepted} of ${count} suggestions because a safety filter declined the rest. Reword your focus and run it again for a fuller list.`,
     });
   }
   // A TMDB outage must read differently to a genuine no-match: these
@@ -700,8 +783,6 @@ export async function runRecommendationStream(
   // Precedence: explicit per-run model > the user's saved default > server
   // default. A saved default naming a retired model runs on its successor.
   const model = explicitModel ?? resolveRecModel(userPref?.recommendModel);
-  // Fail safe if a model is ever added to REC_MODELS without a caps entry.
-  const caps = MODEL_CAPS[model] ?? { effort: false, adaptiveThinking: false };
 
   // Scope which titles inform the suggestions. The watchlist exclusion always
   // uses the full library so "don't recommend what I've already planned" holds
@@ -800,24 +881,6 @@ export async function runRecommendationStream(
     tallies: { filteredOut: 0, lookupFailed: 0 },
   };
 
-  // Scale the output budget with the ask so a large batch (askCount up to 50)
-  // plus adaptive thinking — max_tokens is a single cap covering thinking AND
-  // response text — can't truncate mid-JSON. The base (~the old flat budget)
-  // covers thinking + the JSON envelope; the per-item budget covers each
-  // suggestion and its share of thinking. Capped a safe margin under the
-  // model's streaming ceiling. This is a ceiling, not a target: generation is
-  // aborted once `count` are accepted, so the headroom only prevents
-  // truncation, it never costs tokens.
-  const outputCeiling = MODEL_OUTPUT_CEILING[model] ?? 64000;
-  const maxTokens = Math.min(outputCeiling - 8000, 16000 + askCount * 800);
-
-  // The cacheable prefix is system + brief, so both count toward the model's
-  // minimum. Under it the breakpoint is silently ignored and we'd pay the
-  // cache-write premium for nothing, so leave it off.
-  const cacheMinTokens = MODEL_CACHE_MIN_TOKENS[model] ?? 4096;
-  const briefIsCacheable =
-    (SYSTEM_PROMPT.length + brief.length) / APPROX_CHARS_PER_TOKEN >= cacheMinTokens;
-
   if (runSignal.aborted) return;
   let sharedReservationDay: string | null = null;
   const releaseUnusedSharedSlot = () => {
@@ -852,42 +915,7 @@ export async function runRecommendationStream(
   }
 
   const client = anthropicClient(key);
-  const stream = client.messages.stream({
-    model,
-    max_tokens: maxTokens,
-    // Opus / Sonnet take adaptive thinking; Haiku 4.5 doesn't. Opus 5.5 and
-    // Sonnet 5 think adaptively even with the field omitted, but sending it
-    // keeps the request shape identical across the models that support it.
-    ...(caps.adaptiveThinking ? { thinking: { type: "adaptive" as const } } : {}),
-    output_config: {
-      // `effort` 400s on Haiku 4.5 — only send it where supported. Opus 5.5
-      // and Sonnet 5 take the full low|medium|high|xhigh|max ladder; "medium"
-      // stays deliberate here because this is an interactive stream and the
-      // higher rungs buy depth we don't need at the cost of time-to-first-card.
-      // (Opus 5.5 defaults to medium and Sonnet 5 to high, so it is always sent.)
-      ...(caps.effort ? { effort: "medium" as const } : {}),
-      format: { type: "json_schema", schema: REC_SCHEMA },
-    },
-    system: [{ type: "text", text: SYSTEM_PROMPT }],
-    messages: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: brief,
-            // Cache breakpoint AFTER the brief: system + brief form a stable
-            // prefix, so "Show different" and preset re-runs within the TTL
-            // reprocess only the short run request below (~90% cheaper, faster
-            // time-to-first-suggestion). Attached only for a library big enough
-            // to clear the model's minimum — see briefIsCacheable above.
-            ...(briefIsCacheable ? { cache_control: { type: "ephemeral" as const } } : {}),
-          },
-          { type: "text", text: request },
-        ],
-      },
-    ],
-  });
+  const stream = client.messages.stream(buildRecRequest(model, askCount, brief, request));
   if (signal) {
     // Client went away (or asked to stop): stop paying for generation. Guard the
     // race where the signal fired between the last checkpoint and here — a fresh
@@ -1023,7 +1051,14 @@ export async function runRecommendationStream(
         // Opus 5.5's safety classifiers can decline with a normal HTTP 200 rather
         // than a thrown error — same event, stop_reason "refusal" instead of an
         // exception, so it's detected here rather than in the catch block below.
-        else if (event.delta.stop_reason === "refusal") hitRefusal = true;
+        // stop_details is informational only (it can be null on a refusal), so
+        // it goes to the log, never into the branch.
+        else if (event.delta.stop_reason === "refusal") {
+          hitRefusal = true;
+          console.warn(
+            `Recommendation declined by ${model} (category: ${event.delta.stop_details?.category ?? "none"}).`,
+          );
+        }
       }
     }
   } catch (e) {
