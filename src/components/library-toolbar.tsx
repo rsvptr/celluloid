@@ -29,12 +29,12 @@ const TYPE_OPTIONS: { value: TypeFilter; label: string }[] = [
 ];
 
 // Primary CTA rendered as a real anchor (Link to /add). Mirrors
-// <Button variant="primary" size="md"> from ui.tsx — that primitive can't take
+// <Button variant="primary" size="md"> from ui.tsx. That primitive can't take
 // an href, and ui.tsx is out of this task's scope, so its classes are inlined.
 const addTitleButtonClass =
   "inline-flex min-h-11 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg brand-gradient px-4 text-sm font-semibold text-on-accent shadow-sm shadow-brand/20 press hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60 sm:min-h-10";
 
-// Row 1 — primary: the search is the dominant utility, next to a live result
+// Row 1, primary: the search is the dominant utility, next to a live result
 // count and the one high-emphasis action (Add title).
 export function LibrarySearchRow({
   searchInputRef,
@@ -87,7 +87,7 @@ export function LibrarySearchRow({
   );
 }
 
-// Row 2 — contextual: a type quick-filter and the single entry point to the
+// Row 2, contextual: a type quick-filter and the single entry point to the
 // advanced facets, on every width.
 export function LibraryFilterRow({
   firstRun,
@@ -181,7 +181,7 @@ export function LibraryFilterRow({
   );
 }
 
-// Active-filter chips — one removable chip per active facet, shown whether or
+// Active-filter chips: one removable chip per active facet, shown whether or
 // not the advanced panel is open. Removing a chip, or all of them, unmounts the
 // button that had focus, so focus moves to the chip that took its place, or to
 // `fallbackFocusRef` once no chip is left.

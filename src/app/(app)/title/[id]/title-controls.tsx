@@ -163,7 +163,7 @@ export function TitleControls({
   const immediateSavingRef = useRef(false);
 
   // CP-06: resync the immediate-commit fields (status/rating/favorite/date) when
-  // fresh server props arrive (action or refresh) — e.g. the server auto-stamps
+  // fresh server props arrive (action or refresh), e.g. the server auto-stamps
   // watchedAt when a title is marked WATCHED, and the date input must reflect it
   // instead of staying blank. Compare against the props we last applied, never
   // against local state, so an in-flight optimistic edit is never reverted; skip

@@ -96,7 +96,7 @@ export function TwoFactorSection({ enabled }: { enabled: boolean }) {
         return;
       }
       const uri = (data as { totpURI?: string })?.totpURI;
-      // qrcode is only needed for this one setup flow — load it on demand
+      // qrcode is only needed for this one setup flow, so load it on demand
       // instead of shipping it in the settings bundle.
       const QRCode = uri ? (await import("qrcode")).default : null;
       const qrDataUrl =

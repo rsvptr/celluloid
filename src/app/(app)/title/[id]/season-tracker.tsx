@@ -182,7 +182,7 @@ export function SeasonTracker({
   // -instant optimistic UI. Now every click still applies its optimistic change
   // synchronously via applyWatched (outside the transition, so it never waits
   // its turn), but the network call it triggers is only queued; drainQueue
-  // drains one call at a time — never more than one in flight. Each successful
+  // drains one call at a time, never more than one in flight. Each successful
   // call returns the re-rendered page, so router.refresh() fires only after a
   // failure, once the queue is empty. Each queued job captures its own rollback
   // (which episodes, and what to revert them to) and only applies it if

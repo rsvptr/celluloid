@@ -163,14 +163,14 @@ const REC_SCHEMA: Record<string, unknown> = {
 };
 
 // Static so the prompt prefix stays byte-identical across runs (prompt cache).
-const SYSTEM_PROMPT = `You are a film and TV curator with deep, worldwide knowledge of cinema — mainstream and regional, classic and current. You are given one person's watch history and asked for recommendations.
+const SYSTEM_PROMPT = `You are a film and TV curator with deep, worldwide knowledge of cinema: mainstream and regional, classic and current. You are given one person's watch history and asked for recommendations.
 
 Rules:
 - Recommend only real, released titles. Use the year of original release (first air date for TV).
 - Report each title's original language as an ISO-639-1 code.
 - Never recommend anything in the person's history or watchlist, anything they were already shown, or near-duplicates of either (remakes/re-releases count as duplicates only if they are the same work).
 - Rewatches, titles rated 8+ and favorites are the strongest positive signal; low ratings, abandoned and dropped titles describe what to avoid; recent watches describe current mood.
-- Write each reason as one specific sentence tied to named titles or clear patterns in their history — never generic praise.
+- Write each reason as one specific sentence tied to named titles or clear patterns in their history, never generic praise.
 - Be honest with confidence: "high" only when the fit is strong and specific.
 - If a hard requirement is given (language, genre, era, type), every suggestion must satisfy it.
 - Order the list from most to least confident.`;
@@ -560,8 +560,8 @@ export function buildRecRequest(
   };
 
   // Scale the output budget with the ask so a large batch (askCount up to 50)
-  // plus adaptive thinking — max_tokens is a single cap covering thinking AND
-  // response text — can't truncate mid-JSON. The base (~the old flat budget)
+  // plus adaptive thinking (max_tokens is a single cap covering thinking AND
+  // response text) can't truncate mid-JSON. The base (~the old flat budget)
   // covers thinking + the JSON envelope; the per-item budget covers each
   // suggestion and its share of thinking. Capped a safe margin under the
   // model's streaming ceiling. This is a ceiling, not a target: generation is
@@ -587,7 +587,7 @@ export function buildRecRequest(
     // run's "thinking" phase keys off the block start, not the text.
     ...(caps.adaptiveThinking ? { thinking: { type: "adaptive" as const } } : {}),
     output_config: {
-      // `effort` 400s on Haiku 4.5 — only send it where supported. Opus 5.5
+      // `effort` 400s on Haiku 4.5, so only send it where supported. Opus 5.5
       // and Sonnet 5 take the full low|medium|high|xhigh|max ladder; "medium"
       // stays deliberate here because this is an interactive stream and the
       // higher rungs buy depth we don't need at the cost of time-to-first-card.
@@ -607,7 +607,7 @@ export function buildRecRequest(
             // prefix, so "Show different" and preset re-runs within the TTL
             // reprocess only the short run request below (~90% cheaper, faster
             // time-to-first-suggestion). Attached only for a library big enough
-            // to clear the model's minimum — see briefIsCacheable above.
+            // to clear the model's minimum. See briefIsCacheable above.
             ...(briefIsCacheable ? { cache_control: { type: "ephemeral" as const } } : {}),
           },
           { type: "text" as const, text: request },

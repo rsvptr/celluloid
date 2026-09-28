@@ -153,7 +153,7 @@ function ShareRow({
   const [saving, startSaving] = useTransition();
 
   // Take the server's name whenever it changes (the rename above, or another
-  // tab), adjusted during render rather than by re-keying the row — a new key
+  // tab), adjusted during render rather than by re-keying the row: a new key
   // would remount and slam the manage panel shut on every save. Same "adjusting
   // state when a prop changes" pattern the library's Trash count uses.
   const [syncedName, setSyncedName] = useState(s.name ?? "");

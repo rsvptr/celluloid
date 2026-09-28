@@ -24,7 +24,7 @@ const SORTS: { key: SortKey; label: string }[] = [
   { key: "tmdb", label: "TMDB rating" },
 ];
 
-// Advanced filters — collapsed by default; the only entry point is the Row 2
+// Advanced filters, collapsed by default; the only entry point is the Row 2
 // disclosure button. Inline region, so focus is never trapped.
 export function LibraryFilterPanel({
   showFilters,

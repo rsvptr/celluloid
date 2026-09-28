@@ -356,7 +356,7 @@ function tvAsSearchItem(tv: TmdbTvDetails): TmdbSearchItem {
 /**
  * Resolve a row through the exact identifier its file carried, if any. A TMDB,
  * IMDb or TVDB id names one title outright, so honouring it skips the fuzzy
- * name search entirely — the single biggest accuracy win on a large export,
+ * name search entirely, the single biggest accuracy win on a large export,
  * where "Drishyam" or "The Office" otherwise resolves by popularity. Never
  * throws: a dead id or a TMDB failure just returns null so the caller falls
  * back to searching by name. Every lookup takes the staging `signal`, so none

@@ -27,7 +27,7 @@ export function TrashView({
   // that took its place, or the row above when the last one went. Rows are
   // collected by id because the row that must receive focus is not the one that
   // was clicked. ui.tsx's Button takes no ref, so the row element is what is
-  // held and its first control — Restore — is what gets focused.
+  // held and its first control (Restore) is what gets focused.
   const rowRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
   const focusAfterRemovalId = useRef<string | null>(null);
 

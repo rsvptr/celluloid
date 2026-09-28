@@ -44,7 +44,7 @@ function TitleCardImpl({
   selectable?: boolean;
   selected?: boolean;
   onToggle?: (id: string) => void;
-  /** LCP hint for the first visible row — see Poster's `lcp`. */
+  /** LCP hint for the first visible row. See Poster's `lcp`. */
   lcp?: "preload" | "eager";
 }) {
   const status = STATUS_META[item.status];
@@ -70,7 +70,7 @@ function TitleCardImpl({
         // grid footprint actually changes size. The bottom edge doesn't need
         // it: the ring there lands well inside the text block below, never
         // near this box's edge. Needs the outer element's `flow-root` (see
-        // pressClass) — otherwise -mt-0.5 collapses into its margin instead of
+        // pressClass). Otherwise -mt-0.5 collapses into its margin instead of
         // staying put.
         "-mx-0.5 -mt-0.5 px-0.5 pt-0.5",
       )}
