@@ -522,7 +522,7 @@ The legacy workbook importer bypasses the review step entirely (it is meant for 
 
 ## End to end tests
 
-`e2e/` holds a Playwright suite that drives a production build in Chromium: invite-code sign-up, sign-out and sign-in, adding titles from search, Mark watched and its Undo, and Settings. CI runs it in the `e2e` job. TMDB is replaced by `e2e/tmdb-stub.mjs`, which the server reaches through the test-only `TMDB_API_BASE_URL`, and a test fails if the browser requests anything outside the app, so a run needs no network access and no secrets.
+`e2e/` holds a Playwright suite that drives a production build in Chromium: invite-code sign-up, sign-out and sign-in, adding titles from search, Mark watched and its Undo, and Settings. CI runs it in the `e2e` job. TMDB is replaced by `e2e/tmdb-stub.mjs`, which the server reaches through the test-only `TMDB_API_BASE_URL`, and a test fails if the browser requests anything outside the app. A run needs no network access and no secrets, though the build before it fetches the Geist fonts from Google Fonts.
 
 The suite creates accounts, so it needs a Postgres you can throw away, and it refuses any database not on localhost. To run it:
 
