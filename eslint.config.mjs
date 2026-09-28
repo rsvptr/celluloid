@@ -16,6 +16,10 @@ const eslintConfig = defineConfig([
     ".agents/**",
     // Audit evidence and agent mailbox (isolated reproduction scripts, not app code).
     ".agent-collaboration/**",
+    // Playwright output: the HTML report bundles its own JS.
+    "playwright-report/**",
+    "test-results/**",
+    "blob-report/**",
   ]),
 ]);
 

@@ -49,6 +49,7 @@ Most trackers are good at storing what you watched and bad at the only question 
 - [Environment variables](#environment-variables)
 - [Bringing in your library](#bringing-in-your-library)
 - [Scripts](#scripts)
+- [End to end tests](#end-to-end-tests)
 - [Deploying to Vercel](#deploying-to-vercel)
 - [Project structure](#project-structure)
 - [Keyboard and accessibility](#keyboard-and-accessibility)
@@ -401,7 +402,7 @@ Two side tables hang off the user without being part of the core model above. A 
 | Toasts | Sonner |
 | Icons | Lucide |
 | Spreadsheets | ExcelJS |
-| Tests | Node test runner through tsx |
+| Tests | Node test runner through tsx; Playwright end to end |
 
 ## Getting started
 
@@ -446,6 +447,7 @@ values still missing.
 | `DIRECT_URL` | For migrations | Neon direct connection string: the same branch's host without `-pooler`, from the Connect dialog with pooling turned off. Used for migrations, `db:indexes` and the backfill script, never at runtime, because Prisma Migrate takes a session-level lock that Neon's pooler can't hold. When it is unset or blank, `DATABASE_URL_UNPOOLED` is used, then `DATABASE_URL`. Whichever is chosen has `-pooler` removed from its host, so the pooled string itself is never used. It must point at the same Neon branch and database as `DATABASE_URL`: if the endpoints or database names differ, Prisma commands that connect to a database and those scripts refuse to run. Keep the `sslmode=require&channel_binding=require` Neon shows, here and in `DATABASE_URL_UNPOOLED` and `PROD_DATABASE_URL`: Prisma's migration engine doesn't support `verify-full` and silently falls back to `prefer`, which allows plaintext. |
 | `DATABASE_URL_UNPOOLED` | Optional | The direct string under the name `neon env pull` and Neon's Vercel integration write. Used for migrations when `DIRECT_URL` is unset, with the same same-branch check. |
 | `TMDB_ACCESS_TOKEN` | Yes | The TMDB v4 API Read Access Token (the long token starting with `eyJ`). Server side only. |
+| `TMDB_API_BASE_URL` | Test only | Points the server at the end to end suite's TMDB stub. Leave it unset. It must be on `localhost`, `127.0.0.1` or `[::1]`, and a production deployment ignores it. |
 | `BETTER_AUTH_SECRET` | Yes | Signs sessions. At least 32 characters; generate with `npx auth@latest secret`. |
 | `BETTER_AUTH_URL` | Yes | The app base URL. Local is `http://localhost:3000`, production is your deployed URL. |
 | `NEXT_PUBLIC_SITE_URL` | Yes | Public base URL for metadata and the auth client. Match `BETTER_AUTH_URL`. |
@@ -501,6 +503,8 @@ The legacy workbook importer bypasses the review step entirely (it is meant for 
 | `npm run start` | Run the production build locally |
 | `npm run lint` | Run ESLint |
 | `npm test` | Run the test suite on Node's built in runner (Node 22 or newer) |
+| `npm run test:e2e` | Run the Playwright end to end suite against a production build. See [End to end tests](#end-to-end-tests) |
+| `npm run test:e2e:install` | Download the Chromium build Playwright uses, once per machine |
 | `npm run db:deploy` | Apply migrations to the database |
 | `npm run db:dump -- --target dev\|prod` | Create a confirmed, fail-closed full database snapshot under `backups/` before a migration |
 | `npm run db:deploy:prod` | Apply pending migrations to the production database named by `PROD_DATABASE_URL`, over its direct endpoint, after showing the Neon endpoint, database and pending migrations and asking for typed confirmation |
@@ -515,6 +519,25 @@ The legacy workbook importer bypasses the review step entirely (it is meant for 
 | `npm run import` | Import the legacy Excel workbook from `data/watched.xlsx` |
 
 `npm run start` serves the production build over plain `http://localhost`, which fails `env.ts`'s production check (HTTPS is required outside development). Use `npm run dev` for local work, or set HTTPS `BETTER_AUTH_URL`/`NEXT_PUBLIC_SITE_URL` values if you need to smoke-test the production build locally.
+
+## End to end tests
+
+`e2e/` holds a Playwright suite that drives a production build in Chromium: invite-code sign-up, sign-out and sign-in, adding titles from search, Mark watched and its Undo, and Settings. CI runs it in the `e2e` job. TMDB is replaced by `e2e/tmdb-stub.mjs`, which the server reaches through the test-only `TMDB_API_BASE_URL`, and a test fails if the browser requests anything outside the app. A run needs no network access and no secrets, though the build before it fetches the Geist fonts from Google Fonts.
+
+The suite creates accounts, so it needs a Postgres you can throw away, and it refuses any database not on localhost. To run it:
+
+```bash
+npm run test:e2e:install
+export E2E_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/celluloid_e2e
+DATABASE_URL=$E2E_DATABASE_URL DIRECT_URL=$E2E_DATABASE_URL npx prisma migrate deploy
+BETTER_AUTH_URL=http://localhost:3100 NEXT_PUBLIC_SITE_URL=http://localhost:3100 npm run build
+npm run test:e2e
+```
+
+- The build has to use `http://localhost:3100`, because the site URL is compiled into the client. Its other values come from `.env.local` as usual. It overwrites `.next`, so rebuild before using that build any other way.
+- `npm run test:e2e` starts the stub on port 3101 and `next start` on 3100 with placeholder values that override `.env.local`. Outside CI it reuses servers already on those ports. The server runs as a Vercel preview deployment does (`VERCEL=1`), since the production check above needs HTTPS.
+- Each run makes two sign-up requests, and Better Auth allows five a minute per address. After two runs back to back, wait a minute or recreate the database.
+- A failed test keeps a trace: `npx playwright show-trace test-results/<test>/trace.zip`.
 
 ## Deploying to Vercel
 
@@ -572,6 +595,7 @@ celluloid/
 │   ├── lib/                   auth, prisma, tmdb, recommend, suppressions, export, import (legacy + staged review), backup, metadata sync, share, region and settings actions, data, actions, crypto, rate limiting
 │   └── proxy.ts               Next 16 request proxy (this version uses proxy, not middleware; also sets the nonce-based CSP)
 ├── tests/                     pure logic tests: matching, export scope, filenames, prompt, crypto, backup, staged import, stats, suppressions, rate limiting
+├── e2e/                       Playwright specs and the TMDB stub they run against (playwright.config.ts at the root)
 ├── next.config.ts             security headers and the TMDB image allowlist
 ├── vercel.json                the daily metadata sync schedule
 ├── prisma.config.ts
