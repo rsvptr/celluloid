@@ -153,7 +153,7 @@ export function recommendReducer(
         : { ...results(state), status: "error", error: action.error };
     case "finish": {
       if (state.status !== "streaming") return state;
-      // Ranking runs on whatever arrived — full run, stopped early, or errored
+      // Ranking runs on whatever arrived: full run, stopped early, or errored
       // partway (partial results stay useful alongside the error message).
       const recs =
         state.received.length > 0

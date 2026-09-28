@@ -16,7 +16,7 @@
  * survive Neon's transaction-mode pooler (see scripts/db-urls.mjs).
  *
  * Forward-only: it shells out to `prisma migrate deploy`, which applies pending
- * migrations and nothing else — it never resets, drops, or generates SQL.
+ * migrations and nothing else. It never resets, drops, or generates SQL.
  * Rehearse them first on a fresh copy of production, not a long-lived dev
  * branch: a PR's preview branch, or a short-lived child branch (README).
  *

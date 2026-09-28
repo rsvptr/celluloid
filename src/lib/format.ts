@@ -67,7 +67,7 @@ export function nameWithTypeAndYear(
 
 /**
  * TMDB's TV lifecycle string, softened for display. "Ended" (concluded its
- * run) and "Canceled" (axed) are deliberately kept distinct — whether a show
+ * run) and "Canceled" (axed) are deliberately kept distinct: whether a show
  * got a real ending is exactly what a viewer deciding to start it wants to
  * know; only the spelling of "Canceled" is normalized. Anything else (e.g.
  * "Planned", "In Production") keeps TMDB's words in sentence case.

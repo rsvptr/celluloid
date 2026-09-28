@@ -26,7 +26,7 @@ const CONFIDENCE_LABELS: Record<Recommendation["confidence"], string> = {
   low: "Low",
 };
 
-/** Why a suggestion was hidden — mirrors SuppressionReason in the Prisma schema. */
+/** Why a suggestion was hidden. Mirrors SuppressionReason in the Prisma schema. */
 export type DismissReason = "NOT_INTERESTED" | "SEEN_ELSEWHERE";
 
 type AddState =

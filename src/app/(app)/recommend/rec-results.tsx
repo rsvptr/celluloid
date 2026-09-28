@@ -64,7 +64,7 @@ export function RecResults({
             {/* One live region for the whole run. Swapping it for a plain
                 paragraph on completion would tear the node out before the
                 announcement could fire, so the run would go silent exactly when
-                there was something to say — the same element switches from
+                there was something to say. The same element switches from
                 progress to the final count instead. */}
             <p
               role="status"

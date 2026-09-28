@@ -42,7 +42,7 @@ export function BulkBar({
   // Phone-width disclosure for the secondary actions. The bar used to pack
   // every control into one line: below sm it wrapped to four or five rows and
   // swallowed ~40% of the viewport, and from sm to lg the nowrap scroller cut
-  // off everything past the fold — including Remove and Done, because `ml-auto`
+  // off everything past the fold, including Remove and Done, because `ml-auto`
   // resolves to zero inside an overflowing flex container, so the exit and the
   // destructive action were both off-screen with nothing to hint at a scroll.
   // Now the bar wraps at every width (no scroller), and on phones only the
@@ -167,8 +167,8 @@ export function BulkBar({
       {open && (
         <motion.div
           ref={barRef}
-          // z-[45]: above the mobile tab bar (nav.tsx, z-40, md:hidden) — selection
-          // mode is a transient modal-ish state that's meant to cover it — but
+          // z-[45]: above the mobile tab bar (nav.tsx, z-40, md:hidden), since selection
+          // mode is a transient modal-ish state that's meant to cover it, but
           // below dialogs/command palette (z-50) so a confirm dialog or the share
           // dialog opened from here still renders on top.
           className="fixed inset-x-0 bottom-0 z-[45] px-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
@@ -235,7 +235,7 @@ export function BulkBar({
                 row that wraps directly under the More button controlling it. It
                 used to be pulled below Remove/Done with `order-last` so those two
                 never moved, but that left tab order and screen-reader order
-                disagreeing with the screen — the panel was read before the two
+                disagreeing with the screen: the panel was read before the two
                 buttons it appeared underneath. Sitting next to its trigger costs
                 Remove/Done one row while the panel is open, and is where a
                 disclosure's content belongs anyway. Rules on both edges keep it

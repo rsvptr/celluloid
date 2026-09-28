@@ -544,7 +544,7 @@ export function Library({
             onOpenTrash={() => setTrashMode(true)}
           />
 
-          {/* Row 3 — utilities: de-emphasized selection, discovery, and view
+          {/* Row 3, utilities: de-emphasized selection, discovery, and view
               controls, right-aligned in one compact cluster. */}
           <div className={cn("flex flex-wrap items-center justify-end gap-2", firstRun && "hidden")}>
             <button
@@ -646,7 +646,7 @@ export function Library({
           uncheckedServiceCount={uncheckedServiceCount}
         />
 
-        {/* Bulk action bar — only when there's something selected */}
+        {/* Bulk action bar, only when there's something selected */}
         <BulkBar
           open={selectMode && selectedIds.length > 0}
           count={selectedIds.length}

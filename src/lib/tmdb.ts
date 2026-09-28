@@ -819,7 +819,7 @@ export interface TitleBundle {
   providersResults: Record<string, TmdbRegionProviders> | undefined;
   /** Related titles, media_type-tagged, with the /similar fallback already applied. */
   related: TmdbSearchItem[];
-  /** Raw videos in the requested languages — feed to pickTrailer(videos, languages). */
+  /** Raw videos in the requested languages. Feed to pickTrailer(videos, languages). */
   videos: TmdbVideo[];
   /**
    * Age/content certification for the viewer's streaming region, falling back
