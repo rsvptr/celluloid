@@ -49,7 +49,7 @@ Most trackers are good at storing what you watched and bad at the only question 
 - [Environment variables](#environment-variables)
 - [Bringing in your library](#bringing-in-your-library)
 - [Scripts](#scripts)
-- [End to end tests](#end-to-end-tests)
+- [Tests and CI](#tests-and-ci)
 - [Deploying to Vercel](#deploying-to-vercel)
 - [Project structure](#project-structure)
 - [Keyboard and accessibility](#keyboard-and-accessibility)
@@ -58,9 +58,9 @@ Most trackers are good at storing what you watched and bad at the only question 
 ## What it does
 
 - Tracks films and TV in one library, with TMDB metadata, posters, seasons, and episodes pulled in automatically
-- Every matched title shows where to stream, rent, or buy it (region-aware, via JustWatch data), a trailer link, and a "More like this" row you can add from in one click
+- Every matched title shows where to stream, rent, or buy it (region-aware, via JustWatch data), a trailer link that prefers your language, and a "More like this" row you can add from in one click. A film on your watchlist also shows when it reaches cinemas, digital, and disc in your region
 - Half star ratings from 0.5 to 10, private notes, favorites, and free form tags
-- Per episode and per season tracking for shows, with a progress bar, quick "mark season" and "mark show" actions (marking a show watched comes with an Undo that also clears the activity it wrote), and a quiet "New" badge once a watching show has an aired episode you have not logged yet
+- Per episode and per season tracking for shows, with a progress bar, quick "mark season" and "mark show" actions (marking a show watched comes with an Undo that also clears the activity it wrote), premiere and finale labels on episodes, and a quiet "New" badge once a watching show has an aired episode you have not logged yet
 - A nightly job re-reads TMDB for the shows you are still watching, so a new season appears in the library on its own instead of waiting for you to refresh the title by hand
 - Every viewing is logged to a private watch history, with an optional note. Logging again on a title you already finished counts as a rewatch instead of overwriting the first watch. A viewing logged on the wrong day, or twice, can be edited or deleted from the title page
 - Five watch states that map to a real backlog: watchlist, watching, watched, on hold, dropped
@@ -69,15 +69,15 @@ Most trackers are good at storing what you watched and bad at the only question 
 - A "copy as AI prompt" export, so the same brief works in any chat assistant
 - Search, rich filtering, two layouts, and bulk editing across a large library. Search ignores accents, so "amelie" finds "Amélie"
 - Soft delete: removing a title moves it to Trash with every piece of personal data intact, ready to restore, delete forever, or empty in one action
-- Uploading a spreadsheet stages a review: Celluloid proposes a TMDB match for every row, you fix or exclude what is wrong, then commit in resumable batches you can leave and pick back up later. Ratings, watch dates, and IMDb or TMDB ids come across if your sheet has them
+- Uploading a spreadsheet stages a review: Celluloid proposes a TMDB match for every row, you fix or exclude what is wrong, then commit in resumable batches you can leave and pick back up later. Ratings, watch dates, and TMDB, IMDb, or TVDB ids come across if your sheet has them
 - Free form tags you can rename and give one of five colors, from the title page or Settings
 - A surprise picker that pulls something random off your watchlist when you cannot decide
 - Stats built from real activity: a heatmap whose days open to show what you watched, streaks, rating distribution, taste and totals by genre, and your most rewatched titles
 - Public, read only share links for a list or your whole library, with an optional expiry, a revoke switch that pulls access without deleting the link's record, and a per link view of exactly which titles a visitor sees
 - A full JSON backup you can restore with a preview first, so nothing writes to your library until you confirm exactly what will change, and a note in Settings of when you last took one
-- Time zone and a default watch region in Settings. The time zone sets stats day boundaries; the region decides whose streaming, rental, and certification info you see, and a per device selector on a title page can override it
+- Time zone and a default watch region in Settings. The time zone sets stats day boundaries; the region, any of the countries TMDB lists streaming data for, decides whose streaming, rental, release date, and certification info you see, and a per device selector on a title page can override it
 - Exports to plain text, Markdown, JSON, and a styled Excel workbook, scoped as finely as language, genre, minimum rating, and release years, with filenames that say what is inside
-- Invite-only accounts with email and password, plus optional two-factor authentication
+- Invite-only accounts with email and password, optional two-factor authentication, and an account activity log of sign-ins and security changes
 
 ## The recommendation engine
 
@@ -137,7 +137,7 @@ You can steer a run with a free text focus ("cozy mysteries", "something like Br
 
 **Models.** Claude Sonnet 5 is the default. Claude Opus 5.5 and Claude Haiku 4.5 are selectable per run from the recommend page. The app adapts the request to each model: Opus 5.5 and Sonnet 5 get adaptive thinking and an effort setting, while Haiku 4.5 skips both options because it rejects them. Opus 5.5 runs also opt into Anthropic's server-side refusal fallback (`fallbacks: "default"` under the `server-side-fallback-2026-07-01` beta), so a run its safety classifiers decline is rerun on the model Anthropic recommends. That parameter exists only on the Claude API and Claude Platform on AWS, not on Amazon Bedrock, Vertex AI or Microsoft Foundry. Output is constrained to a JSON schema, and the taste brief carries an Anthropic prompt-cache breakpoint, so once your library is large enough to clear the chosen model's cache minimum, a "Show different" re-run a few minutes later reprocesses only the short request block instead of your whole taste brief. That minimum differs per model and is not lower on newer ones, so the breakpoint is attached only when the brief plausibly clears the bar for the model you picked.
 
-**Bring your own key.** Add an Anthropic key in settings and it is encrypted at rest with AES 256 GCM before it touches the database. A deployment wide key can also be set as a fallback, and the recommend page always states which one a run is about to use.
+**Bring your own key.** Add an Anthropic key in settings and it is encrypted at rest with AES 256 GCM before it touches the database. A deployment wide key can also be set as a fallback, and the recommend page always states which one a run is about to use. `SHARED_AI_DAILY_RUN_LIMIT` can cap how many runs the deployment key makes per UTC day across all accounts; every run counts once, whichever model it uses, and runs on a personal key never count.
 
 ## Tracking your watch history
 
@@ -155,6 +155,7 @@ Every title carries personal tracking on top of its TMDB metadata.
 - **Notes** are private and double as context for the AI. Favorites and tags layer on top, and tags also work as a recommendation lens.
 - **Tags are editable.** Rename a tag anywhere it appears and every title follows, or give it one of five colors so it reads as a category at a glance. Settings lists every tag with how many live titles carry it, which is also where a tag is deleted.
 - **TV is tracked properly.** Shows expand into seasons and episodes. Tick a single episode, a whole season, or the whole show. Progress is denormalized for a fast bar on the card, and finishing a show stamps a watch date so it counts toward recency and stats. An episode that turned up after you added the show, has aired, and is not ticked off puts a small "New" badge on its card, on any show except one you have dropped.
+- **Premieres and finales are labeled.** Every season's first episode reads "Premiere", and the latest or next episode reads "Season finale" or "Mid-season finale" when TMDB marks it so. The Airing page marks a show whose next episode opens a season.
 - **Log watch** records a dated viewing with an optional note, from the title page. The first log on a title stamps its watch date; logging again on an already watched title is recorded as a rewatch and adds to the running count on that title and on the stats page. The History row for the first viewing is untouched, and the title's own watch date reflects the latest viewing.
 - **History is correctable.** The watch log is append only by design, since stats and streaks are built from it, but a viewing logged on the wrong day or logged twice by a double tap can be edited or deleted from the History list on the title page. Either way the title's watch date is re-derived from the log on the server, so the two cannot drift apart.
 
@@ -169,6 +170,7 @@ A title used to be frozen at whatever TMDB said on the day you added it, so a sh
 - An episode TMDB withdraws is removed if you never watched it. If you had ticked it, the row stays with your tick and its history but leaves the progress count and the "New" badge, so the show can still reach 100%. If TMDB lists the episode again, the row comes back as it was.
 - Each run records the show's TMDB status, the air date of its next episode, and when the title was last synced along with the last error if there was one. It also caches which services carry the show in your Settings watch region; the library's "On my services" filter reads that cache against the services you pick in Settings (see [Notes and limitations](#notes-and-limitations)).
 - One title's failure is recorded against that title and the run continues. Whatever the run does not reach keeps its place at the front of the queue and goes first the next day.
+- Before the shows, the run deletes Account activity entries older than 90 days (see [Privacy and security](#privacy-and-security)).
 - The run has a wall clock budget, and a title in flight when it runs out stops fetching rather than finishing at its own pace, since one show with hundreds of episodes could otherwise start just under the wire and overrun the function limit. A title dropped that way is not marked as failed; it stays at the front of the queue. With more than one account the remaining budget is split evenly between the accounts still to go, so a later account cannot be starved by an earlier one.
 
 The endpoint accepts no input other than its credential. It requires `Authorization: Bearer $CRON_SECRET` and compares the header in constant time; if `CRON_SECRET` is not set it refuses every request rather than falling back to running unauthenticated. Vercel sends that header for scheduled invocations once the variable is set on the project. Without it the app works exactly as before, just without the nightly refresh.
@@ -191,7 +193,7 @@ The home screen is your whole collection, in a poster grid or a dense list.
 | Needs match | Only titles with no TMDB match, for cleanup |
 | Sort | Recently added, recently watched, name, release date, your rating, TMDB rating |
 
-On phones the filters collapse behind a single toggle and lay out as a clean two column drawer. Your filter, sort, and layout choices live in the URL, so a filtered view is bookmarkable and shareable, and pressing Back after opening a title returns you to exactly the view you left while you work through a backlog. In the dense list view, offscreen rows skip rendering entirely (`content-visibility`), so even a very long list stays fast.
+On phones the filters collapse behind a single toggle and lay out as a clean two column drawer. Your filter, sort, and layout choices live in the URL, so a filtered view is bookmarkable and shareable, and pressing Back after opening a title returns you to exactly the view you left while you work through a backlog. Offscreen grid cards and list rows skip rendering entirely (`content-visibility`), so even a very long library stays fast.
 
 **Filters that remember themselves.** Arrive with a plain URL and the library restores the filters, sort, and layout you last used on that device; an explicit link always wins over the memory, so a URL you share shows the recipient what the URL says, not what your device remembers. The recommend page's dials and the export page's format and scope are remembered the same way. Search text is never saved. All of it sits behind one Settings toggle, on by default, and switching the toggle off deletes everything already remembered on that device.
 
@@ -234,7 +236,7 @@ Every download gets a unique, descriptive filename, for example `celluloid-libra
 
 ## Backups and recovery
 
-Celluloid has an application-level backup for the personal data that would be painful to rebuild. In **Settings > Backup**, choose **Download backup** to save a versioned JSON file. The current v2 format contains movie and TV metadata, soft-deleted titles, status, ratings, favorites, notes, watch dates and watch-event history, full season and episode progress, tags with their colors and their title joins, owner timezone/region preferences, and ordered shared-list settings including expiry and revocation. Restore also accepts v1 files through an explicit compatibility upgrade, for files up to 4 MB. If your library's backup would exceed that same 4 MB restore limit, the download refuses with a clear error instead of handing you a file it could never restore, and Settings' "last backed up" stamp is not updated; use `npm run db:dump` for a library that large. Backups deliberately exclude passwords, sessions, two-factor secrets and backup codes, encrypted API keys, and share slugs. Your "not interested" list is included and is restored with the rest of your data; a staged spreadsheet import is not, since it is working state that is cheap to rebuild. A restored shared list receives a new unguessable link instead of reviving an old bearer token.
+Celluloid has an application-level backup for the personal data that would be painful to rebuild. In **Settings > Backup**, choose **Download backup** to save a versioned JSON file. The current v2 format contains movie and TV metadata, soft-deleted titles, status, ratings, favorites, notes, watch dates and watch-event history, full season and episode progress, tags with their colors and their title joins, owner timezone/region preferences, and ordered shared-list settings including expiry and revocation. Restore also accepts v1 files through an explicit compatibility upgrade, for files up to 4 MB. If your library's backup would exceed that same 4 MB restore limit, the download refuses with a clear error instead of handing you a file it could never restore, and Settings' "last backed up" stamp is not updated; use `npm run db:dump` for a library that large. Backups deliberately exclude passwords, sessions, two-factor secrets and backup codes, encrypted API keys, share slugs, and the account activity log. Your "not interested" list is included and is restored with the rest of your data; a staged spreadsheet import is not, since it is working state that is cheap to rebuild. A restored shared list receives a new unguessable link instead of reviving an old bearer token.
 
 Settings records when you last downloaded a backup, so the button tells you how stale your off-site copy is instead of giving no feedback at all. The stamp is written as the file starts streaming; whether it reached your disk is not something the server can see.
 
@@ -260,7 +262,7 @@ These steps are manual owner responsibilities, not actions the application perfo
 
 ## Sharing
 
-You can publish a read only view of your library, or an ordered selection, at an unguessable link under `/s/`. Shared pages need no login and are marked no index. Notes, star ratings, and favorites are hidden unless you opt in, and a whole library share hides your not yet watched watchlist by default so you are not broadcasting your plans. Links can be permanent or expire after 7, 30, or 90 days.
+You can publish a read only view of your library, or an ordered selection, at an unguessable link under `/s/`. Shared pages need no login and are marked no index. Notes, star ratings, and favorites are hidden unless you opt in, and a whole library share hides your not yet watched watchlist by default so you are not broadcasting your plans. Links can be permanent or expire after 7, 30, or 90 days. Each shared page carries TMDB's logo and attribution notice, as does Settings > About.
 
 Every link stays listed in Settings, and a published link is not a thing you have to remember the contents of:
 
@@ -276,12 +278,15 @@ This is your data on your infrastructure.
 - Self hosted on your own Neon database. There is no shared backend and no third party account system.
 - Every query is scoped to the signed in user, so one account can never read another's titles, tags, shares, or settings.
 - Your Anthropic key is encrypted at rest with AES 256 GCM. It is never stored or logged in plaintext.
-- Accounts use email and password through Better Auth, with optional time based two factor (an authenticator app, with backup codes and a manual setup key). Sessions are stored in the database, and deleting your account requires your password, not just a live session. Settings lists every active session with its device, IP address, and last-active time, so you can sign out one device or every device but this one.
+- Accounts use email and password through Better Auth, with optional time based two factor (an authenticator app, with backup codes and a manual setup key). Sessions are stored in the database and last 30 days, extended at most once a day while you use the app, and deleting your account requires your password, not just a live session. Settings lists every active session with its device, IP address, and last-active time, so you can sign out one device or every device but this one.
+- Turning two factor on signs out every other device. Backup codes can be regenerated with your password, and both the setup screen and regeneration offer them as a download.
+- Downloading or restoring a backup, changing the Anthropic key, and two factor changes check the session row in the database instead of trusting the 60 second session cookie cache, so a session revoked on another device cannot do them in that window.
 - Settings also shows Account activity: sign-ins, sign-outs and security changes such as a new password, each stored with its IP address and user agent. Only you can see it, and the nightly sync deletes entries older than 90 days, so that needs `CRON_SECRET`.
-- Sign in, sign up, and every endpoint that checks a password or a two factor code are rate limited per IP against brute force, and the AI, search, import, and export routes are rate limited per user to keep a runaway loop from draining your API budget.
+- Sign in, sign up, and every endpoint that checks a password or a two factor code are rate limited per IP against brute force, with counters kept in Postgres so the limit holds across serverless instances. Better Auth endpoints the app has no use for (`/update-user`, `/verify-password`, `/two-factor/get-totp-uri`) are turned off. The AI, search, import, and export routes are rate limited per user to keep a runaway loop from draining your API budget.
 - New accounts require the shared `SIGNUP_INVITE_CODE`, checked server-side before Better Auth creates the user. Leave it unset when you are not inviting anyone; existing users can still sign in.
 - The one unauthenticated endpoint, the scheduled sync, is gated on a bearer token compared in constant time, and refuses to run at all when that secret is not configured rather than falling back to open access.
 - Security headers are set for every response: frame denial, no sniff, a strict referrer policy, a content security policy covering framing, plugins, base tags, and form targets, a permissions policy that turns off browser capabilities the app never uses, and HSTS on the production domain.
+- Posters and backdrops load straight from `image.tmdb.org`, so your browser asks TMDB for them directly. The content security policy allows no other outside image host.
 - Remembered filters are plain cookies on your own device. They hold filter values and nothing else, never search text, and the Settings toggle that governs them deletes them when switched off.
 - A recommendation run scoped to part of your library sends Anthropic that part's details only. Every other title appears in the prompt as a bare name and year on an exclusion list, so notes and ratings outside the chosen scope stay home.
 - Server side input validation bounds every free text field. The runtime dependency tree has no known advisories; the `prisma` CLI carries transitive advisories (`deepmerge-ts`, `mysql2`) that do not reach application code.
@@ -320,11 +325,13 @@ flowchart LR
       AUTH["Better Auth<br/>(sessions, 2FA)"]
     end
     DB[("Neon Postgres<br/>via Prisma 7")]
-    TMDB["TMDB API<br/>(metadata, posters)"]
+    TMDB["TMDB API<br/>(metadata)"]
+    IMG["image.tmdb.org<br/>(posters, backdrops)"]
     CLAUDE["Anthropic Claude<br/>(suggestions)"]
 
     UI --> RSC
     UI --> API
+    UI --> IMG
     RSC --> DB
     API --> DB
     RSC --> AUTH
@@ -336,6 +343,10 @@ flowchart LR
 ```
 
 Reads and simple mutations go through server components and server actions. The work that can be slow or large (asking Claude, searching TMDB, parsing an uploaded sheet, building an Excel file) runs in route handlers with a longer timeout. The Anthropic call is streamed and the recommendation response is constrained to a JSON schema, so the server gets clean structured data back instead of free text to parse.
+
+TMDB images skip Vercel's image optimizer. TMDB already serves every size as WebP with a long cache, so a loader on each TMDB image points the browser at the size it needs on `image.tmdb.org`. Local images such as the logo still go through `/_next/image`.
+
+Each serverless instance keeps at most five connections to Neon's pooler and waits at most 15 seconds to connect or for a free connection, enough for a compute waking from scale to zero. The live app's functions run in London (`lhr1`), next to its Neon database in `eu-west-2`; put yours in the region nearest your database (see [Deploying to Vercel](#deploying-to-vercel)).
 
 ## Data model
 
@@ -381,7 +392,9 @@ erDiagram
 
 Titles are unique per user by media type and TMDB id, and the denormalized `watchedEpisodes` count keeps the progress bar fast without walking every episode on each render. A title also carries what the nightly sync learned about it: TMDB's own lifecycle string, the next episode's air date, when it was last synced, and a cache of the streaming providers for a region that is filled ahead of the view that will read it.
 
-Two side tables hang off the user without being part of the core model above. A `Suppression` records one suggestion you turned down, keyed so a title that resolved to TMDB is matched by id and one that did not is matched by normalized name and year. A staged spreadsheet upload gets its own short-lived `ImportJob` and per-row `ImportItem` rows (see [Bringing in your library](#bringing-in-your-library)); each `ImportItem` holds the uploaded row as submitted, including any rating and watch date, until the row is committed or the job is discarded.
+A few side tables hang off the user without being part of the core model above. A `Suppression` records one suggestion you turned down, keyed so a title that resolved to TMDB is matched by id and one that did not is matched by normalized name and year. A staged spreadsheet upload gets its own short-lived `ImportJob` and per-row `ImportItem` rows (see [Bringing in your library](#bringing-in-your-library)); each `ImportItem` holds the uploaded row as submitted, including any rating and watch date, until the row is committed or the job is discarded. An `AuthEvent` records one sign-in, sign-out, or security change for the Account activity list, and is deleted after 90 days.
+
+Two operational tables sit outside the user entirely: `RateLimit` holds Better Auth's short-lived counters, and `SharedAiDailyUsage` counts the deployment key's recommendation runs per UTC day.
 
 ## Tech stack
 
@@ -414,7 +427,7 @@ You need Node.js 22 or 24 (the package pins `>=22 <25`, and CI tests both majors
 npm install
 ```
 
-**2. Set up your environment.** Copy the example file and fill in real values. See [Environment variables](#environment-variables) for what each one is.
+**2. Set up your environment.** Copy the example file and fill in real values. Locally you need at least `DATABASE_URL`, `TMDB_ACCESS_TOKEN`, `BETTER_AUTH_SECRET`, and a `SIGNUP_INVITE_CODE` to create your account; the secrets start blank, and each comment gives the command that generates one. See [Environment variables](#environment-variables) for what each one is.
 
 ```bash
 cp .env.example .env.local
@@ -446,20 +459,26 @@ values still missing.
 | `DATABASE_URL` | Yes | Neon pooled connection string (host contains `-pooler`). Used at runtime by `pg`, so it may use `sslmode=verify-full`: `pg` 8 treats `require` as `verify-full` but logs a security warning, and `pg` 9 will adopt libpq's `require`, which skips the certificate check. Keep Neon's `channel_binding=require` in it: migrations fall back to this URL when `DIRECT_URL` and `DATABASE_URL_UNPOOLED` are unset, and Prisma's migration engine turns `verify-full` into `prefer`, which allows plaintext unless channel binding is required. |
 | `DIRECT_URL` | For migrations | Neon direct connection string: the same branch's host without `-pooler`, from the Connect dialog with pooling turned off. Used for migrations, `db:indexes` and the backfill script, never at runtime, because Prisma Migrate takes a session-level lock that Neon's pooler can't hold. When it is unset or blank, `DATABASE_URL_UNPOOLED` is used, then `DATABASE_URL`. Whichever is chosen has `-pooler` removed from its host, so the pooled string itself is never used. It must point at the same Neon branch and database as `DATABASE_URL`: if the endpoints or database names differ, Prisma commands that connect to a database and those scripts refuse to run. Keep the `sslmode=require&channel_binding=require` Neon shows, here and in `DATABASE_URL_UNPOOLED` and `PROD_DATABASE_URL`: Prisma's migration engine doesn't support `verify-full` and silently falls back to `prefer`, which allows plaintext. |
 | `DATABASE_URL_UNPOOLED` | Optional | The direct string under the name `neon env pull` and Neon's Vercel integration write. Used for migrations when `DIRECT_URL` is unset, with the same same-branch check. |
-| `TMDB_ACCESS_TOKEN` | Yes | The TMDB v4 API Read Access Token (the long token starting with `eyJ`). Server side only. |
+| `PROD_DATABASE_URL` | Optional, local only | The production connection string, read only by `db:dump -- --target prod`, `db:deploy:prod`, and `db:backfill:discovered-at -- --target prod`, which all connect to its direct host. It lets you migrate production from your machine while `DATABASE_URL` points at a dev branch. Never serves app traffic; don't set it on Vercel. |
+| `TMDB_ACCESS_TOKEN` | Yes | The TMDB v4 API Read Access Token (the long token starting with `eyJ`), not the 32 character v3 API key, which is refused everywhere. Production also refuses any value not shaped like the Read Access Token (a JWT), so a Vercel Production build fails without the real one. Elsewhere any other placeholder is accepted, which keeps CI working. Server side only. |
 | `TMDB_API_BASE_URL` | Test only | Points the server at the end to end suite's TMDB stub. Leave it unset. It must be on `localhost`, `127.0.0.1` or `[::1]`, and a production deployment ignores it. |
-| `BETTER_AUTH_SECRET` | Yes | Signs sessions. At least 32 characters; generate with `npx auth@latest secret`. |
-| `BETTER_AUTH_URL` | Yes | The app base URL. Local is `http://localhost:3000`, production is your deployed URL. |
-| `NEXT_PUBLIC_SITE_URL` | Yes | Public base URL for metadata and the auth client. Match `BETTER_AUTH_URL`. |
-| `ENCRYPTION_KEY` | Required in production (dev/test may fall back to `BETTER_AUTH_SECRET`) | Encrypts per user Anthropic keys at rest. At least 32 characters; generate with `openssl rand -base64 32`. |
+| `BETTER_AUTH_SECRET` | Yes | Signs sessions and encrypts two factor secrets. At least 32 characters; generate with `npx auth@latest secret`. Do not replace it once accounts use two factor; see [Rotating `BETTER_AUTH_SECRET`](#rotating-better_auth_secret). |
+| `BETTER_AUTH_SECRETS` | Optional | Versioned secrets for rotating `BETTER_AUTH_SECRET`, as `<version>:<secret>` pairs, newest first. Read by Better Auth itself. |
+| `BETTER_AUTH_URL` | In production | The app's origin, with no path. Local is `http://localhost:3000`, production is your deployed URL over HTTPS. It must match `NEXT_PUBLIC_SITE_URL`. In development either one falls back to the other, then to `http://localhost:3000`. |
+| `NEXT_PUBLIC_SITE_URL` | In production | The same origin, used for page metadata and by the browser's auth client. It is compiled into the client, so rebuild after changing it. |
+| `ENCRYPTION_KEY` | In production | Encrypts per user Anthropic keys at rest. At least 32 characters in production; generate with `openssl rand -base64 32`. Development and Preview may leave it blank and fall back to `BETTER_AUTH_SECRET`. |
 | `ANTHROPIC_API_KEY` | Optional | A deployment wide Claude key, used when a user has not added their own. |
-| `SHARED_AI_DAILY_RUN_LIMIT` | Optional | Maximum shared-key recommendation runs across all accounts per UTC day. Blank or unset is uncapped; personal Anthropic keys bypass it. The counter table ships with the repository's migrations, so a normal `npm run db:deploy` already provides it; if it is ever missing, shared-key runs refuse to start rather than run unmetered. |
+| `SHARED_AI_DAILY_RUN_LIMIT` | Optional | Maximum recommendation runs on the deployment key across all accounts per UTC day, a whole number from 1. Each run counts once, whatever the model, and a run that fails before Claude starts answering is given back. Blank or unset is uncapped; personal Anthropic keys bypass it. The counter table ships with the repository's migrations, so a normal `npm run db:deploy` already provides it; if it is ever missing, shared-key runs refuse to start rather than run unmetered. |
 | `SIGNUP_INVITE_CODE` | To create accounts | Shared code required by every email signup. At least 16 characters; generate with `openssl rand -base64 24`. Leave it unset to hide signup and reject new accounts. Existing users can still sign in. |
-| `CRON_SECRET` | For the scheduled sync | Bearer token the daily `/api/cron/sync` job must present. Generate with `openssl rand -base64 32`. Unset means the sync never runs; the endpoint refuses every request rather than running unauthenticated. |
+| `CRON_SECRET` | For the scheduled sync | Bearer token the daily `/api/cron/sync` job must present. Generate with `openssl rand -base64 32`. Unset means the sync never runs, and Account activity entries are never pruned; the endpoint refuses every request rather than running unauthenticated. |
 | `OWNER_EMAIL` | For `npm run import` | The email of the account the legacy workbook import writes into. The script exits if it is unset, or if no account with that email exists yet. Not read by the running app. |
 | `IMPORT_FILE` | Optional | Path to the workbook `npm run import` reads. Defaults to `data/watched.xlsx`. Not read by the running app. |
+| `E2E_DATABASE_URL` | Test only | The throwaway Postgres the end to end suite uses, on `localhost` or `127.0.0.1` only. Defaults to `postgresql://postgres:postgres@localhost:5432/celluloid_e2e`. See [Tests and CI](#tests-and-ci). |
+| `ALLOW_DB_PUSH` | Shell only | Set to `1` on the command line to let `npm run db:push` run against a throwaway database. The guard reads only the shell environment, never `.env` files, so it cannot be left switched on. |
 
-`BETTER_AUTH_SECRET` and, in production, `ENCRYPTION_KEY` must be at least 32 characters; the app refuses to start otherwise, since both are key material rather than plain identifiers.
+`BETTER_AUTH_SECRET` and, in production, `ENCRYPTION_KEY` must be at least 32 characters; the app refuses to start otherwise, since both are key material rather than plain identifiers. "Production" here means a Vercel Production deployment, or `next start` on your own server; Preview deployments, `npm run dev`, and local builds use the relaxed rules. In production `BETTER_AUTH_URL` and `NEXT_PUBLIC_SITE_URL` must be set and use HTTPS.
+
+Node, CI, Vercel, and Next.js set `NODE_ENV`, `CI`, `VERCEL`, `VERCEL_ENV`, and `NEXT_PHASE` themselves; the app reads them to tell production from everything else, so do not set them by hand.
 
 `ALLOW_SIGNUPS` and `DISABLE_SIGNUPS` are no longer recognized. Replace either old flag with `SIGNUP_INVITE_CODE` before inviting someone.
 
@@ -468,7 +487,7 @@ values still missing.
 There are three ways to get titles in, and they all enrich from TMDB (posters, seasons, episodes, genres, runtime, original language).
 
 1. **Search and add.** The fastest path for a handful of titles. Search TMDB inside the app and add with one click.
-2. **Upload a sheet.** The in app importer on the Add page accepts an `.xlsx` or `.csv` file with a Title column, up to 2 MB and 250 rows. It reads every worksheet with a Title or Name header, not just the first, so Celluloid's own multi-sheet Excel export re-imports in one upload. Year, Type, Status, a rating, a watch date, and an IMDb or TMDB id are all optional extras it will use if your file has them.
+2. **Upload a sheet.** The in app importer on the Add page accepts an `.xlsx` or `.csv` file with a Title column, up to 2 MB and 250 rows. It reads every worksheet with a Title or Name header, not just the first, so Celluloid's own multi-sheet Excel export re-imports in one upload. Year, Type, Status, a rating, a watch date, and a TMDB, IMDb, or TVDB id are all optional extras it will use if your file has them.
 3. **Import the legacy workbook.** If you are coming from a "Movies and TV Shows Watched" style spreadsheet with separate sheets, drop it at `data/watched.xlsx` and run the importer.
 
 **Uploading a sheet stages a review before anything touches your library.** Celluloid proposes a TMDB match for each row and shows a confidence label. From there you can:
@@ -479,7 +498,8 @@ There are three ways to get titles in, and they all enrich from TMDB (posters, s
 
 **Column handling.** Header matching is case insensitive and ignores punctuation, so the real column names in a Letterboxd, IMDb, or Trakt export are recognized as they are written.
 
-- **Ids beat names.** A row carrying a TMDB or IMDb id is resolved through that id and skips the fuzzy name search entirely, which is the single biggest accuracy win on a large export where "Drishyam" or "The Office" otherwise resolves by popularity. A dead id quietly falls back to searching by name.
+- **Ids beat names.** A row carrying a TMDB or IMDb id is resolved through that id and skips the fuzzy name search entirely, which is the single biggest accuracy win on a large export where "Drishyam" or "The Office" otherwise resolves by popularity. An IMDb episode id resolves to its show. A TVDB id is trusted only when the show's name also matches the row, since TVDB numbers series and episodes separately and one number can name both. A dead id quietly falls back to searching by name.
+- **Original titles count.** A row written in a film's original language, such as "Ladri di biciclette", matches TMDB's entry even when TMDB lists it under its English title.
 - **Rating scales are read from the heading first.** A five star column is doubled onto Celluloid's 0.5 to 10 scale and a ten point column is taken as is. A column headed only "Rating" names no scale, so the values get one look for the single thing they can prove: any score above 5 means the column must be out of ten, and the whole column is read that way. Below that the two are genuinely indistinguishable, since a Letterboxd file where nothing scored above 2.5 looks exactly like an IMDb file where nothing scored above 5, so the rating is not imported at all rather than halved or doubled, and review says so on the row.
 - **A watch date has to come from a column that says so.** "Watched Date", "Date Watched", and "Date Rated" mark a row as watched and set its watch date. A column headed just "Date" never does: Letterboxd's watchlist and watched exports carry identical headers, and reading the first as the second would turn a list of films you have not seen into a watch history you cannot tell apart from a real one afterwards. A bare "Date" is used as a release hint, or as the viewing date for rows the file has already said are watched.
 - **The review screen states what was assumed.** Which column was taken as a viewing date, whether a rating scale could be determined, whether status was inferred rather than read: all of it appears above the rows, before anything is written, so a wrong guess is something you correct rather than discover later.
@@ -503,12 +523,12 @@ The legacy workbook importer bypasses the review step entirely (it is meant for 
 | `npm run start` | Run the production build locally |
 | `npm run lint` | Run ESLint |
 | `npm test` | Run the test suite on Node's built in runner (Node 22 or newer) |
-| `npm run test:e2e` | Run the Playwright end to end suite against a production build. See [End to end tests](#end-to-end-tests) |
+| `npm run test:e2e` | Run the Playwright end to end suite against a production build. See [Tests and CI](#tests-and-ci) |
 | `npm run test:e2e:install` | Download the Chromium build Playwright uses, once per machine |
 | `npm run db:deploy` | Apply migrations to the database |
 | `npm run db:dump -- --target dev\|prod` | Create a confirmed, fail-closed full database snapshot under `backups/` before a migration |
 | `npm run db:deploy:prod` | Apply pending migrations to the production database named by `PROD_DATABASE_URL`, over its direct endpoint, after showing the Neon endpoint, database and pending migrations and asking for typed confirmation |
-| `npm run db:check` | Run the read-only data-hygiene checks against `DATABASE_URL` before adding database constraints |
+| `npm run db:check` | Run the read-only data-hygiene checks against `DATABASE_URL` before adding database constraints. The episode counter check counts only episodes TMDB still lists, as the app does |
 | `npm run db:backfill:discovered-at -- --target dev\|prod` | Repair legacy advance-published episode dates after showing the database target and requiring `backfill` confirmation. `dev` uses the migration URL, `prod` uses `PROD_DATABASE_URL` |
 | `npm run db:migrate` | Create and apply a new migration in development |
 | `npm run db:generate` | Regenerate the Prisma client |
@@ -518,11 +538,13 @@ The legacy workbook importer bypasses the review step entirely (it is meant for 
 | `npm run db:seed` | Prisma's seed hook, wired to the same legacy workbook import as `npm run import` |
 | `npm run import` | Import the legacy Excel workbook from `data/watched.xlsx` |
 
-`npm run start` serves the production build over plain `http://localhost`, which fails `env.ts`'s production check (HTTPS is required outside development). Use `npm run dev` for local work, or set HTTPS `BETTER_AUTH_URL`/`NEXT_PUBLIC_SITE_URL` values if you need to smoke-test the production build locally.
+`npm run start` counts as production, so over plain `http://localhost` it fails `env.ts`'s production checks: HTTPS origins, an `ENCRYPTION_KEY`, and a TMDB token shaped like the Read Access Token. Use `npm run dev` for local work, or meet those checks if you need to smoke-test the production build locally.
 
-## End to end tests
+## Tests and CI
 
-`e2e/` holds a Playwright suite that drives a production build in Chromium: invite-code sign-up, sign-out and sign-in, adding titles from search, Mark watched and its Undo, and Settings. CI runs it in the `e2e` job. TMDB is replaced by `e2e/tmdb-stub.mjs`, which the server reaches through the test-only `TMDB_API_BASE_URL`, and a test fails if the browser requests anything outside the app. A run needs no network access and no secrets, though the build before it fetches the Geist fonts from Google Fonts.
+**Unit tests.** `npm test` runs `tests/` on Node's built in test runner through `tsx` (`node:test` and `node:assert`). Most cover pure logic: matching, export scope, filenames, the prompt, crypto, backup, staged import, stats, suppressions, and rate limiting. Many others read component and route source to pin behavior a unit test cannot reach, such as focus handling, motion, and UI copy, and a few run real SQL against an in-process Postgres (PGlite). None of them needs a database, network access, or secrets.
+
+**End to end tests.** `e2e/` holds a Playwright suite that drives a production build in Chromium: invite-code sign-up, sign-out and sign-in, adding titles from search, Mark watched and its Undo, and Settings. CI runs it in the `e2e` job. TMDB is replaced by `e2e/tmdb-stub.mjs`, which the server reaches through the test-only `TMDB_API_BASE_URL`, and a test fails if the browser requests anything outside the app. A run needs no network access and no secrets, though the build before it fetches the Geist fonts from Google Fonts.
 
 The suite creates accounts, so it needs a Postgres you can throw away, and it refuses any database not on localhost. To run it:
 
@@ -539,19 +561,31 @@ npm run test:e2e
 - Each run makes two sign-up requests, and Better Auth allows five a minute per address. After two runs back to back, wait a minute or recreate the database.
 - A failed test keeps a trace: `npx playwright show-trace test-results/<test>/trace.zip`.
 
+**CI.** `.github/workflows/ci.yml` runs on every push and pull request:
+
+| Job | What it checks |
+| --- | --- |
+| `build` | On Node 22 and 24: type check, ESLint, unit tests, and a production build with placeholder values |
+| `schema-drift` | `prisma format --check`, then applies every migration to an empty Postgres 17 and fails if the result differs from `schema.prisma`. It also checks that the tag index and CHECK constraints, which only migration SQL defines and the diff cannot see, still exist |
+| `e2e` | Applies the migrations to a throwaway Postgres 17, builds, and runs the Playwright suite. A test that only passes on its retry still fails the job, and a failed run uploads its report and traces |
+
+`.github/workflows/preview-migrations.yml` runs only on pull requests that change `prisma/migrations`, and only once the repository has the Neon settings described under [Deploying to Vercel](#deploying-to-vercel). It applies the PR's migrations to a fresh copy of production.
+
 ## Deploying to Vercel
 
 The app is a standard Next.js project and runs well on Vercel.
 
 1. Push this repository to GitHub.
 2. Import the project into Vercel.
-3. Add every variable from the [Environment variables](#environment-variables) table in the Vercel project settings. Set `BETTER_AUTH_URL` and `NEXT_PUBLIC_SITE_URL` to your real deployed URL.
-4. Deploy. The build runs `prisma generate`, then `prisma migrate deploy` for Production deployments only, then builds Next.
+3. Add the variables from the [Environment variables](#environment-variables) table in the Vercel project settings, leaving out the local, test, and shell only ones (`PROD_DATABASE_URL`, `TMDB_API_BASE_URL`, `E2E_DATABASE_URL`, `ALLOW_DB_PUSH`, `OWNER_EMAIL`, `IMPORT_FILE`). Set `BETTER_AUTH_URL` and `NEXT_PUBLIC_SITE_URL` to your real deployed URL.
+4. Under **Settings > Functions**, set the function region to the one nearest your Neon database. `vercel.json` does not pin one. The live app uses London (`lhr1`) for a database in `eu-west-2`, which keeps each database round trip short.
+5. Deploy. The build runs `prisma generate`, then `prisma migrate deploy` for Production deployments only, then builds Next.
 
 A short checklist for a clean first deploy:
 
 - [ ] Use fresh secrets in production. Rotate anything that has been on a local machine: the Neon password, the TMDB token, the Anthropic key, `BETTER_AUTH_SECRET`, and `ENCRYPTION_KEY`.
 - [ ] Both `BETTER_AUTH_URL` and `NEXT_PUBLIC_SITE_URL` point at the production URL.
+- [ ] `TMDB_ACCESS_TOKEN` is TMDB's API Read Access Token, starting with `eyJ`, not the v3 API key. A Production build fails on anything else.
 - [ ] `DATABASE_URL` is the pooled string and `DIRECT_URL` is the direct one, for the same Neon branch and database. If their endpoints or database names differ, the build's `prisma migrate deploy` refuses to run.
 - [ ] Set a fresh `SIGNUP_INVITE_CODE`, create your account on the live site, then rotate or remove the code when everyone you invited has joined.
 - [ ] Set `CRON_SECRET` if you want the nightly metadata sync. `vercel.json` registers the schedule; without the variable the endpoint refuses to run. A run where every account fails returns a non-200 status, so a broken night shows up red in Vercel's cron dashboard instead of passing silently.
@@ -565,6 +599,7 @@ Rehearse on current data first. A long-lived dev branch can pass a migration tha
 **Locks and failed migrations.**
 
 - `CREATE INDEX` and `DROP INDEX` lock their table and wait behind open transactions, stalling queries on it meanwhile, so deploy at a quiet time: away from the 07:00 UTC sync and any backup export or restore.
+- One migration sets `idle_in_transaction_session_timeout` to 60 seconds for the role that runs migrations, in this database only, so a transaction abandoned by a frozen function cannot hold its locks for long. It applies to sessions opened after it, and if it cannot be set the migration logs a notice instead of failing. If the app connects as a different role, set it for that role by hand.
 - Prisma 7.10 runs each statement of a migration on its own, in autocommit, so a migration isn't atomic. One that fails midway keeps its earlier statements, and every later deploy stops until you resolve it.
 - To recover, inspect what it left. Then either undo that and run `npx prisma migrate resolve --rolled-back <migration_name>`, so the next deploy retries it, or finish it by hand and run `npx prisma migrate resolve --applied <migration_name>`. Against production, set its strings in the shell as for the rehearsal: `DATABASE_URL='<production pooled>' DIRECT_URL='<production direct>' npx prisma migrate resolve --rolled-back <migration_name>`.
 
@@ -572,16 +607,26 @@ Rehearse on current data first. A long-lived dev branch can pass a migration tha
 
 ```text
 celluloid/
+├── .github/workflows/
+│   ├── ci.yml                 build, schema drift, and end to end jobs
+│   └── preview-migrations.yml per PR Neon branch that tries new migrations on a copy of production
 ├── prisma/
 │   ├── schema.prisma          data model
-│   └── migrations/            Neon migration history
+│   ├── migrations/            Neon migration history
+│   └── seed.ts                `db:seed`, the legacy workbook import
 ├── public/
 │   ├── logo.png
-│   └── icon-192.png
+│   ├── icon-192.png
+│   └── tmdb-logo.svg          TMDB attribution logo
 ├── scripts/
 │   ├── import-excel.ts        importer for the legacy workbook
-│   ├── ensure-indexes.mjs     re-applies indexes that `db:push` would drop
-│   └── db-check.mjs, db-dump.mjs   ad hoc, read only maintenance scripts (run manually before a migration)
+│   ├── db-urls.mjs            picks the migration URL and runs the same-branch guard
+│   ├── load-env.mjs           loads .env.local, then .env, for Prisma and the scripts
+│   ├── deploy-prod-migrations.mjs   `db:deploy:prod`
+│   ├── db-dump.mjs, db-check.mjs, backfill-discovered-at.mjs   operator scripts, run by hand
+│   ├── ensure-indexes.mjs     re-applies the tag index and CHECK constraints `db:push` would drop
+│   ├── check-migration-objects.mjs   CI check that those objects exist after migrating
+│   └── db-push-guard.mjs      stops `db:push` unless ALLOW_DB_PUSH=1
 ├── src/
 │   ├── app/
 │   │   ├── (app)/             signed in pages: library, add, title, recommend, upcoming, export, stats, settings
@@ -590,11 +635,11 @@ celluloid/
 │   │   ├── s/[slug]/          public read only shared lists
 │   │   ├── layout.tsx, globals.css, manifest.ts, robots.ts
 │   │   └── error.tsx, not-found.tsx, global-error.tsx
-│   ├── components/            library, cards, charts, dialogs, import review, command palette, rating stars, nav
+│   ├── components/            library, cards, charts, dialogs, import review, command palette, rating stars, nav, TMDB images and attribution
 │   ├── generated/prisma/      generated Prisma client (not committed)
-│   ├── lib/                   auth, prisma, tmdb, recommend, suppressions, export, import (legacy + staged review), backup, metadata sync, share, region and settings actions, data, actions, crypto, rate limiting
+│   ├── lib/                   env validation, auth and auth events, prisma, tmdb, recommend, suppressions, export, import (legacy + staged review), backup, metadata sync, share, region and settings actions, data, actions, crypto, rate limiting
 │   └── proxy.ts               Next 16 request proxy (this version uses proxy, not middleware; also sets the nonce-based CSP)
-├── tests/                     pure logic tests: matching, export scope, filenames, prompt, crypto, backup, staged import, stats, suppressions, rate limiting
+├── tests/                     unit tests (node:test through tsx): logic, source checks, and PGlite-backed SQL
 ├── e2e/                       Playwright specs and the TMDB stub they run against (playwright.config.ts at the root)
 ├── next.config.ts             security headers and the TMDB image allowlist
 ├── vercel.json                the daily metadata sync schedule
@@ -609,15 +654,19 @@ celluloid/
 - The star rating is fully operable from the keyboard: arrow keys nudge by half or whole steps, Home and End jump to the ends, and 0 clears.
 - The status select can be browsed with the arrow keys without saving anything; Enter, or leaving the field, saves the choice, and picking with a pointer saves at once. The bulk status control in the library has its own Apply button.
 - The stats activity heatmap is one tab stop, not a year of them. Arrow keys move between days, up and down within a week and left and right across weeks, Home and End jump to the ends of the window, and Enter opens the selected day.
-- Every interactive control has a visible focus ring, icon only buttons carry labels, and toggles report their pressed state to screen readers.
-- The card hover lift and other motion respect the system "reduce motion" setting.
+- Every interactive control has a visible focus ring, including in forced colors mode, icon only buttons carry labels, and toggles report their pressed state to screen readers.
+- Closing a dialog returns focus to the control that opened it, and an action that removes its own button moves focus somewhere sensible instead of dropping it on the page.
+- Undo toasts stay up for 10 seconds with a close button, and keep focus when their Undo button goes.
+- Nothing is server rendered invisible waiting for an animation, so a slow or failed script does not leave content hidden. Every form submits as POST, so a field typed before the page hydrates never lands in the URL.
+- Layouts reflow down to a 320px wide screen, and truncated names keep their full text within reach.
+- With the system "reduce motion" setting on, movement and scaling snap while fades and color changes keep their timing, loops such as the loading shimmer stop, and the spinner pulses instead of turning.
 
 ## Notes and limitations
 
 - Celluloid is a personal tool, not a multi tenant service. It supports a small circle of accounts through the shared invite code; remove the code when you are not inviting anyone.
-- An imported backlog has no ratings or watch dates at first, so the recommendation quality and the activity stats both improve as you rate titles and mark things watched. The "unrated" filter is the quick way to work through that.
+- An imported backlog has no ratings or watch dates at first unless your sheet carried them, so the recommendation quality and the activity stats both improve as you rate titles and mark things watched. The "unrated" filter is the quick way to work through that.
 - TMDB matching is automatic and usually right, but a transliterated or regional title can occasionally match the wrong entry. The "needs match" filter and the per title "change match" control are there to fix those by hand.
-- The in memory rate limiter bounds bursts per server instance. For a single user deployment that is plenty; a busy multi user instance would want a shared store.
+- The rate limiter on the AI, search, import, and export routes is in memory, so it bounds bursts per server instance. For a single user deployment that is plenty; a busy multi user instance would want a shared store. The sign-in and other credential limits are already kept in Postgres.
 - Starting a new spreadsheet upload while an earlier one was left mid-review (never committed or cancelled) leaves that earlier job behind. Only the most recent job awaiting review or commit is offered for resume, and there is no scheduled cleanup for the older ones. Jobs killed during the parse are handled: a job still parsing after five minutes is retired as failed and never offered for resume, since a parse only lives for the length of its own upload request.
 - The nightly metadata sync refreshes up to fifty shows per account per run and stops after about 45 seconds, to stay inside the route's 60 second `maxDuration`. That is the most a non-Fluid Hobby project can configure (its default without the export is 10 seconds); non-Fluid Pro allows up to 300, and Fluid compute raises the ceiling to 300 on Hobby and up to 800 on Pro. A library with more shows than that catches up over several nights rather than in one.
 - The sync caches which services carry each show, and Settings has a picker for the services you subscribe to. The library's "On my services" filter reads both to narrow the grid to what you can actually watch; the title page still asks TMDB directly for what it shows there. The sync fills the cache because the data rides along on a request it already makes.
