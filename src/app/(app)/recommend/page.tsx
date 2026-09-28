@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import { requireUser } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { getAccountInfo, getLibraryFacets, getTags } from "@/lib/data";
-import { DEFAULT_REC_MODEL } from "@/lib/models";
+import { resolveRecModel } from "@/lib/models";
 import {
   isRememberFiltersEnabled,
   parseRecommendRememberedState,
@@ -39,7 +39,7 @@ export default async function RecommendPage() {
       <RecommendClient
         hasKey={info.hasApiKey || info.hasServerKey}
         keySource={info.hasApiKey ? "personal" : info.hasServerKey ? "shared" : "none"}
-        model={info.recommendModel ?? DEFAULT_REC_MODEL}
+        model={resolveRecModel(info.recommendModel)}
         tags={tags.map((t) => t.name)}
         languages={facets.languages}
         genres={facets.genres}

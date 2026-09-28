@@ -18,11 +18,11 @@ import {
 } from "@/lib/anthropic";
 import { createRecExtractor } from "@/lib/rec-stream";
 import {
-  DEFAULT_REC_MODEL,
   eraById,
   isRecModel,
   MODEL_CACHE_MIN_TOKENS,
   MODEL_CAPS,
+  resolveRecModel,
   type RecEraId,
 } from "@/lib/models";
 import { languageName } from "@/lib/format";
@@ -522,7 +522,7 @@ export async function enrichRec(
 // plus adaptive thinking can't be rejected or silently truncated. A model with
 // no entry falls back to the smallest ceiling.
 const MODEL_OUTPUT_CEILING: Record<string, number> = {
-  "claude-opus-5": 128000,
+  "claude-opus-5-5": 128000,
   "claude-sonnet-5": 128000,
   "claude-haiku-4-5": 64000,
 };
@@ -697,11 +697,9 @@ export async function runRecommendationStream(
     });
     return;
   }
-  // Precedence: explicit per-run model > the user's saved default > server default.
-  let model = explicitModel ?? DEFAULT_REC_MODEL;
-  if (!explicitModel && isRecModel(userPref?.recommendModel)) {
-    model = userPref.recommendModel;
-  }
+  // Precedence: explicit per-run model > the user's saved default > server
+  // default. A saved default naming a retired model runs on its successor.
+  const model = explicitModel ?? resolveRecModel(userPref?.recommendModel);
   // Fail safe if a model is ever added to REC_MODELS without a caps entry.
   const caps = MODEL_CAPS[model] ?? { effort: false, adaptiveThinking: false };
 
@@ -857,15 +855,16 @@ export async function runRecommendationStream(
   const stream = client.messages.stream({
     model,
     max_tokens: maxTokens,
-    // Opus / Sonnet take adaptive thinking; Haiku 4.5 doesn't. Opus 5 thinks
-    // adaptively even with the field omitted, but sending it keeps the request
-    // shape identical across the models that support it.
+    // Opus / Sonnet take adaptive thinking; Haiku 4.5 doesn't. Opus 5.5 and
+    // Sonnet 5 think adaptively even with the field omitted, but sending it
+    // keeps the request shape identical across the models that support it.
     ...(caps.adaptiveThinking ? { thinking: { type: "adaptive" as const } } : {}),
     output_config: {
-      // `effort` 400s on Haiku 4.5 — only send it where supported. Opus 5 takes
-      // the full low|medium|high|xhigh|max ladder; "medium" stays deliberate
-      // here because this is an interactive stream and the higher rungs buy
-      // depth we don't need at the cost of time-to-first-card.
+      // `effort` 400s on Haiku 4.5 — only send it where supported. Opus 5.5
+      // and Sonnet 5 take the full low|medium|high|xhigh|max ladder; "medium"
+      // stays deliberate here because this is an interactive stream and the
+      // higher rungs buy depth we don't need at the cost of time-to-first-card.
+      // (Opus 5.5 defaults to medium and Sonnet 5 to high, so it is always sent.)
       ...(caps.effort ? { effort: "medium" as const } : {}),
       format: { type: "json_schema", schema: REC_SCHEMA },
     },
@@ -1021,7 +1020,7 @@ export async function runRecommendationStream(
         // budget was exhausted mid-generation (likely truncating the JSON), which
         // needs a specific message rather than the generic "no results" below.
         if (event.delta.stop_reason === "max_tokens") hitMaxTokens = true;
-        // Opus 5's safety classifier can decline with a normal HTTP 200 rather
+        // Opus 5.5's safety classifiers can decline with a normal HTTP 200 rather
         // than a thrown error — same event, stop_reason "refusal" instead of an
         // exception, so it's detected here rather than in the catch block below.
         else if (event.delta.stop_reason === "refusal") hitRefusal = true;

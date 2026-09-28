@@ -2,7 +2,7 @@
 // engine (server) and the recommend page controls (client).
 
 export const REC_MODELS = [
-  { id: "claude-opus-5", label: "Claude Opus 5", note: "Most capable · can take longer" },
+  { id: "claude-opus-5-5", label: "Claude Opus 5.5", note: "Most capable · can take longer" },
   {
     id: "claude-sonnet-5",
     label: "Claude Sonnet 5",
@@ -17,6 +17,20 @@ export const DEFAULT_REC_MODEL: RecModelId = "claude-sonnet-5";
 
 export function isRecModel(id: string | null | undefined): id is RecModelId {
   return !!id && REC_MODELS.some((m) => m.id === id);
+}
+
+/**
+ * The model a stored or submitted id runs on. A saved preference, an old
+ * backup or a tab opened before the lineup changed can still name a retired
+ * id (`claude-opus-5`, say): it maps to the current model of the same family,
+ * and anything else to the default, so neither the picker nor the recommend
+ * route ever sees an id it can't use.
+ */
+export function resolveRecModel(id: string | null | undefined): RecModelId {
+  if (isRecModel(id)) return id;
+  const family = id?.match(/^claude-(opus|sonnet|haiku)-/)?.[1];
+  if (!family) return DEFAULT_REC_MODEL;
+  return REC_MODELS.find((m) => m.id.startsWith(`claude-${family}-`))?.id ?? DEFAULT_REC_MODEL;
 }
 
 export function recModelLabel(id: string | null | undefined): string {
@@ -46,16 +60,17 @@ export function eraById(id: RecEraId) {
   return REC_ERAS.find((e) => e.id === id)!;
 }
 
-// Per-model request-surface capabilities. Opus 5 / Sonnet 5 take adaptive
+// Per-model request-surface capabilities. Opus 5.5 / Sonnet 5 take adaptive
 // thinking + the `effort` knob; Haiku 4.5 rejects `effort` (400) and has no
-// adaptive thinking, so we omit both for it. (A user whose saved default is a
-// retired entry simply falls back to the default model — isRecModel rejects
-// the stale id and the engine drops through to DEFAULT_REC_MODEL.)
+// adaptive thinking, so we omit both for it. Opus 5.5 can't turn thinking off
+// at all (`disabled` and `budget_tokens` both 400), so effort is its only
+// thinking control. (A saved default that names a retired entry is mapped by
+// resolveRecModel.)
 export const MODEL_CAPS: Record<
   RecModelId,
   { effort: boolean; adaptiveThinking: boolean }
 > = {
-  "claude-opus-5": { effort: true, adaptiveThinking: true },
+  "claude-opus-5-5": { effort: true, adaptiveThinking: true },
   "claude-sonnet-5": { effort: true, adaptiveThinking: true },
   "claude-haiku-4-5": { effort: false, adaptiveThinking: false },
 };
@@ -64,10 +79,11 @@ export const MODEL_CAPS: Record<
 // breakpoint on anything shorter is accepted and then silently ignored — no
 // error, no field in the response to notice — so the recommend engine only
 // attaches one when the prefix plausibly clears the model's bar. These are not
-// monotonic across generations (Opus 5 halved Opus 4.8's 1024), so a model
-// swap has to revisit this map rather than assume the newer number is lower.
+// monotonic across generations (Opus 5.5 and Opus 5 sit at half Opus 4.8's
+// 1024), so a model swap has to revisit this map rather than assume the newer
+// number is lower.
 export const MODEL_CACHE_MIN_TOKENS: Record<RecModelId, number> = {
-  "claude-opus-5": 512,
+  "claude-opus-5-5": 512,
   "claude-sonnet-5": 1024,
   "claude-haiku-4-5": 4096,
 };

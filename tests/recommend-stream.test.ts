@@ -15,6 +15,7 @@ let streamEvents: StreamEvent[] = [];
 let streamError: Error | null = null;
 let capturedRequest: unknown = null;
 let ownedTitles: Array<Record<string, unknown>> = [];
+let storedModel: string | null = null;
 
 function modelRec(title: string, year = 2020) {
   return {
@@ -47,7 +48,7 @@ function textEvent(recommendations: unknown[]): StreamEvent {
 }
 
 const fakePrisma = {
-  user: { findUnique: async () => ({ recommendModel: null }) },
+  user: { findUnique: async () => ({ recommendModel: storedModel }) },
   suppression: { findMany: async () => [] },
   title: { findMany: async () => ownedTitles },
 };
@@ -125,7 +126,9 @@ export async function resolve(specifier, context, nextResolve) {
                 "export async function getGenreIdsByName() { return new Set(); }"
               : (specifier === "@/generated/prisma/client" || normalized.endsWith("/src/generated/prisma/client"))
                 ? "export const MediaType = { MOVIE: 'MOVIE', TV: 'TV' };"
-                : undefined;
+                : (specifier === "@/lib/session" || normalized.endsWith("/src/lib/session"))
+                  ? "export async function getSession() { return null; }"
+                  : undefined;
   if (source !== undefined) {
     return { url: "data:text/javascript," + encodeURIComponent(source), shortCircuit: true };
   }
@@ -138,6 +141,7 @@ const {
   RECOMMEND_KEEPALIVE_MS,
   runRecommendationStream,
 } = await import("../src/lib/recommend");
+const { recommendRequestSchema } = await import("../src/app/api/recommend/route");
 
 function reset() {
   usedFallback = false;
@@ -150,6 +154,7 @@ function reset() {
   streamError = null;
   capturedRequest = null;
   ownedTitles = [];
+  storedModel = null;
 }
 
 afterEach(reset);
@@ -298,5 +303,32 @@ describe("recommendation stream orchestration", { concurrency: false }, () => {
     );
     assert.ok(statuses.every(({ event }) => event.phase === "generating"));
     assert.deepEqual(searchCalls, ["First"]);
+  });
+});
+
+describe("retired model ids", { concurrency: false }, () => {
+  function requestedModel() {
+    return (capturedRequest as { model: string }).model;
+  }
+
+  it("runs a saved Opus 5 preference on Opus 5.5", async () => {
+    storedModel = "claude-opus-5";
+    streamEvents = [messageStart()];
+    await runRecommendationStream("user-1", { count: 1 }, () => {});
+    assert.equal(requestedModel(), "claude-opus-5-5");
+  });
+
+  it("runs an unknown saved preference on the default model", async () => {
+    storedModel = "gpt-9000";
+    streamEvents = [messageStart()];
+    await runRecommendationStream("user-1", { count: 1 }, () => {});
+    assert.equal(requestedModel(), "claude-sonnet-5");
+  });
+
+  it("accepts an old id from a stale tab instead of rejecting the request", () => {
+    assert.equal(recommendRequestSchema.parse({ model: "claude-opus-5" }).model, "claude-opus-5-5");
+    assert.equal(recommendRequestSchema.parse({ model: "claude-haiku-4-5" }).model, "claude-haiku-4-5");
+    assert.equal(recommendRequestSchema.parse({ model: "gpt-9000" }).model, "claude-sonnet-5");
+    assert.equal(recommendRequestSchema.parse({}).model, undefined);
   });
 });
