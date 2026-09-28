@@ -28,10 +28,13 @@ function modelRec(title: string, year = 2020) {
   };
 }
 
-function messageStart(): StreamEvent {
+// Without a model, the stream mock names the requested one, as the API does
+// when no fallback served the run.
+function messageStart(model?: string): StreamEvent {
   return {
     type: "message_start",
     message: {
+      ...(model ? { model } : {}),
       usage: { cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
     },
   };
@@ -97,7 +100,10 @@ Object.assign(globalThis, {
       async *[Symbol.asyncIterator]() {
         for (const event of streamEvents) {
           if (aborted) break;
-          yield event;
+          const message = event.message as Record<string, unknown> | undefined;
+          yield event.type === "message_start" && !message?.model
+            ? { ...event, message: { ...message, model: (request as { model: string }).model } }
+            : event;
         }
         if (streamError) throw streamError;
       },
@@ -389,6 +395,48 @@ describe("refusals and thinking phases", { concurrency: false }, () => {
       ["Before Fallback", "Across Fallback", "After Fallback"],
     );
     assert.deepEqual(emitted.at(-1), { type: "done", total: 3 });
+  });
+
+  it("logs the model that served the run, not the one requested", async (t) => {
+    const warn = t.mock.method(console, "warn", () => {});
+    const debug = t.mock.method(console, "debug", () => {});
+    const logged = (mock: typeof warn) => mock.mock.calls.map((call) => String(call.arguments[0]));
+
+    // Sticky routing: the whole run comes from the fallback model, with no
+    // fallback block to announce it.
+    streamEvents = [messageStart("claude-opus-5"), textEvent([modelRec("Sticky Film")])];
+    await runRecommendationStream("user-1", { count: 1, model: "claude-opus-5-5" }, () => {});
+    assert.deepEqual(logged(warn), ["Recommendation served by claude-opus-5 instead of claude-opus-5-5."]);
+    assert.deepEqual(logged(debug), ["Recommend prompt cache (claude-opus-5): written=0, read=0"]);
+
+    // A mid-stream switch whose fallback model also declines.
+    warn.mock.resetCalls();
+    debug.mock.resetCalls();
+    streamEvents = [
+      messageStart(),
+      {
+        type: "content_block_start",
+        content_block: {
+          type: "fallback",
+          from: { model: "claude-opus-5-5" },
+          to: { model: "claude-opus-4-8" },
+          trigger: { type: "refusal" },
+        },
+      },
+      refusal,
+    ];
+    await runRecommendationStream("user-1", { count: 1, model: "claude-opus-5-5" }, () => {});
+    assert.deepEqual(logged(warn), [
+      "Recommendation fell back from claude-opus-5-5 to claude-opus-4-8.",
+      "Recommendation declined by claude-opus-4-8 (category: cyber).",
+    ]);
+    assert.deepEqual(logged(debug), ["Recommend prompt cache (claude-opus-5-5): written=0, read=0"]);
+
+    // No fallback at all: nothing extra in the logs.
+    warn.mock.resetCalls();
+    streamEvents = [messageStart(), textEvent([modelRec("Plain Film")])];
+    await runRecommendationStream("user-1", { count: 1, model: "claude-opus-5-5" }, () => {});
+    assert.deepEqual(logged(warn), []);
   });
 
   it("enters the thinking phase on the block start, with no thinking text streamed", async () => {

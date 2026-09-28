@@ -957,6 +957,12 @@ export async function runRecommendationStream(
   // land — which is the normal path, and one that leaves no final message.
   let cacheCreated: number | null = null;
   let cacheRead: number | null = null;
+  // The model that served the opening usage, and the one producing output
+  // now. With the server-side fallback neither has to be `model`: a decline
+  // before any output, or sticky routing after an earlier one, opens on the
+  // fallback model, and a mid-stream decline switches at a fallback block.
+  let cacheModel: string = model;
+  let servedModel: string = model;
   // A bounded queue preserves burst candidates until rejected matches release
   // capacity. Five active lookups remain the concurrency ceiling.
   const pending: Recommendation[] = [];
@@ -1042,6 +1048,11 @@ export async function runRecommendationStream(
         sawMessageStart = true;
         cacheCreated = event.message.usage.cache_creation_input_tokens;
         cacheRead = event.message.usage.cache_read_input_tokens;
+        cacheModel = servedModel = event.message.model;
+        // Sticky-routed runs carry no fallback block, so this is their only trail.
+        if (servedModel !== model) {
+          console.warn(`Recommendation served by ${servedModel} instead of ${model}.`);
+        }
       } else if (event.type === "content_block_start") {
         if (event.content_block.type === "thinking" && statusSent === null) {
           statusSent = "thinking";
@@ -1050,6 +1061,7 @@ export async function runRecommendationStream(
         } else if (event.content_block.type === "fallback") {
           // The requested model declined and another took over on this
           // stream; otherwise invisible, so leave a trail like the cache one.
+          servedModel = event.content_block.to.model;
           console.warn(
             `Recommendation fell back from ${event.content_block.from.model} to ${event.content_block.to.model}.`,
           );
@@ -1082,7 +1094,7 @@ export async function runRecommendationStream(
         else if (event.delta.stop_reason === "refusal") {
           hitRefusal = true;
           console.warn(
-            `Recommendation declined by ${model} (category: ${event.delta.stop_details?.category ?? "none"}).`,
+            `Recommendation declined by ${servedModel} (category: ${event.delta.stop_details?.category ?? "none"}).`,
           );
         }
       }
@@ -1110,7 +1122,7 @@ export async function runRecommendationStream(
   // under the model's minimum is ignored without any error — so leave a trail.
   if (cacheCreated !== null || cacheRead !== null) {
     console.debug(
-      `Recommend prompt cache (${model}): written=${cacheCreated ?? 0}, read=${cacheRead ?? 0}`,
+      `Recommend prompt cache (${cacheModel}): written=${cacheCreated ?? 0}, read=${cacheRead ?? 0}`,
     );
   }
   for (const e of terminalRecEvents(accepted, count, {
