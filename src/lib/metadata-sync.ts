@@ -9,6 +9,7 @@ import {
 import {
   appendedSeasons,
   MAX_APPENDED_SEASONS,
+  TMDB_API_BASE,
   TmdbError,
   tmdbErrorCode,
   type TmdbEpisode,
@@ -59,10 +60,8 @@ export { deriveNextEpisodeAirDate, discoveredAtForNewEpisode } from "@/lib/remat
 // the sync reads yesterday's answer to "did anything air?" — the one question
 // it exists to ask. lib/tmdb's fetcher is module-private and its caching is
 // baked into each endpoint wrapper, so there is no way to opt out from outside
-// it. Response TYPES are still imported from there, so the shapes stay in one
-// place.
-
-const TMDB_BASE = "https://api.themoviedb.org/3";
+// it. Response TYPES and the API root are still imported from there, so the
+// shapes and the base URL stay in one place.
 
 /** Bound one attempt so a stalled TMDB response can't eat the run's budget. */
 const TMDB_TIMEOUT_MS = 8000;
@@ -132,7 +131,7 @@ async function tmdbGet<T>(
   deadline: number,
 ): Promise<T> {
   const token = env.TMDB_ACCESS_TOKEN;
-  const url = new URL(TMDB_BASE + path);
+  const url = new URL(TMDB_API_BASE + path);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
 
   // Two attempts, not the four lib/tmdb allows: a title that loses a transient

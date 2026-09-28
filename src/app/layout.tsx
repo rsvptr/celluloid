@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { HydrationMarker } from "@/components/hydration-marker";
 import { env } from "@/lib/env";
 import "./globals.css";
 
@@ -62,7 +63,10 @@ export default function RootLayout({
           at the root shipped the Motion and sonner chunks to the public share
           page and the not-found route, which render neither an animation nor
           a toast (AUD-NEXT-02). */}
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        {children}
+        <HydrationMarker />
+      </body>
     </html>
   );
 }

@@ -130,32 +130,55 @@ export function anthropicClient(apiKey: string): Anthropic {
 }
 
 /**
+ * The API's own sentence from an error body. The SDK folds the whole JSON body
+ * (`{"type":"error","error":{...},"request_id":...}`) into `e.message`, which
+ * is no way to show a person an error, so read the structured field instead.
+ */
+function apiErrorDetail(e: InstanceType<typeof Anthropic.APIError>): string | null {
+  const message = (e.error as { error?: { message?: unknown } } | undefined)?.error?.message;
+  return typeof message === "string" && message.trim() ? message.trim().replace(/\.$/, "") : null;
+}
+
+const RATE_LIMITED = "Anthropic is rate-limiting your key right now. Wait a moment and try again.";
+const OVERLOADED = "Claude is briefly overloaded. Try again in a few seconds, or switch models.";
+const SERVER_ERROR = "The Anthropic API hit a server error. Please try again.";
+
+/**
  * Map an Anthropic SDK error to a message a person can act on, using the SDK's
- * typed error classes (never string-matching). Falls back to the raw message.
+ * typed error classes, most specific first (never string-matching).
  */
 export function friendlyAnthropicError(e: unknown): string {
+  if (e instanceof Anthropic.BadRequestError) {
+    // The request itself, not the key or the service: a model that won't take
+    // this run's shape or size, or a rejected beta header. The API's sentence
+    // says which, so the advice after it stays neutral.
+    const detail = apiErrorDetail(e);
+    return `Claude couldn't accept this request${detail ? ` (${detail})` : ""}. Try another model.`;
+  }
   if (e instanceof Anthropic.AuthenticationError) {
     return "Your Anthropic API key was rejected. Check it in Settings (it may have been revoked).";
   }
   if (e instanceof Anthropic.PermissionDeniedError) {
     return "Your Anthropic API key doesn't have access to this model. Try another model, or check your plan.";
   }
-  if (e instanceof Anthropic.RateLimitError) {
-    return "Anthropic is rate-limiting your key right now. Wait a moment and try again.";
-  }
+  if (e instanceof Anthropic.RateLimitError) return RATE_LIMITED;
   if (e instanceof Anthropic.NotFoundError) {
     return "That model isn't available to your API key. Pick a different model and try again.";
   }
   if (e instanceof Anthropic.InternalServerError) {
-    return e.type === "overloaded_error"
-      ? "Claude is briefly overloaded. Try again in a few seconds, or switch models."
-      : "The Anthropic API hit a server error. Please try again.";
+    return e.type === "overloaded_error" ? OVERLOADED : SERVER_ERROR;
   }
   if (e instanceof Anthropic.APIConnectionError) {
     return "Couldn't reach the Anthropic API. Check your connection and try again.";
   }
   if (e instanceof Anthropic.APIError) {
-    return `AI request failed: ${e.message}`;
+    // An error event partway through a stream arrives after the 200, so the
+    // SDK throws it as a base APIError with no status, only the body's `type`.
+    if (e.type === "overloaded_error") return OVERLOADED;
+    if (e.type === "rate_limit_error") return RATE_LIMITED;
+    if (e.type === "api_error") return SERVER_ERROR;
+    const detail = apiErrorDetail(e);
+    return detail ? `AI request failed: ${detail}.` : "AI request failed. Try again in a moment.";
   }
   // Unknown, non-SDK error: never surface its raw message (it can carry stack
   // internals or upstream response text). The caller logs the raw error
