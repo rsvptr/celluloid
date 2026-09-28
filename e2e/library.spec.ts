@@ -3,7 +3,12 @@ import { expect, gotoHydrated, test } from "./fixtures";
 
 // Titles served by e2e/tmdb-stub.mjs.
 const MOVIE = { query: "Lantern", name: "Lantern Road (Movie, 2021)" };
-const SHOW = { query: "Northern", name: "Northern Static (TV, 2020)" };
+// A retry of the undo spec takes the second show: a failed first attempt may
+// have left the first one marked watched.
+const SHOWS = [
+  { query: "Northern", name: "Northern Static (TV, 2020)", title: "Northern Static" },
+  { query: "Southern", name: "Southern Static (TV, 2020)", title: "Southern Static" },
+];
 
 /** Searches TMDB from the Add page and adds one result; returns its library link. */
 async function addFromSearch(page: Page, title: { query: string; name: string }) {
@@ -24,9 +29,10 @@ test("add a movie from search and find it in the library", async ({ page }) => {
 
 // Only a TV title's Mark watched offers Undo: undoing it unticks the episodes
 // the mark ticked. A movie has none.
-test("mark a show watched, then undo it from the toast", async ({ page }) => {
-  await (await addFromSearch(page, SHOW)).click();
-  await expect(page.getByRole("heading", { name: "Northern Static" })).toBeVisible();
+test("mark a show watched, then undo it from the toast", async ({ page }, testInfo) => {
+  const show = SHOWS[testInfo.retry % SHOWS.length];
+  await (await addFromSearch(page, show)).click();
+  await expect(page.getByRole("heading", { name: show.title })).toBeVisible();
 
   const status = page.getByRole("combobox", { name: "Status" });
   const watchedDate = page.getByRole("group", { name: "Date watched" }).getByLabel("Date watched");

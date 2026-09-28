@@ -36,10 +36,12 @@ const episode = (id, number, airDate) => ({
   vote_average: 7,
 });
 
-const show = {
-  id: 920001,
-  name: "Northern Static",
-  original_name: "Northern Static",
+// Two shows: the undo spec takes the second on a retry, since its first
+// attempt may have left the first one marked watched.
+const tvShow = (id, name) => ({
+  id,
+  name,
+  original_name: name,
   overview: "A radio station at the edge of the map.",
   first_air_date: "2020-01-10",
   poster_path: null,
@@ -56,7 +58,7 @@ const show = {
   created_by: [],
   seasons: [
     {
-      id: 920101,
+      id: id + 100,
       season_number: 1,
       name: "Season 1",
       overview: "",
@@ -65,7 +67,8 @@ const show = {
       episode_count: 2,
     },
   ],
-};
+});
+const shows = [tvShow(920001, "Northern Static"), tvShow(930001, "Southern Static")];
 
 const provider = {
   provider_id: 8,
@@ -79,7 +82,7 @@ const routes = {
     const q = (query.get("query") ?? "").toLowerCase();
     const results = [
       { ...movie, media_type: "movie" },
-      { ...show, media_type: "tv" },
+      ...shows.map((show) => ({ ...show, media_type: "tv" })),
     ].filter((item) => (item.title ?? item.name).toLowerCase().includes(q));
     return { ...empty, results, total_pages: 1, total_results: results.length };
   },
@@ -88,24 +91,34 @@ const routes = {
   // One response for every append_to_response the flows send: the add flow's
   // season/1 and the title page's bundle (with nothing to show), whose empty
   // recommendations make the page ask for /similar.
-  [`/tv/${show.id}`]: () => ({
-    ...show,
-    videos: { results: [] },
-    "watch/providers": { results: {} },
-    recommendations: empty,
-    external_ids: { imdb_id: null },
-    aggregate_credits: { cast: [], crew: [] },
-    content_ratings: { results: [] },
-    "season/1": {
-      season_number: 1,
-      name: "Season 1",
-      overview: "",
-      air_date: "2020-01-10",
-      poster_path: null,
-      episodes: [episode(920111, 1, "2020-01-10"), episode(920112, 2, "2020-01-17")],
-    },
-  }),
-  [`/tv/${show.id}/similar`]: () => empty,
+  ...Object.fromEntries(
+    shows.flatMap((show) => [
+      [
+        `/tv/${show.id}`,
+        () => ({
+          ...show,
+          videos: { results: [] },
+          "watch/providers": { results: {} },
+          recommendations: empty,
+          external_ids: { imdb_id: null },
+          aggregate_credits: { cast: [], crew: [] },
+          content_ratings: { results: [] },
+          "season/1": {
+            season_number: 1,
+            name: "Season 1",
+            overview: "",
+            air_date: "2020-01-10",
+            poster_path: null,
+            episodes: [
+              episode(show.id + 110, 1, "2020-01-10"),
+              episode(show.id + 111, 2, "2020-01-17"),
+            ],
+          },
+        }),
+      ],
+      [`/tv/${show.id}/similar`, () => empty],
+    ]),
+  ),
   "/watch/providers/regions": () => ({
     results: [
       { iso_3166_1: "DE", english_name: "Germany" },
