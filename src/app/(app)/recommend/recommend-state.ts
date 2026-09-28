@@ -8,7 +8,8 @@ import { REC_ERAS, type RecEraId } from "@/lib/models";
  * - streaming: a request is open. `error` can already be set: the server's
  *   error event arrives before the stream closes, and the form shows it while
  *   the run winds down.
- * - done: the run ended without an error, including one the owner stopped.
+ * - done: the run ended without an error, including one the owner stopped
+ *   (`stopped`).
  * - error: the run ended with an error. Picks that arrived before it are kept.
  *
  * Every state carries the run's results, because dismiss and Undo change the
@@ -17,6 +18,12 @@ import { REC_ERAS, type RecEraId } from "@/lib/models";
 export type StreamPhase = "starting" | "thinking" | "generating";
 
 type RunResults = {
+  /**
+   * Counts runs on this page view; start bumps it. An Undo, or a failed hide,
+   * names the run its card came from, and a card from an earlier run is not
+   * put back into a later run's list.
+   */
+  runId: number;
   /** The cards on screen: streamed picks minus dismissed ones, ranked once the run ends. */
   recs: Recommendation[];
   /** Every pick this run streamed, in arrival order, dismissed ones included. */
@@ -35,7 +42,7 @@ export type RecommendState = RunResults &
   (
     | { status: "idle"; error: null }
     | { status: "streaming"; phase: StreamPhase; error: string | null }
-    | { status: "done"; error: null }
+    | { status: "done"; error: null; stopped: boolean }
     | { status: "error"; error: string }
   );
 
@@ -45,14 +52,15 @@ export type RecommendAction =
   | { type: "rec"; rec: Recommendation }
   | { type: "warning"; message: string }
   | { type: "fail"; error: string }
-  | { type: "finish"; language: string | undefined; era: RecEraId | "" }
+  | { type: "finish"; language: string | undefined; era: RecEraId | ""; stopped: boolean }
   | { type: "dismiss"; identity: string }
-  | { type: "restore"; rec: Recommendation; index: number }
+  | { type: "restore"; rec: Recommendation; index: number; runId: number }
   | { type: "dismissWarning"; warning: string };
 
 export const initialRecommendState: RecommendState = {
   status: "idle",
   error: null,
+  runId: 0,
   recs: [],
   received: [],
   dismissed: new Set(),
@@ -105,8 +113,8 @@ function restoreAt(list: Recommendation[], rec: Recommendation, index: number): 
   return next;
 }
 
-function results({ recs, received, dismissed, warnings }: RecommendState): RunResults {
-  return { recs, received, dismissed, warnings };
+function results({ runId, recs, received, dismissed, warnings }: RecommendState): RunResults {
+  return { runId, recs, received, dismissed, warnings };
 }
 
 export function recommendReducer(
@@ -119,6 +127,7 @@ export function recommendReducer(
         status: "streaming",
         phase: "starting",
         error: null,
+        runId: state.runId + 1,
         recs: [],
         received: [],
         dismissed: new Set(),
@@ -155,7 +164,7 @@ export function recommendReducer(
             )
           : state.recs;
       return state.error === null
-        ? { ...results(state), recs, status: "done", error: null }
+        ? { ...results(state), recs, status: "done", error: null, stopped: action.stopped }
         : { ...results(state), recs, status: "error", error: state.error };
     }
     case "dismiss":
@@ -165,6 +174,7 @@ export function recommendReducer(
         recs: state.recs.filter((item) => recommendationIdentity(item) !== action.identity),
       };
     case "restore": {
+      if (action.runId !== state.runId) return state;
       const dismissed = new Set(state.dismissed);
       dismissed.delete(recommendationIdentity(action.rec));
       return { ...state, dismissed, recs: restoreAt(state.recs, action.rec, action.index) };

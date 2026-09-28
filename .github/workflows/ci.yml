@@ -91,6 +91,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Exits 1 without writing when `prisma format` would change the file.
+      # Prisma 7.10 implements --check but leaves it out of `format --help`.
+      - name: Fail if schema.prisma is not formatted
+        run: npx prisma format --check
+
       - name: Apply every migration to an empty database
         run: npx prisma migrate deploy
 

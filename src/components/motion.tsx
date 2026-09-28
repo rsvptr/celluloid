@@ -17,7 +17,9 @@ export { AnimatePresence, m as motion };
 // `layout` (recommendation cards) needs domMax rather than domAnimation.
 // The async feature import keeps that larger feature bundle
 // out of the app shell's initial JS while the statically analyzable path lets
-// Next split it into its own chunk. If the chunk fails to load (flaky network,
+// Next split it into its own chunk. It imports a module that exports only
+// domMax, not the motion/react barrel, which would put the whole namespace in
+// that chunk (MO-03). If the chunk fails to load (flaky network,
 // a blocker, deploy skew), `m` components simply stay feature-less: the promise
 // never settles, so there is no unhandled rejection and no half-loaded state.
 // Nothing server-rendered starts hidden, so that costs animation, not content.
@@ -25,10 +27,10 @@ export { AnimatePresence, m as motion };
 // globals.css then shows every `data-motion-enter` element at rest, including
 // ones that mounted while the chunk was still pending.
 const loadDomMax = () =>
-  import("motion/react")
+  import("./motion-features")
     .then((module) => {
       delete document.documentElement.dataset.motionFailed;
-      return module.domMax;
+      return module.default;
     })
     .catch(() => {
       document.documentElement.dataset.motionFailed = "";

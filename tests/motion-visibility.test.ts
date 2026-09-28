@@ -69,7 +69,13 @@ describe("server-rendered content starts visible", () => {
     const start = wrapper.indexOf("const loadDomMax");
     assert.notEqual(start, -1);
     const loader = wrapper.slice(start, wrapper.indexOf("\n\n", start));
-    assert.match(loader, /import\("motion\/react"\)/);
+    // MO-03: the chunk is domMax alone, not the motion/react barrel.
+    assert.match(loader, /import\("\.\/motion-features"\)/);
+    assert.match(loader, /return module\.default;/);
+    const features = await readFile(new URL("components/motion-features.ts", SRC), "utf8");
+    assert.match(features, /^import \{ domMax \} from "motion\/react";$/m);
+    assert.match(features, /^export default domMax;$/m);
+    assert.equal(features.match(/^(?:import|export)\b/gm)?.length, 2);
     assert.match(loader, /\.catch\([\s\S]*dataset\.motionFailed = ""/);
     assert.match(loader, /\.then\([\s\S]*delete document\.documentElement\.dataset\.motionFailed[\s\S]*\.catch\(/);
   });

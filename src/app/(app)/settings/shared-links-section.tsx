@@ -180,6 +180,7 @@ function ShareRow({
           setTitlesError(res.error ?? "Couldn't load what this link publishes.");
           return;
         }
+        setTitlesError(null);
         setTitles(res.titles);
       })
       .catch(() => {
@@ -261,7 +262,12 @@ function ShareRow({
             size="sm"
             aria-expanded={manageOpen}
             aria-controls={panelId}
-            onClick={() => setManageOpen((v) => !v)}
+            onClick={() => {
+              // Opening starts a new load when the last one failed, so its
+              // error gives way to "Loading…".
+              if (!manageOpen) setTitlesError(null);
+              setManageOpen((v) => !v);
+            }}
           >
             <ChevronDown
               aria-hidden="true"

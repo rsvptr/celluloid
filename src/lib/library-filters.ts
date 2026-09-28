@@ -109,6 +109,26 @@ export function parseLibraryFilters(
   return f;
 }
 
+const LIBRARY_PARAM_KEYS = new Set([
+  "q",
+  "type",
+  "status",
+  "lang",
+  "tag",
+  "genre",
+  "rating",
+  "sort",
+  "view",
+  "unmatched",
+  "services",
+]);
+
+export function hasExplicitLibraryFilterParams(
+  raw: Record<string, string | string[] | undefined>,
+): boolean {
+  return Object.keys(raw).some((key) => LIBRARY_PARAM_KEYS.has(key));
+}
+
 /** Serialize filters to URL params, omitting defaults so plain views stay `/`. */
 export function filtersToParams(f: LibraryFilters): URLSearchParams {
   const p = new URLSearchParams();

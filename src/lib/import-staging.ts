@@ -4,6 +4,7 @@ import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { addFromTmdb, rematchTitle } from "@/lib/actions";
 import { mapLimit } from "@/lib/async";
+import { ACTIVE_EPISODE_FILTER } from "@/lib/rematch-history";
 import {
   findByImdbId,
   findTvByTvdbId,
@@ -97,10 +98,40 @@ function summaryRecord(value: Prisma.JsonValue | null): Record<string, unknown> 
     : null;
 }
 
+/**
+ * What review, reconcile and commit read of a job and its rows. It leaves out
+ * each row's `raw` JSON, a copy of the uploaded row kept only for diagnosis,
+ * which these reads loaded for every row and never used (PR-09).
+ */
+const importJobSelect = {
+  id: true,
+  filename: true,
+  status: true,
+  summary: true,
+  createdAt: true,
+  committedAt: true,
+  items: {
+    select: {
+      id: true,
+      rowNumber: true,
+      normalized: true,
+      proposedTmdbId: true,
+      proposedMediaType: true,
+      matchScore: true,
+      action: true,
+      titleId: true,
+      errorCode: true,
+      warning: true,
+      attempts: true,
+    },
+    orderBy: { rowNumber: "asc" },
+  },
+} satisfies Prisma.ImportJobSelect;
+
 async function findImportJob(userId: string, jobId: string) {
   return prisma.importJob.findFirst({
     where: { id: jobId, userId },
-    include: { items: { orderBy: { rowNumber: "asc" } } },
+    select: importJobSelect,
   });
 }
 
@@ -169,7 +200,7 @@ export async function getActiveImportJobView(
       status: { in: ["PARSING", "READY_FOR_REVIEW", "COMMITTING", "PARTIAL"] },
     },
     orderBy: { createdAt: "desc" },
-    include: { items: { orderBy: { rowNumber: "asc" } } },
+    select: importJobSelect,
   });
   return job ? serializeImportJob(job) : null;
 }
@@ -533,6 +564,14 @@ export async function updateImportItemReview(input: {
       jobId: input.jobId,
       job: { userId: input.userId, status: { in: ["READY_FOR_REVIEW", "PARTIAL"] } },
     },
+    select: {
+      id: true,
+      rowNumber: true,
+      normalized: true,
+      matchScore: true,
+      titleId: true,
+      attempts: true,
+    },
   });
   if (!item || item.titleId) return null;
 
@@ -662,11 +701,14 @@ async function applyStagedStatus(
     // `watched` when it airs, so its "New" badge never fires and the episode the
     // owner was waiting for arrives looking like something already seen. A null
     // airDate means TMDB doesn't know, which counts as aired — the same rule the
-    // episode tracker's bulk marks use.
+    // episode tracker's bulk marks use. Episodes already watched keep their
+    // date: a seed retry can find the owner's own ticks, and withdrawn rows are
+    // always watched (P7X-2).
     const now = new Date();
     await tx.episode.updateMany({
       where: {
         season: { titleId },
+        watched: false,
         OR: [{ airDate: null }, { airDate: { lte: now } }],
       },
       data: { watched: true, watchedAt: null },
@@ -675,9 +717,13 @@ async function applyStagedStatus(
     // covers the whole run: with unaired episodes left alone the total is no
     // longer the watched count, and a denormalized cache that disagrees with the
     // rows is corrected — visibly, under the owner — by the next recompute.
+    // Withdrawn episodes stay watched but are out of the progress counts, as in
+    // recomputeProgress; counting them could exceed totalEpisodes (PR-11).
     const [total, watched] = await Promise.all([
-      tx.episode.count({ where: { season: { titleId } } }),
-      tx.episode.count({ where: { season: { titleId }, watched: true } }),
+      tx.episode.count({ where: { season: { titleId }, ...ACTIVE_EPISODE_FILTER } }),
+      tx.episode.count({
+        where: { season: { titleId }, watched: true, ...ACTIVE_EPISODE_FILTER },
+      }),
     ]);
     await tx.title.update({
       where: { id: titleId },
@@ -765,9 +811,12 @@ async function mergeExistingStagedFacts(
       },
       data: { watched: true, watchedAt: null },
     });
+    // Active episodes only, as in applyStagedStatus above (PR-11).
     const [total, watched] = await Promise.all([
-      tx.episode.count({ where: { season: { titleId } } }),
-      tx.episode.count({ where: { season: { titleId }, watched: true } }),
+      tx.episode.count({ where: { season: { titleId }, ...ACTIVE_EPISODE_FILTER } }),
+      tx.episode.count({
+        where: { season: { titleId }, watched: true, ...ACTIVE_EPISODE_FILTER },
+      }),
     ]);
     await tx.title.update({
       where: { id: titleId },
@@ -806,6 +855,7 @@ async function commitOneImportItem(
 ): Promise<CommittedItemPatch> {
   const item = await prisma.importItem.findFirst({
     where: { id: itemId, job: { userId } },
+    select: { id: true, normalized: true, action: true, titleId: true, attempts: true },
   });
   if (!item || item.action === "SKIP" || item.action === "CONFLICT") {
     return null;

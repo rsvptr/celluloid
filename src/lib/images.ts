@@ -27,11 +27,33 @@ export function stillUrl(
   return path ? `${TMDB_IMAGE_BASE}${size}${path}` : null;
 }
 
-export type BackdropSize = "w300" | "w780" | "w1280" | "original";
+/**
+ * The widths TMDB renders each image type at, from GET /configuration
+ * (tmdb-docs/reference/configuration-details.md); `original` sits above them.
+ * Profiles also come as h632, a height, which no width maps onto.
+ */
+const TMDB_WIDTHS = {
+  poster: [92, 154, 185, 342, 500, 780],
+  backdrop: [300, 780, 1280],
+  logo: [45, 92, 154, 185, 300, 500],
+  profile: [45, 185],
+} as const;
 
-export function backdropUrl(
-  path: string | null | undefined,
-  size: BackdropSize = "w1280",
-): string | null {
-  return path ? `${TMDB_IMAGE_BASE}${size}${path}` : null;
+export type TmdbImageKind = keyof typeof TMDB_WIDTHS;
+export type TmdbSize<K extends TmdbImageKind> = `w${(typeof TMDB_WIDTHS)[K][number]}` | "original";
+
+/**
+ * The smallest size of `kind` that TMDB serves at least `width` pixels wide,
+ * or `original` past the largest, but no larger than `max`.
+ */
+export function tmdbSize<K extends TmdbImageKind>(
+  kind: K,
+  width: number,
+  max: TmdbSize<K> = "original",
+): TmdbSize<K> {
+  const widths: readonly number[] = TMDB_WIDTHS[kind];
+  const fit = widths.find((w) => w >= width) ?? Infinity;
+  const cap = max === "original" ? Infinity : Number(max.slice(1));
+  const size = Math.min(fit, cap);
+  return size === Infinity ? "original" : (`w${size}` as TmdbSize<K>);
 }

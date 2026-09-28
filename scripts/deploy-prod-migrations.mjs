@@ -8,15 +8,17 @@
  * about to touch before doing anything: the Neon endpoint, the database, and
  * the migration folders `prisma migrate status` reports as pending. It applies
  * whatever folders exist in this working copy, so it also warns when
- * prisma/migrations has uncommitted changes.
+ * prisma/migrations has uncommitted changes. It warns, too, when
+ * PROD_DATABASE_URL and DATABASE_URL name the same Neon endpoint.
  *
  * Migrations go to production's DIRECT endpoint even when PROD_DATABASE_URL is
  * the pooled string: Prisma Migrate's session-level advisory lock doesn't
  * survive Neon's transaction-mode pooler (see scripts/db-urls.mjs).
  *
  * Forward-only: it shells out to `prisma migrate deploy`, which applies pending
- * migrations and nothing else — it never resets, drops, or generates SQL. Run
- * the same migrations against the dev branch first (`npm run db:deploy`).
+ * migrations and nothing else — it never resets, drops, or generates SQL.
+ * Rehearse them first on a fresh copy of production, not a long-lived dev
+ * branch: a PR's preview branch, or a short-lived child branch (README).
  *
  * Usage: npm run db:deploy:prod        (add --yes to skip the confirmation)
  */
@@ -58,6 +60,22 @@ export function describeTarget(connectionString) {
     host: parsed.host,
     database: parsed.pathname.slice(1) || "(the role's default database)",
   };
+}
+
+/**
+ * A banner warning when PROD_DATABASE_URL and DATABASE_URL name the same Neon
+ * endpoint (pooled or direct): either "production" is the dev branch, or the
+ * dev variable holds production. Null when the endpoints differ or either
+ * value isn't a Neon URL. Names the endpoint id only, never credentials.
+ */
+export function sameEndpointWarning(prodUrl, appUrl) {
+  const endpoint = neonEndpointId(prodUrl);
+  if (!endpoint || endpoint !== neonEndpointId(appUrl)) return null;
+  return (
+    `Warning: PROD_DATABASE_URL and DATABASE_URL both point at Neon endpoint ${endpoint}.\n` +
+    "Either PROD_DATABASE_URL is your dev branch, or DATABASE_URL (which the app and\n" +
+    "dev tooling use) points at production. Check both before continuing.\n"
+  );
 }
 
 /**
@@ -172,6 +190,9 @@ async function main() {
       `  Host:          ${target.host}${hostNote}\n` +
       `  Database:      ${target.database}\n`,
   );
+  // process.env still holds DATABASE_URL as loaded; only the child env is pinned.
+  const sameEndpoint = sameEndpointWarning(prodUrl, process.env.DATABASE_URL);
+  if (sameEndpoint) console.warn(sameEndpoint);
 
   warnAboutUncommittedMigrations();
   showPendingMigrations(env);

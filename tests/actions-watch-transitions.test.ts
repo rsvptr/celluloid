@@ -3,6 +3,7 @@ import { register } from "node:module";
 import { describe, it } from "node:test";
 import {
   MediaType,
+  Prisma,
   WatchEventKind,
   WatchEventSource,
   WatchStatus,
@@ -314,7 +315,10 @@ const mockModules = new Map<string, string>([
     "@/lib/session",
     'export async function getSession() { return globalThis.__CELLULOID_ACTIONS_SIGNED_IN__ ? { user: { id: "user-1" } } : null; }',
   ],
-  ["next/cache", "export function revalidatePath() {}"],
+  [
+    "next/cache",
+    "export function revalidatePath(path) { globalThis.__CELLULOID_ACTIONS_REVALIDATED__?.push(path); }",
+  ],
   [
     "@/lib/tmdb",
     "export async function getMovie() { throw new Error('unused'); }\n" +
@@ -1121,7 +1125,7 @@ describe("watch transition locking", { concurrency: false }, () => {
     Object.assign(activeDb.prisma, {
       title: { ...activeDb.prisma.title, findMany: async () => ids.map((id) => ({ id })) },
       $transaction: async (
-        operation: (tx: { $queryRaw: () => Promise<unknown[]> }) => Promise<unknown>,
+        operation: (tx: SavedMovieTx) => Promise<unknown>,
         options?: { maxWait?: number },
       ) => {
         maxWaits.push(options?.maxWait);
@@ -1129,8 +1133,7 @@ describe("watch transition locking", { concurrency: false }, () => {
         peak = Math.max(peak, inFlight);
         try {
           await new Promise((resolve) => setTimeout(resolve, 5));
-          // An empty lock read is the "title vanished" early return.
-          return await operation({ $queryRaw: async () => [] });
+          return await operation(savedMovieTx());
         } finally {
           inFlight -= 1;
         }
@@ -1140,6 +1143,115 @@ describe("watch transition locking", { concurrency: false }, () => {
     assert.deepEqual(await bulkSetStatus(ids, WatchStatus.WATCHED), { count: ids.length });
     assert.equal(peak, PRISMA_POOL_MAX - 1);
     assert.deepEqual(maxWaits, ids.map(() => 10_000));
+  });
+
+  type SavedMovieTx = {
+    $queryRaw: (strings: TemplateStringsArray, titleId: string) => Promise<unknown[]>;
+    title: { update: () => Promise<unknown> };
+  };
+
+  /** A lock read that finds an already-watched movie, which saves with one update. */
+  function savedMovieTx(onRead?: (titleId: string) => Promise<void>): SavedMovieTx {
+    return {
+      $queryRaw: async (_strings, titleId) => {
+        await onRead?.(titleId);
+        return [{ status: WatchStatus.WATCHED, mediaType: MediaType.MOVIE, watchedAt: null }];
+      },
+      title: { update: async () => ({}) },
+    };
+  }
+
+  /** Bulk WATCHED over `ids`, where the titles in `failing` throw P2028. */
+  function failingBulkDb(ids: string[], failing: ReadonlySet<string>) {
+    activeDb = new FakeWatchDb();
+    const saved: string[] = [];
+    Object.assign(activeDb.prisma, {
+      title: { ...activeDb.prisma.title, findMany: async () => ids.map((id) => ({ id })) },
+      $transaction: async (operation: (tx: SavedMovieTx) => Promise<unknown>) =>
+        operation(
+          savedMovieTx(async (titleId) => {
+            await new Promise((resolve) => setTimeout(resolve, 5));
+            if (failing.has(titleId)) {
+              throw new Prisma.PrismaClientKnownRequestError(
+                "Unable to start a transaction in the given time.",
+                { code: "P2028", clientVersion: "7.10.0" },
+              );
+            }
+            saved.push(titleId);
+          }),
+        ),
+    });
+    const revalidated: string[] = [];
+    Object.assign(globalThis, { __CELLULOID_ACTIONS_REVALIDATED__: revalidated });
+    return { saved, revalidated };
+  }
+
+  it("saves the rest of a bulk WATCHED and reports the titles that failed (PR-01)", async () => {
+    const ids = Array.from({ length: 12 }, (_, index) => `title-${index}`);
+    // The first title fails before any other finishes.
+    const failing = new Set(["title-0", "title-7"]);
+    const { saved, revalidated } = failingBulkDb(ids, failing);
+    try {
+      assert.deepEqual(await bulkSetStatus(ids, WatchStatus.WATCHED), {
+        count: 10,
+        failed: 2,
+      });
+      // Every other title was attempted before the action returned, and the
+      // pages were revalidated for the ones that saved.
+      assert.deepEqual(
+        saved.sort(),
+        ids.filter((id) => !failing.has(id)).sort(),
+      );
+      assert.ok(revalidated.includes("/"));
+    } finally {
+      Object.assign(globalThis, { __CELLULOID_ACTIONS_REVALIDATED__: undefined });
+    }
+  });
+
+  // P7X-7: a title removed or transferred while its lock was awaited returned
+  // early without an error, and counted as updated.
+  it("doesn't count titles that vanished under the lock as updated", async () => {
+    const ids = ["title-1", "title-2", "title-3", "title-4"];
+    const vanished = new Set(["title-2"]);
+    const failing = new Set(["title-4"]);
+    activeDb = new FakeWatchDb();
+    Object.assign(activeDb.prisma, {
+      title: {
+        ...activeDb.prisma.title,
+        findMany: async ({ where }: { where: { id: { in: string[] } } }) =>
+          where.id.in.map((id) => ({ id })),
+      },
+      $transaction: async (operation: (tx: SavedMovieTx) => Promise<unknown>) => {
+        const tx = savedMovieTx(async (titleId) => {
+          if (failing.has(titleId)) throw new Error("connection lost");
+        });
+        return operation({
+          ...tx,
+          $queryRaw: async (strings, titleId) =>
+            vanished.has(titleId) ? [] : tx.$queryRaw(strings, titleId),
+        });
+      },
+    });
+
+    assert.deepEqual(await bulkSetStatus(ids, WatchStatus.WATCHED), { count: 2, failed: 1 });
+    assert.deepEqual(await bulkSetStatus(ids.slice(0, 3), WatchStatus.WATCHED), { count: 2 });
+    // Nothing saved: one vanished, the other failed.
+    assert.deepEqual(await bulkSetStatus(["title-2", "title-4"], WatchStatus.WATCHED), {
+      error: "Couldn't update those titles. Try again.",
+    });
+  });
+
+  it("returns an error when a bulk WATCHED saves none of them (PR-01)", async () => {
+    const ids = ["title-1", "title-2"];
+    const { revalidated } = failingBulkDb(ids, new Set(ids));
+    try {
+      assert.deepEqual(await bulkSetStatus(ids, WatchStatus.WATCHED), {
+        error: "Couldn't update those titles. Try again.",
+      });
+      assert.ok(revalidated.includes("/"));
+    } finally {
+      Object.assign(globalThis, { __CELLULOID_ACTIONS_REVALIDATED__: undefined });
+    }
   });
 });
 

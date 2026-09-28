@@ -21,7 +21,7 @@
     "db:dump": "node --import tsx scripts/db-dump.mjs",
     "db:check": "node --import tsx scripts/db-check.mjs",
     "db:backfill:discovered-at": "node --import tsx scripts/backfill-discovered-at.mjs",
-    "db:push": "prisma db push && npm run db:indexes",
+    "db:push": "node scripts/db-push-guard.mjs && prisma db push && npm run db:indexes",
     "db:indexes": "node --import tsx scripts/ensure-indexes.mjs",
     "db:studio": "prisma studio",
     "db:seed": "prisma db seed",
@@ -52,6 +52,8 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.4.3",
+    "@electric-sql/pglite-socket": "0.1.3",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/pg": "^8.20.0",

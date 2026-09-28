@@ -68,7 +68,12 @@ export function ApiKeySection({
               setStatus(null);
             }}
             placeholder="sk-ant-…"
+            // Masked like a password, but it isn't a login: keep password
+            // managers from offering to fill or save it.
             autoComplete="off"
+            data-1p-ignore
+            data-lpignore="true"
+            data-bwignore
             spellCheck={false}
           />
         </label>

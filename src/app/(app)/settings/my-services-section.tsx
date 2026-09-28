@@ -1,13 +1,12 @@
 "use client";
 
-import Image from "next/image";
 import { useMemo, useState, useTransition } from "react";
 import { Check, Clapperboard, Search } from "lucide-react";
+import { TmdbImage } from "@/components/tmdb-image";
 import { Button, Input, Spinner } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { updateMyProviders } from "@/lib/settings-actions";
 import { regionName } from "@/lib/tmdb-extras";
-import { TMDB_IMAGE_BASE } from "@/lib/images";
 import { Notice, Section } from "./settings-ui";
 
 /** Minimal, serializable provider data passed across the RSC boundary. */
@@ -154,8 +153,10 @@ export function MyServicesSection({
                     >
                       <span className="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded bg-surface-2 ring-1 ring-line">
                         {provider.logoPath ? (
-                          <Image
-                            src={`${TMDB_IMAGE_BASE}w92${provider.logoPath}`}
+                          <TmdbImage
+                            path={provider.logoPath}
+                            kind="logo"
+                            maxSize="w92"
                             alt=""
                             width={36}
                             height={36}

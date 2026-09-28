@@ -4,17 +4,16 @@ import type { MediaType, WatchStatus } from "@/generated/prisma/client";
 import { IntentLink } from "./intent-link";
 import { Poster } from "./poster";
 import { Badge } from "./ui";
-import { STATUS_META, progressPct } from "@/lib/format";
+import { STATUS_META, progressPct, year } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /** Minimal shape the card renders — satisfied by both LibraryItem and ShareItem. */
-export interface CardItem {
+export type CardItem = {
   id: string;
   name: string;
   mediaType: MediaType;
   tmdbId?: number | null;
   posterPath: string | null;
-  year: number | null;
   language?: string | null;
   tmdbRating: number | null;
   status: WatchStatus;
@@ -25,7 +24,11 @@ export interface CardItem {
   /** TV only: unwatched episodes that already aired and were discovered recently (D-F5).
    *  Optional — public share items (ShareItem) don't carry this field. */
   hasNewEpisodes?: boolean;
-}
+} & (
+  // Share items carry the release year; library items carry only the date it
+  // comes from, which the library payload sends anyway for sorting (VE-05).
+  { year: number | null } | { releaseDate: string | null }
+);
 
 function TitleCardImpl({
   item,
@@ -48,6 +51,7 @@ function TitleCardImpl({
   const isTv = item.mediaType === "TV";
   const pct = isTv ? progressPct(item.watchedEpisodes, item.totalEpisodes) : 0;
   const target = href === undefined ? `/title/${item.id}` : href;
+  const releaseYear = "year" in item ? item.year : year(item.releaseDate);
   // The link is named by the heading and described by the meta line, then the
   // status and the poster chips, so its name no longer leads with the status
   // and an unlabelled rating (JK-22) but the state is still announced. Ids of
@@ -193,7 +197,7 @@ function TitleCardImpl({
           {item.name}
         </h2>
         <p id={`${id}-meta`} className="truncate text-xs text-muted">
-          {item.year || "Unknown"}
+          {releaseYear || "Unknown"}
           {isTv && item.totalEpisodes
             ? ` · ${item.watchedEpisodes}/${item.totalEpisodes} eps`
             : ""}
