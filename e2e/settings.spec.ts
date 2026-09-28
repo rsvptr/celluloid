@@ -1,16 +1,18 @@
-import { expect, test } from "./fixtures";
+import { expect, gotoHydrated, test } from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/settings");
+  await gotoHydrated(page, "/settings");
 });
 
 test("a changed time zone survives a reload", async ({ page }) => {
   const timeZone = page.getByRole("combobox", { name: "Time zone" });
   const target = (await timeZone.inputValue()) === "Europe/Berlin" ? "Asia/Tokyo" : "Europe/Berlin";
   await timeZone.selectOption(target);
-  // Profile's Save stays disabled until the display name changes, which
-  // leaves Preferences' Save as the only enabled one.
-  await page.getByRole("button", { name: "Save", exact: true, disabled: false }).click();
+  // Preferences' own Save, not Profile's: the innermost block that holds both
+  // the time zone and a Save button.
+  const save = page.getByRole("button", { name: "Save", exact: true });
+  const preferences = page.locator("div").filter({ has: timeZone }).filter({ has: save }).last();
+  await preferences.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("status").filter({ hasText: "Preferences saved." })).toBeVisible();
 
   await page.reload();
@@ -22,7 +24,7 @@ test("a new display name shows in the header without a reload", async ({ page })
   const name = `E2E Renamed ${Date.now()}`;
   // A full page load would drop this.
   await page.evaluate(() => Reflect.set(window, "e2eSamePage", true));
-  const field = page.getByLabel("Display name");
+  const field = page.getByRole("textbox", { name: "Display name" });
   await field.fill(name);
   await field.press("Enter");
   await expect(page.getByRole("status").filter({ hasText: "Profile saved." })).toBeVisible();

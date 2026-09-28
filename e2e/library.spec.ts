@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { expect, test } from "./fixtures";
+import { expect, gotoHydrated, test } from "./fixtures";
 
 // Titles served by e2e/tmdb-stub.mjs.
 const MOVIE = { query: "Lantern", name: "Lantern Road (Movie, 2021)" };
@@ -7,7 +7,7 @@ const SHOW = { query: "Northern", name: "Northern Static (TV, 2020)" };
 
 /** Searches TMDB from the Add page and adds one result; returns its library link. */
 async function addFromSearch(page: Page, title: { query: string; name: string }) {
-  await page.goto("/add");
+  await gotoHydrated(page, "/add");
   await page.getByRole("searchbox", { name: "Search The Movie Database" }).fill(title.query);
   await page.getByRole("button", { name: `Add ${title.name} to your library` }).click();
   const link = page.getByRole("link", { name: `View ${title.name} in your library` });
@@ -18,7 +18,7 @@ async function addFromSearch(page: Page, title: { query: string; name: string })
 test("add a movie from search and find it in the library", async ({ page }) => {
   await addFromSearch(page, MOVIE);
 
-  await page.goto("/");
+  await gotoHydrated(page, "/");
   await expect(page.getByRole("link", { name: "Lantern Road", exact: true })).toBeVisible();
 });
 
