@@ -10,6 +10,7 @@ import {
   eraById,
   isRecEra,
   isRecModel,
+  knownRecModel,
   resolveRecModel,
 } from "../src/lib/models";
 
@@ -58,17 +59,29 @@ describe("stored model ids", () => {
   });
 
   it("moves a saved Opus 5 preference to Opus 5.5", () => {
+    assert.equal(knownRecModel("claude-opus-5"), "claude-opus-5-5");
     assert.equal(resolveRecModel("claude-opus-5"), "claude-opus-5-5");
   });
 
-  it("maps other retired ids to the current model of the same family", () => {
-    assert.equal(resolveRecModel("claude-opus-4-8"), "claude-opus-5-5");
-    assert.equal(resolveRecModel("claude-sonnet-4-6"), "claude-sonnet-5");
-    assert.equal(resolveRecModel("claude-haiku-4-5-20251001"), "claude-haiku-4-5");
+  it("treats an id the lineup never offered as unknown, even in a known family", () => {
+    for (const id of ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"]) {
+      assert.equal(knownRecModel(id), null, id);
+    }
   });
 
   it("falls back to the default for a missing or unknown id", () => {
-    for (const id of [null, undefined, "", "gpt-9000", "claude-fable-5-1", "__proto__", "claude-"]) {
+    for (const id of [
+      null,
+      undefined,
+      "",
+      "gpt-9000",
+      "claude-fable-5-1",
+      "claude-opus-4-8",
+      "__proto__",
+      "constructor",
+      "claude-",
+    ]) {
+      assert.equal(knownRecModel(id), null, String(id));
       assert.equal(resolveRecModel(id), DEFAULT_REC_MODEL, String(id));
     }
   });

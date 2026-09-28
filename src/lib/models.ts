@@ -19,18 +19,28 @@ export function isRecModel(id: string | null | undefined): id is RecModelId {
   return !!id && REC_MODELS.some((m) => m.id === id);
 }
 
+// Ids the lineup used to offer, each with the current model of its family. A
+// saved preference, an old backup or a tab opened before the lineup changed
+// can still name one.
+const RETIRED_REC_MODELS = new Map<string, RecModelId>([["claude-opus-5", "claude-opus-5-5"]]);
+
 /**
- * The model a stored or submitted id runs on. A saved preference, an old
- * backup or a tab opened before the lineup changed can still name a retired
- * id (`claude-opus-5`, say): it maps to the current model of the same family,
- * and anything else to the default, so neither the picker nor the recommend
- * route ever sees an id it can't use.
+ * The model a known id runs on: a current id as it is, a retired one on its
+ * successor. Anything else is null, so the recommend route can reject it
+ * rather than run a model nobody picked.
+ */
+export function knownRecModel(id: string | null | undefined): RecModelId | null {
+  if (isRecModel(id)) return id;
+  return (id && RETIRED_REC_MODELS.get(id)) || null;
+}
+
+/**
+ * The model a stored preference runs on: a known id as knownRecModel maps it,
+ * and anything else the default, so the picker and the engine never see an id
+ * they can't use.
  */
 export function resolveRecModel(id: string | null | undefined): RecModelId {
-  if (isRecModel(id)) return id;
-  const family = id?.match(/^claude-(opus|sonnet|haiku)-/)?.[1];
-  if (!family) return DEFAULT_REC_MODEL;
-  return REC_MODELS.find((m) => m.id.startsWith(`claude-${family}-`))?.id ?? DEFAULT_REC_MODEL;
+  return knownRecModel(id) ?? DEFAULT_REC_MODEL;
 }
 
 export function recModelLabel(id: string | null | undefined): string {

@@ -478,7 +478,18 @@ describe("retired model ids", { concurrency: false }, () => {
   it("accepts an old id from a stale tab instead of rejecting the request", () => {
     assert.equal(recommendRequestSchema.parse({ model: "claude-opus-5" }).model, "claude-opus-5-5");
     assert.equal(recommendRequestSchema.parse({ model: "claude-haiku-4-5" }).model, "claude-haiku-4-5");
-    assert.equal(recommendRequestSchema.parse({ model: "gpt-9000" }).model, "claude-sonnet-5");
     assert.equal(recommendRequestSchema.parse({}).model, undefined);
+  });
+
+  it("rejects an id that was never offered rather than running another model", () => {
+    for (const model of ["gpt-9000", "claude-opus-4-8", "claude-sonnet-4-6", ""]) {
+      const parsed = recommendRequestSchema.safeParse({ model });
+      assert.equal(parsed.success, false, model);
+      assert.deepEqual(
+        parsed.error?.issues.map((issue) => [issue.path.join("."), issue.message]),
+        [["model", "Unknown recommendation model"]],
+        model,
+      );
+    }
   });
 });
