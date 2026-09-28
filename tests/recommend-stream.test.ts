@@ -119,7 +119,7 @@ export async function resolve(specifier, context, nextResolve) {
             ? "export const resolveAnthropicKey = globalThis.__CELLULOID_REC_KEY__;" +
               "export const reserveSharedAiRun = globalThis.__CELLULOID_REC_RESERVE__;" +
               "export const releaseSharedAiRun = globalThis.__CELLULOID_REC_RELEASE__;" +
-              "export const anthropicClient = () => ({ messages: { stream: globalThis.__CELLULOID_REC_STREAM__ } });" +
+              "export const anthropicClient = () => ({ beta: { messages: { stream: globalThis.__CELLULOID_REC_STREAM__ } } });" +
               "export const friendlyAnthropicError = () => 'Friendly stream error.';"
             : (specifier === "@/lib/tmdb" || normalized.endsWith("/src/lib/tmdb"))
               ? "export const searchByType = globalThis.__CELLULOID_REC_SEARCH__;" +
@@ -349,6 +349,46 @@ describe("refusals and thinking phases", { concurrency: false }, () => {
       },
       { type: "done", total: 1 },
     ]);
+  });
+
+  it("keeps reading picks across a server-side fallback on the same stream", async () => {
+    const first = JSON.stringify(modelRec("Before Fallback"));
+    const second = JSON.stringify(modelRec("Across Fallback"));
+    const cut = second.indexOf('"reason"');
+    streamEvents = [
+      messageStart(),
+      {
+        type: "content_block_delta",
+        delta: { type: "text_delta", text: `{"recommendations":[${first},${second.slice(0, cut)}` },
+      },
+      {
+        type: "content_block_start",
+        content_block: {
+          type: "fallback",
+          from: { model: "claude-opus-5-5" },
+          to: { model: "claude-opus-5" },
+          trigger: { type: "refusal" },
+        },
+      },
+      { type: "content_block_stop" },
+      {
+        type: "content_block_delta",
+        delta: { type: "text_delta", text: `${second.slice(cut)},${JSON.stringify(modelRec("After Fallback"))}]}` },
+      },
+      { type: "message_delta", delta: { stop_reason: "end_turn", stop_details: null } },
+    ];
+    const emitted: StreamEvent[] = [];
+    await runRecommendationStream(
+      "user-1",
+      { count: 3, model: "claude-opus-5-5" },
+      (event) => emitted.push(event),
+    );
+    assert.equal((capturedRequest as { fallbacks?: string }).fallbacks, "default");
+    assert.deepEqual(
+      emitted.filter((event) => event.type === "rec").map((event) => (event.rec as { title: string }).title),
+      ["Before Fallback", "Across Fallback", "After Fallback"],
+    );
+    assert.deepEqual(emitted.at(-1), { type: "done", total: 3 });
   });
 
   it("enters the thinking phase on the block start, with no thinking text streamed", async () => {

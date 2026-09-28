@@ -534,11 +534,16 @@ const MODEL_OUTPUT_CEILING: Record<string, number> = {
 // the prompt-cache breakpoint, so erring low costs at most one missed cache.
 const APPROX_CHARS_PER_TOKEN = 4;
 
+// The beta that gates `fallbacks: "default"`. The array form of `fallbacks`
+// takes a different header (server-side-fallback-2026-06-01), and pairing
+// either header with the other form is a 400.
+const SERVER_SIDE_FALLBACK_BETA = "server-side-fallback-2026-07-01";
+
 /**
  * The Messages API request for one run on `model`. Pure, so each model's
- * request surface (thinking, effort, output budget, cache breakpoint) is
- * unit-testable without a live stream. None of the models take sampling
- * parameters or an assistant prefill, and the JSON shape comes from
+ * request surface (thinking, effort, output budget, cache breakpoint, refusal
+ * fallback) is unit-testable without a live stream. None of the models take
+ * sampling parameters or an assistant prefill, and the JSON shape comes from
  * structured outputs, not a forced tool call.
  */
 export function buildRecRequest(
@@ -548,7 +553,11 @@ export function buildRecRequest(
   request: string,
 ) {
   // Fail safe if a model is ever added to REC_MODELS without a caps entry.
-  const caps = MODEL_CAPS[model] ?? { effort: false, adaptiveThinking: false };
+  const caps = MODEL_CAPS[model] ?? {
+    effort: false,
+    adaptiveThinking: false,
+    serverFallback: false,
+  };
 
   // Scale the output budget with the ask so a large batch (askCount up to 50)
   // plus adaptive thinking — max_tokens is a single cap covering thinking AND
@@ -605,7 +614,15 @@ export function buildRecRequest(
         ],
       },
     ],
-  } satisfies Anthropic.MessageStreamParams;
+    // A safety-classifier decline reruns server-side on the model Anthropic
+    // recommends for that refusal category, on the same stream: a decline
+    // before any output is seamless, and one mid-stream keeps the partial
+    // text and continues from it. Only a refusal from every model in the
+    // chain comes back as stop_reason "refusal".
+    ...(caps.serverFallback
+      ? { betas: [SERVER_SIDE_FALLBACK_BETA], fallbacks: "default" as const }
+      : {}),
+  } satisfies Anthropic.Beta.Messages.MessageCreateParams;
 }
 
 /**
@@ -915,7 +932,10 @@ export async function runRecommendationStream(
   }
 
   const client = anthropicClient(key);
-  const stream = client.messages.stream(buildRecRequest(model, askCount, brief, request));
+  // The beta namespace, because `fallbacks` is a beta parameter. It is the
+  // same endpoint, and a request without beta headers behaves as it would on
+  // client.messages.
+  const stream = client.beta.messages.stream(buildRecRequest(model, askCount, brief, request));
   if (signal) {
     // Client went away (or asked to stop): stop paying for generation. Guard the
     // race where the signal fired between the last checkpoint and here — a fresh
@@ -1027,6 +1047,12 @@ export async function runRecommendationStream(
           statusSent = "thinking";
           lastHeartbeatAt = Date.now();
           emit({ type: "status", phase: "thinking" });
+        } else if (event.content_block.type === "fallback") {
+          // The requested model declined and another took over on this
+          // stream; otherwise invisible, so leave a trail like the cache one.
+          console.warn(
+            `Recommendation fell back from ${event.content_block.from.model} to ${event.content_block.to.model}.`,
+          );
         }
       } else if (event.type === "content_block_delta") {
         if (event.delta.type === "thinking_delta" && statusSent !== "generating") {

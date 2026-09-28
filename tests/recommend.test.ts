@@ -439,6 +439,18 @@ describe("buildRecRequest", () => {
     assert.equal(req.output_config.format.type, "json_schema");
   });
 
+  it("opts only Opus 5.5 into the server-side refusal fallback", () => {
+    const opus = buildRecRequest("claude-opus-5-5", 12, shortBrief, "Ask.");
+    assert.equal(opus.fallbacks, "default");
+    // The "default" form takes this header; the array form's -06-01 is a 400.
+    assert.deepEqual(opus.betas, ["server-side-fallback-2026-07-01"]);
+    for (const model of ["claude-sonnet-5", "claude-haiku-4-5"] as const) {
+      const req = buildRecRequest(model, 12, shortBrief, "Ask.");
+      assert.equal("fallbacks" in req, false, model);
+      assert.equal("betas" in req, false, model);
+    }
+  });
+
   it("never sends sampling parameters, a tool choice or an assistant prefill", () => {
     for (const model of ["claude-opus-5-5", "claude-sonnet-5", "claude-haiku-4-5"] as const) {
       const req = buildRecRequest(model, 50, longBrief, "Ask.") as Record<string, unknown>;

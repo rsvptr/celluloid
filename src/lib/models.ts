@@ -64,15 +64,18 @@ export function eraById(id: RecEraId) {
 // thinking + the `effort` knob; Haiku 4.5 rejects `effort` (400) and has no
 // adaptive thinking, so we omit both for it. Opus 5.5 can't turn thinking off
 // at all (`disabled` and `budget_tokens` both 400), so effort is its only
-// thinking control. (A saved default that names a retired entry is mapped by
-// resolveRecModel.)
+// thinking control. `serverFallback` opts a model into Anthropic's server-side
+// refusal fallback: Opus 5.5's safety classifiers can decline a request, and
+// the fallback reruns it on the model Anthropic recommends for that kind of
+// refusal instead of failing the run. (A saved default that names a retired
+// entry is mapped by resolveRecModel.)
 export const MODEL_CAPS: Record<
   RecModelId,
-  { effort: boolean; adaptiveThinking: boolean }
+  { effort: boolean; adaptiveThinking: boolean; serverFallback: boolean }
 > = {
-  "claude-opus-5-5": { effort: true, adaptiveThinking: true },
-  "claude-sonnet-5": { effort: true, adaptiveThinking: true },
-  "claude-haiku-4-5": { effort: false, adaptiveThinking: false },
+  "claude-opus-5-5": { effort: true, adaptiveThinking: true, serverFallback: true },
+  "claude-sonnet-5": { effort: true, adaptiveThinking: true, serverFallback: false },
+  "claude-haiku-4-5": { effort: false, adaptiveThinking: false, serverFallback: false },
 };
 
 // Shortest prefix Anthropic will actually cache, in tokens. A cache_control
