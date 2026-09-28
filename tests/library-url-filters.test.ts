@@ -75,9 +75,22 @@ describe("Library reads its filters from the address bar", () => {
     assert.match(source, /const urlFilters = libraryUrlFilters\(initialFilters, searchParams,/);
     assert.match(source, /useReducer\(\s*libraryFiltersReducer,\s*urlFilters,\s*toLibraryFilterState,?\s*\)/);
     assert.match(source, /dispatchFilters\(\{ type: "adopt", filters: urlFilters \}\)/);
-    // Adopting still keys on the server prop, so the mirror's own URL change
-    // can't reset what's being typed.
-    assert.match(source, /const incomingFilterKey = libraryFilterKey\(initialFilters\);/);
     assert.match(source, /\}, \[filters, rememberFilters, initialFilters\]\);/);
+  });
+
+  it("adopts only when the router's URL changes, never on a re-render of the same URL", async () => {
+    const source = await readFile(new URL("../src/components/library.tsx", import.meta.url), "utf8");
+    // Neither the mirror's replaceState nor a server re-render changes the
+    // router's URL, so neither can reset what's being typed. Keying on the
+    // server's filters instead let an action's re-render for a bare URL (the
+    // cookie's filters, no search) clear the search.
+    assert.match(source, /const urlKey = searchParams\.toString\(\);/);
+    assert.match(source, /if \(urlKey !== appliedUrlKey\) \{\s*setAppliedUrlKey\(urlKey\);\s*dispatchFilters/);
+    assert.doesNotMatch(source, /libraryFilterKey|FilterKey\(initialFilters\)/);
+    // Keying the component on filter state remounted it after every action,
+    // dropping select mode, the selection, the panel and Trash mode.
+    const page = await readFile(new URL("../src/app/(app)/page.tsx", import.meta.url), "utf8");
+    assert.match(page, /<Library\s/);
+    assert.doesNotMatch(page, /<Library[^>]*\skey=/);
   });
 });
