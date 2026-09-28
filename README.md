@@ -538,6 +538,12 @@ A short checklist for a clean first deploy:
 
 Rehearse on current data first. A long-lived dev branch can pass a migration that fails on production's rows, such as a new CHECK constraint. Open a PR and let the preview-migrations workflow above try it on a fresh copy of production, or create a short-lived child branch of production (`neon branches create --parent <production branch>`), set `DATABASE_URL` and `DIRECT_URL` to its strings in the shell, run `npm run db:check` and then `npm run db:deploy`, and delete the branch.
 
+**Locks and failed migrations.**
+
+- `CREATE INDEX` and `DROP INDEX` lock their table and wait behind open transactions, stalling queries on it meanwhile, so deploy at a quiet time: away from the 07:00 UTC sync and any backup export or restore.
+- Prisma 7.10 runs each statement of a migration on its own, in autocommit, so a migration isn't atomic. One that fails midway keeps its earlier statements, and every later deploy stops until you resolve it.
+- To recover, inspect what it left. Then either undo that and run `npx prisma migrate resolve --rolled-back <migration_name>`, so the next deploy retries it, or finish it by hand and run `npx prisma migrate resolve --applied <migration_name>`. Against production, set its strings in the shell as for the rehearsal: `DATABASE_URL='<production pooled>' DIRECT_URL='<production direct>' npx prisma migrate resolve --rolled-back <migration_name>`.
+
 ## Project structure
 
 ```text
