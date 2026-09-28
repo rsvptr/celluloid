@@ -45,6 +45,8 @@ export function ApiKeySection({
         }
         setSaved(false);
         setStatus("Personal API key removed.");
+        // The Remove button that had focus is gone; adding a key is what's next.
+        document.getElementById("settings-anthropic-api-key")?.focus();
       } catch {
         setError("Celluloid couldn't remove the API key. Check your connection and retry.");
       }
@@ -94,6 +96,7 @@ export function ApiKeySection({
         <label className="flex flex-col gap-1.5">
           <span className="text-xs font-medium text-muted">Anthropic API key</span>
           <Input
+            id="settings-anthropic-api-key"
             name="anthropic-api-key"
             type="password"
             value={key}
