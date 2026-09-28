@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { afterEach, describe, it } from "node:test";
 import "./server-only-shim";
 
@@ -82,6 +83,19 @@ describe("TMDB_API_BASE_URL (test-only TMDB override)", { concurrency: false }, 
         value,
       );
     }
+  });
+
+  // Two copies of one test: keep them the same.
+  it("treats the same deployments as production as env.ts does", async () => {
+    const read = (path: string) => readFile(new URL(path, import.meta.url), "utf8");
+    const test = (source: string, name: string, env: string) =>
+      (source.match(new RegExp(`const ${name} =\\s*([^;]+);`))?.[1] ?? assert.fail(`${name} not found`))
+        .replaceAll(env, "env.")
+        .replace(/\s+/g, " ");
+    assert.equal(
+      test(await read("../src/lib/tmdb.ts"), "production", "source."),
+      test(await read("../src/lib/env.ts"), "isProductionDeployment", "process.env."),
+    );
   });
 
   it("sends every request to the configured root", async () => {

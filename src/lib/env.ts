@@ -16,6 +16,8 @@ const optionalString = z.preprocess(
 //   VERCEL_ENV alone silently disabled every production check — required
 //   origins, HTTPS, the no-key-reuse rule — for anyone running this off
 //   Vercel with plain `npm start`.
+// resolveTmdbApiBase in src/lib/tmdb.ts repeats this test (tests/tmdb-api-base
+// checks that the two match), so change both together.
 const isProductionDeployment =
   process.env.VERCEL_ENV === "production" ||
   (!process.env.VERCEL &&
