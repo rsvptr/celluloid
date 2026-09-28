@@ -101,6 +101,33 @@ describe("tag quick starts", () => {
     assert.deepEqual(calls.preset, [null]);
     assert.deepEqual(calls.focus, [""]);
   });
+
+  it("hands focus from the remembered-tag chip to the focus box it cleared", (t) => {
+    // Node has no DOM, so stand in for HTMLElement and the chip's form.
+    class FakeElement {
+      focus = t.mock.fn();
+    }
+    const hadHTMLElement = "HTMLElement" in globalThis;
+    const original = (globalThis as { HTMLElement?: unknown }).HTMLElement;
+    (globalThis as { HTMLElement?: unknown }).HTMLElement = FakeElement;
+    t.after(() => {
+      if (hadHTMLElement) (globalThis as { HTMLElement?: unknown }).HTMLElement = original;
+      else delete (globalThis as { HTMLElement?: unknown }).HTMLElement;
+    });
+
+    const restored = resolvePreset("tag:t8", TAGS)!;
+    const { calls, tree } = form({ activePreset: restored.key, focus: restored.focus });
+    const box = new FakeElement();
+    const namedItem = t.mock.fn((name: string) => (name === "recommendation-focus" ? box : null));
+    removeChip(tree)!.props.onClick!({ currentTarget: { form: { elements: { namedItem } } } });
+
+    assert.deepEqual(namedItem.mock.calls.map((call) => call.arguments), [["recommendation-focus"]]);
+    assert.equal(box.focus.mock.callCount(), 1);
+    assert.deepEqual(calls.preset, [null]);
+    assert.deepEqual(calls.focus, [""]);
+    // The name looked up is the focus box's own.
+    assert.match(renderToStaticMarkup(tree), /<input[^>]*name="recommendation-focus"/);
+  });
 });
 
 describe("recommend helper copy", () => {
