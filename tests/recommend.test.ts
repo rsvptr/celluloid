@@ -517,7 +517,7 @@ describe("terminalRecEvents", () => {
       {
         type: "warning",
         message:
-          "Claude stopped after 3 of 12 suggestions because a safety filter declined the rest. Reword your focus and run it again for a fuller list.",
+          "Claude stopped after 3 of 12 suggestions and declined the rest. Reword your focus and run it again for a fuller list.",
       },
       { type: "done", total: 3 },
     ]);

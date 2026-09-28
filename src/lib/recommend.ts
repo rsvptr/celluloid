@@ -684,7 +684,7 @@ export function terminalRecEvents(
   if (flags.hitRefusal && accepted < count) {
     events.push({
       type: "warning",
-      message: `Claude stopped after ${accepted} of ${count} suggestions because a safety filter declined the rest. Reword your focus and run it again for a fuller list.`,
+      message: `Claude stopped after ${accepted} of ${count} suggestions and declined the rest. Reword your focus and run it again for a fuller list.`,
     });
   }
   // A TMDB outage must read differently to a genuine no-match: these

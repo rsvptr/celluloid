@@ -351,7 +351,7 @@ describe("refusals and thinking phases", { concurrency: false }, () => {
       {
         type: "warning",
         message:
-          "Claude stopped after 1 of 3 suggestions because a safety filter declined the rest. Reword your focus and run it again for a fuller list.",
+          "Claude stopped after 1 of 3 suggestions and declined the rest. Reword your focus and run it again for a fuller list.",
       },
       { type: "done", total: 1 },
     ]);
