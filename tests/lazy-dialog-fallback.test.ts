@@ -97,3 +97,20 @@ describe("lazy dialog loading (P7U-1)", () => {
     assert.match(fallback, /if \(!open\) return;\s*toast\.error\("Couldn't open sharing\. Try again\."\);\s*onClose\(\);/);
   });
 });
+
+// P7U-3: before the chunk loads nothing blocks a second click, and replacing
+// the resolver left the first caller's promise pending forever.
+describe("useConfirm called again before an answer (P7U-3)", () => {
+  it("settles the pending confirm with false before taking the new one", async () => {
+    const confirm = await source("components/confirm-dialog.tsx");
+    const confirmFn = confirm.slice(confirm.indexOf("const confirm = useCallback("), confirm.indexOf("const settle = useCallback("));
+    assert.match(
+      confirmFn,
+      /^const confirm = useCallback\(\(o: ConfirmOptions\) => \{\s*(?:\/\/.*\s*)*resolver\.current\(false\);\s*opener\.current =/,
+    );
+    assert.match(confirmFn, /resolver\.current = resolve;/);
+    // settle() resets the resolver, so answering first makes this a no-op.
+    const settle = confirm.slice(confirm.indexOf("const settle = useCallback("));
+    assert.match(settle, /const r = resolver\.current;\s*resolver\.current = \(\) => \{\};\s*r\(v\);/);
+  });
+});

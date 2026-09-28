@@ -57,6 +57,11 @@ export function useConfirm() {
   const opener = useRef<HTMLElement | null>(null);
 
   const confirm = useCallback((o: ConfirmOptions) => {
+    // A second confirm before the first is answered (a double click while the
+    // chunk loads) cancels the first rather than sharing its answer: a stale
+    // request never gets a "yes" it didn't show, and its caller still settles
+    // and clears any busy state (P7U-3).
+    resolver.current(false);
     opener.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setOpts(o);
