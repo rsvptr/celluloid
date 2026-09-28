@@ -98,12 +98,15 @@ function isSignIn(session: { token: string }, context: GenericEndpointContext | 
 }
 
 // Sign-out never loads the session, so the deleted row is where its user is.
-// Revoking uses the deleted row too: the endpoint reports success even when
-// the token matched nothing.
+// Revoking uses the deleted rows too: both revoke endpoints report success
+// even when they deleted nothing. Revoking other sessions deletes one row per
+// device, so only the first deleted row of a request is recorded.
 const sessionEndEvents = new Map<string, AuthEventType>([
   ["/sign-out", "sign_out"],
   ["/revoke-session", "session_revoked"],
+  ["/revoke-other-sessions", "other_sessions_revoked"],
 ]);
+const recordedSessionEnds = new WeakSet<GenericEndpointContext>();
 
 /**
  * A signed-in user's security changes, recorded once the endpoint has
@@ -134,9 +137,6 @@ const recordAccountChange = createAuthMiddleware(async (ctx) => {
       break;
     case "/two-factor/generate-backup-codes":
       type = "backup_codes_regenerated";
-      break;
-    case "/revoke-other-sessions":
-      type = "other_sessions_revoked";
       break;
     case "/revoke-sessions":
       // Every session, this one included. The UI never calls it; a stolen
@@ -181,7 +181,9 @@ export const auth = betterAuth({
       delete: {
         async after(session, context) {
           const type = context ? sessionEndEvents.get(context.path) : undefined;
-          if (type) await recordAuthEvent(session.userId, type, context);
+          if (!type || !context || recordedSessionEnds.has(context)) return;
+          recordedSessionEnds.add(context);
+          await recordAuthEvent(session.userId, type, context);
         },
       },
     },

@@ -252,11 +252,18 @@ describe("auth audit trail against Postgres (BA-15)", { concurrency: false }, ()
     assert.equal(event.ipAddress, "192.0.2.10");
   });
 
-  it("records signing out everywhere else", async () => {
-    assert.equal((await phone("/sign-in/email", { email, password })).status, 200);
-    assert.deepEqual(await newTypes(), ["sign_in"]);
+  it("records signing out everywhere else once, and nothing when no other session existed", async () => {
+    assert.equal(await prisma.session.count({ where: { userId } }), 1);
     assert.equal((await laptop("/revoke-other-sessions")).status, 200);
-    assert.deepEqual(await newTypes(), ["other_sessions_revoked"]);
+    assert.deepEqual(await newTypes(), []);
+
+    const desktop = device("192.0.2.40", "Mozilla/5.0 (X11; Linux x86_64) Firefox/140.0");
+    assert.equal((await phone("/sign-in/email", { email, password })).status, 200);
+    assert.equal((await desktop("/sign-in/email", { email, password })).status, 200);
+    assert.deepEqual(await newTypes(), ["sign_in", "sign_in"]);
+    assert.equal((await laptop("/revoke-other-sessions")).status, 200);
+    assert.equal(await prisma.session.count({ where: { userId } }), 1);
+    assert.deepEqual(await newTypes(), ["other_sessions_revoked"], "one event, not one per session");
   });
 
   it("records a password change once, not its new session, and nothing for a wrong password", async () => {
@@ -526,7 +533,7 @@ describe("auth.ts wiring", () => {
     );
     assert.match(
       source,
-      /delete: \{\s*async after\(session, context\) \{\s*const type = context \? sessionEndEvents\.get\(context\.path\) : undefined;\s*if \(type\) await recordAuthEvent\(session\.userId, type, context\);/,
+      /delete: \{\s*async after\(session, context\) \{\s*const type = context \? sessionEndEvents\.get\(context\.path\) : undefined;\s*if \(!type \|\| !context \|\| recordedSessionEnds\.has\(context\)\) return;\s*recordedSessionEnds\.add\(context\);\s*await recordAuthEvent\(session\.userId, type, context\);/,
     );
     assert.match(source, /if \(!session \|\| isAPIError\(ctx\.context\.returned\)\) return;/);
   });
