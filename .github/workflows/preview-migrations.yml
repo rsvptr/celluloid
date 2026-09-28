@@ -91,7 +91,10 @@ jobs:
       # publish the role's password (which branches share with production).
       # The direct URL is fetched and masked inside the shell instead. It goes
       # to a file under $RUNNER_TEMP rather than $GITHUB_ENV, so it isn't in
-      # the environment of every later step, and only the migrate step reads it.
+      # the environment of every later step. It is not hidden from
+      # dependencies: `npm ci`'s install scripts run as the same user and can
+      # read the file, and the migrate step hands the URL to installed code
+      # anyway.
       - name: Fetch the branch's direct URL
         env:
           NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
