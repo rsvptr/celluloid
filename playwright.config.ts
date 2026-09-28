@@ -22,7 +22,10 @@ export default defineConfig({
   // 5 sign-ups a minute per IP. auth.spec.ts makes 2 per run.
   workers: 1,
   forbidOnly: !!process.env.CI,
+  // In CI a failed test gets one retry, for a second trace, but a test that
+  // only passes on its retry still fails the run.
   retries: process.env.CI ? 1 : 0,
+  failOnFlakyTests: !!process.env.CI,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
   expect: { timeout: 10_000 },
   use: {
