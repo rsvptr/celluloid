@@ -232,6 +232,16 @@ export function Library({
         window.location.pathname === pathname &&
         `${window.location.pathname}${window.location.search}` !== next
       ) {
+        // The router's own history state carries its __NA marker, so the
+        // router never takes this URL as a navigation (see libraryUrlFilters).
+        // Known limitation: a revalidating server action navigates with
+        // "push", and the router then pushes a new entry whenever the address
+        // bar differs from its own URL, as it does once anything is mirrored.
+        // Each such action leaves a duplicate library entry, so the next Back
+        // seems to do nothing. Only a router that knows the mirrored URL
+        // avoids that: replaceState without this state mismatches the page
+        // segment on every refresh and action (scroll to top, then a hard
+        // reload), and router.replace costs a server render per mirror.
         window.history.replaceState(window.history.state, "", next);
       }
       if (rememberFilters) {
